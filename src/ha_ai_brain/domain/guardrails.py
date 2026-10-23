@@ -1,0 +1,189 @@
+"""Deterministic Guardrails, Safety Bounds, and Repeatable Approval Policy Engine."""
+
+from __future__ import annotations
+
+from enum import Enum
+from pydantic import BaseModel
+
+from ha_ai_brain.config import AutonomyLevel
+from ha_ai_brain.domain.models import ActionIntent, ActionRiskLevel, ApprovalRule
+
+
+class GuardrailDecisionType(str, Enum):
+    """Outcome of guardrail policy evaluation."""
+
+    EXECUTE_IMMEDIATELY = "execute_immediately"
+    REQUIRE_USER_APPROVAL = "require_user_approval"
+    SHADOW_LOG_ONLY = "shadow_log_only"
+    HARD_BLOCKED = "hard_blocked"
+
+
+class GuardrailEvaluation(BaseModel):
+    """Result returned by the GuardrailEngine for a single ActionIntent."""
+
+    decision: GuardrailDecisionType
+    effective_risk: ActionRiskLevel
+    signature: str
+    reason: str
+    matched_rule: ApprovalRule | None = None
+
+
+class GuardrailEngine:
+    """
+    Deterministic policy engine protecting the smart home:
+    1. Hard physical & security boundaries (e.g. min/max HVAC temp, lock/alarm protection).
+    2. Risk-tier escalation for sensitive domains (locks, alarms, exterior covers, water valves).
+    3. Repeatable Approval Signature lookup so endorsed actions never prompt again.
+    """
+
+    MIN_SAFE_TEMP_C = 12.0
+    MAX_SAFE_TEMP_C = 28.0
+
+    CRITICAL_SERVICES = {
+        ("lock", "unlock"),
+        ("lock", "open"),
+        ("alarm_control_panel", "alarm_disarm"),
+    }
+
+    HIGH_RISK_SERVICES = {
+        ("valve", "close_valve"),
+        ("homeassistant", "restart"),
+        ("homeassistant", "reload_config_entry"),
+    }
+
+    def evaluate(
+        self,
+        intent: ActionIntent,
+        autonomy_level: AutonomyLevel,
+        notifications_enabled: bool,
+        endorsed_rules: dict[str, ApprovalRule],
+        rejected_signatures: set[str] | None = None,
+    ) -> GuardrailEvaluation:
+        """Evaluate an ActionIntent against deterministic safety rules and user approval memory."""
+        signature = intent.repeatable_signature()
+
+        # 1. Check if the user previously explicitly banned/rejected this repeatable signature
+        if rejected_signatures and signature in rejected_signatures:
+            return GuardrailEvaluation(
+                decision=GuardrailDecisionType.HARD_BLOCKED,
+                effective_risk=intent.risk_level,
+                signature=signature,
+                reason=f"Action signature '{signature}' was previously rejected by the user.",
+            )
+
+        # 2. Hard Physical Safety Bounds Check (e.g. Thermostat temperature range)
+        if intent.domain == "climate" and intent.service == "set_temperature":
+            temp = intent.service_data.get("temperature")
+            if temp is not None:
+                try:
+                    temp_f = float(temp)
+                    if not (self.MIN_SAFE_TEMP_C <= temp_f <= self.MAX_SAFE_TEMP_C):
+                        return GuardrailEvaluation(
+                            decision=GuardrailDecisionType.HARD_BLOCKED,
+                            effective_risk=ActionRiskLevel.CRITICAL,
+                            signature=signature,
+                            reason=(
+                                f"Hard Safety Guardrail: Requested temperature {temp_f}°C is outside "
+                                f"safe physical bounds [{self.MIN_SAFE_TEMP_C}°C, {self.MAX_SAFE_TEMP_C}°C]."
+                            ),
+                        )
+                except (TypeError, ValueError):
+                    pass
+
+        # 3. Deterministic Risk Escalation based on domain/service
+        effective_risk = self._determine_effective_risk(intent)
+
+        # 4. Shadow Mode never executes actions
+        if autonomy_level == AutonomyLevel.SHADOW:
+            return GuardrailEvaluation(
+                decision=GuardrailDecisionType.SHADOW_LOG_ONLY,
+                effective_risk=effective_risk,
+                signature=signature,
+                reason="System is in SHADOW mode: action and reasoning logged without execution.",
+            )
+
+        # 5. Pure informational notifications sent to the user are always safe to execute
+        if intent.domain == "notify":
+            return GuardrailEvaluation(
+                decision=GuardrailDecisionType.EXECUTE_IMMEDIATELY,
+                effective_risk=ActionRiskLevel.LOW,
+                signature=signature,
+                reason="Informational notification to user is safe to execute immediately.",
+            )
+
+        # 6. Critical security actions (unlocking doors, disarming alarms) ALWAYS require approval
+        if effective_risk == ActionRiskLevel.CRITICAL:
+            return GuardrailEvaluation(
+                decision=GuardrailDecisionType.REQUIRE_USER_APPROVAL,
+                effective_risk=effective_risk,
+                signature=signature,
+                reason=f"Critical security guardrail: '{intent.domain}.{intent.service}' always requires explicit human confirmation.",
+            )
+
+        # 7. Check if this repeatable action signature has already been endorsed by the user
+        existing_rule = endorsed_rules.get(signature)
+        if existing_rule and existing_rule.auto_approve:
+            return GuardrailEvaluation(
+                decision=GuardrailDecisionType.EXECUTE_IMMEDIATELY,
+                effective_risk=effective_risk,
+                signature=signature,
+                reason=f"Auto-approved via user-endorsed repeatable rule (used {existing_rule.execution_count} times).",
+                matched_rule=existing_rule,
+            )
+
+        # 8. Evaluate based on Autonomy Level & Notification Preferences
+        if autonomy_level == AutonomyLevel.AUTONOMOUS:
+            if effective_risk in (ActionRiskLevel.LOW, ActionRiskLevel.MEDIUM):
+                return GuardrailEvaluation(
+                    decision=GuardrailDecisionType.EXECUTE_IMMEDIATELY,
+                    effective_risk=effective_risk,
+                    signature=signature,
+                    reason=f"AUTONOMOUS mode: '{effective_risk.value}' risk action executed automatically.",
+                )
+
+        # If notifications are disabled by user preference, allow LOW/MEDIUM actions automatically
+        if not notifications_enabled and effective_risk in (ActionRiskLevel.LOW, ActionRiskLevel.MEDIUM):
+            return GuardrailEvaluation(
+                decision=GuardrailDecisionType.EXECUTE_IMMEDIATELY,
+                effective_risk=effective_risk,
+                signature=signature,
+                reason="Notifications disabled by user: executing non-high-risk action automatically.",
+            )
+
+        return GuardrailEvaluation(
+            decision=GuardrailDecisionType.REQUIRE_USER_APPROVAL,
+            effective_risk=effective_risk,
+            signature=signature,
+            reason=(
+                f"Requires confirmation ({autonomy_level.value} mode, risk={effective_risk.value}). "
+                "Approve as repeatable to never be asked again for this pattern."
+            ),
+        )
+
+    def _determine_effective_risk(self, intent: ActionIntent) -> ActionRiskLevel:
+        """Compute deterministic floor risk for sensitive services."""
+        pair = (intent.domain, intent.service)
+        if pair in self.CRITICAL_SERVICES:
+            return ActionRiskLevel.CRITICAL
+        if pair in self.HIGH_RISK_SERVICES:
+            return ActionRiskLevel.HIGH
+
+        if intent.domain == "cover":
+            # Opening garage doors is HIGH/CRITICAL; opening motorized exterior windows > 30% is HIGH; blinds/shades are LOW/MEDIUM
+            for entity_id in intent.target_entity_ids:
+                if "garage" in entity_id or "gate" in entity_id:
+                    return ActionRiskLevel.CRITICAL
+                if any(k in entity_id for k in ("blind", "shade", "curtain", "shutter")):
+                    return intent.risk_level
+            pos = intent.service_data.get("position", 100 if intent.service == "open_cover" else 0)
+            try:
+                if float(pos) > 30:
+                    return max(intent.risk_level, ActionRiskLevel.HIGH, key=lambda r: ["low", "medium", "high", "critical"].index(r.value))
+            except (TypeError, ValueError):
+                pass
+            return max(intent.risk_level, ActionRiskLevel.MEDIUM, key=lambda r: ["low", "medium", "high", "critical"].index(r.value))
+
+        if intent.domain == "automation":
+            return max(intent.risk_level, ActionRiskLevel.MEDIUM, key=lambda r: ["low", "medium", "high", "critical"].index(r.value))
+
+        return intent.risk_level

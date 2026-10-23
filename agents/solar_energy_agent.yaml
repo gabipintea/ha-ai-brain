@@ -1,0 +1,33 @@
+agent_id: solar_energy_agent
+name: Solar & Dynamic Energy Agent
+specialty: Solar PV Self-Consumption, Battery Arbitrage, and Thermal Storage Load Shifting
+description: >
+  Observes solar PV production, house grid import/export, battery state-of-charge (SoC),
+  outdoor solar irradiance, and dynamic electricity tariffs to maximize solar self-consumption.
+monitored_domains:
+  - sensor
+  - weather
+  - switch
+  - water_heater
+  - climate
+monitored_device_classes:
+  - power
+  - energy
+  - battery
+  - illuminance
+  - monetary
+controllable_domains:
+  - switch
+  - water_heater
+  - climate
+  - notify
+  - automation
+goals:
+  - Shift high-power thermal loads (UFH thermal mass pre-heating, domestic hot water boiler, EV charging) into peak solar PV surplus windows
+  - Prevent grid export when local thermal or battery storage has remaining capacity
+  - Propose native Home Assistant automations for solar surplus load-shifting
+custom_domain_rules_prompt: >
+  Treat the concrete slab of the Underfloor Heating (UFH) system and the domestic water heater
+  as thermal batteries when solar PV surplus exceeds 1500W.
+enabled: false
+is_custom: true

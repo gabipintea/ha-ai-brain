@@ -1,0 +1,12 @@
+services:
+  ha-ai-brain:
+    build: .
+    container_name: ha-ai-brain
+    restart: unless-stopped
+    ports:
+      - "8099:8099"
+    env_file:
+      - .env
+    volumes:
+      - ./data:/data
+      - ./agents:/app/agents
