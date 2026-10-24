@@ -45,7 +45,7 @@ HA AI Brain works seamlessly out of the box with all leading AI models via LiteL
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | **Google Gemini** *(Free / Budget)* | `gemini/gemini-2.5-flash` | `gemini/gemini-2.5-pro` | `gemini/gemini-1.5-flash` | **$0.00** *(Free Tier)*<br>< $0.30/mo *(Paid)* | **Best for budget/free setups.** Very fast, massive context, free tier on Google AI Studio. |
 | **OpenAI** *(Most Reliable)* | `openai/gpt-4o-mini` | `openai/gpt-4o` | `openai/gpt-4o-mini` | **~$0.20 – $0.50 / mo** | **Best for rock-solid stability.** Near-perfect schema adherence and high reliability. |
-| **Anthropic Claude** *(Best Reasoning)* | `anthropic/claude-3-5-haiku-20241022` | `anthropic/claude-3-5-sonnet-20241022` | `openai/gpt-4o-mini` | **~$0.50 – $1.20 / mo** | **Highest intelligence.** Sonnet crafts the most sophisticated Home Assistant native automations. |
+| **Anthropic Claude** *(Best Reasoning)* | `anthropic/claude-3-5-haiku-20241022` | `anthropic/claude-3-5-sonnet-20241022` | `anthropic/claude-3-haiku-20240307` | **~$0.50 – $1.20 / mo** | **Highest intelligence.** Sonnet crafts the most sophisticated Home Assistant native automations. |
 | **OpenRouter** *(Aggregator)* | `openrouter/google/gemini-2.5-flash` | `openrouter/anthropic/claude-3.5-sonnet` | `openrouter/openai/gpt-4o-mini` | **~$0.30 – $0.80 / mo** | **Maximum flexibility.** Use a single API key to mix Gemini for instant reflexes and Claude for deep batch audits. |
 | **Local Ollama** *(100% Private)* | `ollama/qwen2.5:7b` *(or `llama3.2:3b`)* | `ollama/qwen2.5:14b` *(or `llama3.3:70b`)* | `ollama/qwen2.5:7b` | **$0.00** *(Zero cloud spend)* | **Best for strict privacy.** 100% offline, zero data leaves your local network. |
 
