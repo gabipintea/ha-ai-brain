@@ -2,6 +2,13 @@
 
 All notable changes to **HA AI Brain** are documented in this file.
 
+## 0.1.4 - 2026-10-24
+
+### Fixed
+- **Resolved `UnboundLocalError: 'last_t'` in Triage Engine**:
+  - Initialized `last_t` across all numeric telemetry so non-illuminance/non-power entities (e.g. air purifier `pm2_5`, network bandwidth `upload_speed`, battery, CO2, etc.) evaluate deadband and anti-flap guards smoothly without raising an unbound local variable exception.
+  - Added unit test `test_11_triage_generic_numeric_sensors_debounce_and_antiflap_no_unbound_error` to prevent regression.
+
 ## 0.1.3 - 2026-10-24
 
 ### Fixed & Aligned

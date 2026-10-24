@@ -241,6 +241,7 @@ class EdgeSignalTriage:
 
             if prev_num is not None:
                 delta = abs(new_num - prev_num)
+                last_t = self._last_triggered_at.get(event.entity_id)
 
                 # Dynamic Proportional Deadbands for token conservation:
                 effective_deadband = deadband
@@ -260,7 +261,6 @@ class EdgeSignalTriage:
                 # Dwell / Debounce guard for high-frequency noisy telemetry (illuminance, power):
                 # if this sensor triggered an agent < 10m ago, require >= 2x deadband
                 if dev_class in ("illuminance", "power") or any(k in event.entity_id for k in ("illuminance", "power", "_lux", "_w")):
-                    last_t = self._last_triggered_at.get(event.entity_id)
                     if now is not None and last_t is not None:
                         elapsed = (now - last_t).total_seconds()
                         if elapsed < 600.0 and delta < (effective_deadband * 2.0):

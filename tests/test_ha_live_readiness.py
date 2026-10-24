@@ -40,9 +40,13 @@ class TestLiveHomeAssistantReadiness(unittest.IsolatedAsyncioTestCase):
         try:
             # Emit an event into the simulator's async queue; background worker should pick it up
             sim.emit_simulated_state_change("sensor.master_bedroom_humidity", "70.0")
-            await asyncio.sleep(0.35)
+            logs = []
+            for _ in range(20):
+                await asyncio.sleep(0.1)
+                logs = await orchestrator.memory.get_recent_run_logs(limit=5)
+                if logs:
+                    break
 
-            logs = await orchestrator.memory.get_recent_run_logs(limit=5)
             self.assertGreaterEqual(len(logs), 1)
             self.assertEqual(logs[0].execution_results[0]["status"], "shadow_logged")
         finally:
@@ -457,6 +461,48 @@ class TestLiveHomeAssistantReadiness(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(res_401, {})
         # Should stop after first candidate because 401 is invalid auth:
         self.assertEqual(len(called_models_401), 1)
+
+    def test_11_triage_generic_numeric_sensors_debounce_and_antiflap_no_unbound_error(self) -> None:
+        """
+        Verify that generic numeric sensors (e.g. PM2.5, upload speed) that are neither
+        illuminance nor power do not raise UnboundLocalError for 'last_t' when transitioning states.
+        """
+        from datetime import datetime, timezone
+        from ha_ai_brain.domain.models import StateChangedEvent, EntityState
+        from ha_ai_brain.domain.triage import EdgeSignalTriage
+
+        triage = EdgeSignalTriage()
+        now = datetime.now(timezone.utc)
+
+        # Initial reading
+        ev1 = StateChangedEvent(
+            entity_id="sensor.master_bedroom_master_purifier_pm2_5",
+            old_state=EntityState(entity_id="sensor.master_bedroom_master_purifier_pm2_5", state="12", attributes={"device_class": "pm25"}),
+            new_state=EntityState(entity_id="sensor.master_bedroom_master_purifier_pm2_5", state="18", attributes={"device_class": "pm25"}),
+            timestamp=now,
+        )
+        frames1, _ = triage.evaluate_event(ev1, agents=[], all_states={})
+        self.assertIsNotNone(frames1)
+
+        # Second reading on same sensor: triggers prev_num is not None branch
+        ev2 = StateChangedEvent(
+            entity_id="sensor.master_bedroom_master_purifier_pm2_5",
+            old_state=EntityState(entity_id="sensor.master_bedroom_master_purifier_pm2_5", state="18", attributes={"device_class": "pm25"}),
+            new_state=EntityState(entity_id="sensor.master_bedroom_master_purifier_pm2_5", state="25", attributes={"device_class": "pm25"}),
+            timestamp=now,
+        )
+        frames2, _ = triage.evaluate_event(ev2, agents=[], all_states={})
+        self.assertIsNotNone(frames2)
+
+        # Speed / bandwidth sensor
+        ev3 = StateChangedEvent(
+            entity_id="sensor.x55_upload_speed",
+            old_state=EntityState(entity_id="sensor.x55_upload_speed", state="100.5", attributes={"unit_of_measurement": "kB/s"}),
+            new_state=EntityState(entity_id="sensor.x55_upload_speed", state="105.2", attributes={"unit_of_measurement": "kB/s"}),
+            timestamp=now,
+        )
+        frames3, _ = triage.evaluate_event(ev3, agents=[], all_states={})
+        self.assertIsNotNone(frames3)
 
 
 if __name__ == "__main__":
