@@ -2,6 +2,16 @@
 
 All notable changes to **HA AI Brain** are documented in this file.
 
+## 0.1.3 - 2026-10-24
+
+### Fixed & Aligned
+- **Aligned Add-on Configuration Defaults with Official Recommendations**:
+  - Replaced placeholder defaults with officially recommended Google Gemini models matching documentation:
+    - **Primary / Deep Batch Model**: `gemini/gemini-2.5-pro` (or `gemini/gemini-2.5-flash`).
+    - **Fast Reflex Model**: `gemini/gemini-2.5-flash` (or `gemini/gemini-1.5-flash`).
+  - **Added Official Home Assistant Add-On Translations (`translations/en.yaml`)**: The Home Assistant UI now renders clear, user-friendly labels and field descriptions (e.g., *"Primary / Deep Batch Model"*, *"Fast Reflex Model"*, *"LLM API Key"*) instead of raw internal keys.
+  - **Updated Dashboard & Fallback Chains**: Synchronized control plane presets, quota monitor fallbacks, and documentation to use real, production-ready Google Gemini models (`gemini-2.5-flash`, `gemini-2.5-pro`, `gemini-1.5-flash`, `gemini-2.0-flash`).
+
 ## 0.1.2 - 2026-10-24
 
 ### Added & Improved

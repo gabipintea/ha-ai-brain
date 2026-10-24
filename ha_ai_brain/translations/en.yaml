@@ -1,0 +1,28 @@
+configuration:
+  operating_mode:
+    name: "Operating Mode"
+    description: "hybrid (both real-time reflexes and periodic audits), realtime_stream (reflexes only), or periodic_batch (audits only)."
+  default_autonomy_level:
+    name: "Default Autonomy Level"
+    description: "copilot (ask approval before executing changes), shadow (observe and log only), or autonomous (execute directly)."
+  llm_provider:
+    name: "Primary / Deep Batch Model"
+    description: "Model for complex periodic audits & automations (e.g. gemini/gemini-2.5-pro, openai/gpt-4o, anthropic/claude-3-5-sonnet-20241022)."
+  llm_fast_model:
+    name: "Fast Reflex Model"
+    description: "Model for instant real-time reactions & sub-agents (e.g. gemini/gemini-2.5-flash, openai/gpt-4o-mini, anthropic/claude-3-5-haiku-20241022)."
+  llm_api_key:
+    name: "LLM API Key"
+    description: "API key from Google AI Studio (AIza...), Vertex AI (AQ...), OpenAI (sk-...), Anthropic, or OpenRouter."
+  site_context:
+    name: "Site & Home Context"
+    description: "Freeform description of your home (rooms, floors, HVAC/heating type, occupancy habits) to guide AI reasoning."
+  enable_actionable_notifications:
+    name: "Actionable Push Notifications"
+    description: "Send interactive iOS and Android push notifications with Approve Once, Always Allow, and Dismiss buttons."
+  notification_service:
+    name: "Notification Service"
+    description: "Home Assistant notification target (e.g. notify.mobile_app_your_phone or notify.notify)."
+  batch_analysis_interval_minutes:
+    name: "Batch Audit Interval (Minutes)"
+    description: "Interval in minutes between periodic deep-think batch audits (default: 360 min = 6 hours)."

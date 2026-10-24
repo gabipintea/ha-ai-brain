@@ -6,8 +6,8 @@ OPTIONS_FILE="/data/options.json"
 if [ -f "$OPTIONS_FILE" ]; then
     export BRAIN_OPERATING_MODE=$(jq -r '.operating_mode // "hybrid"' "$OPTIONS_FILE")
     export BRAIN_DEFAULT_AUTONOMY=$(jq -r '.default_autonomy_level // "copilot"' "$OPTIONS_FILE")
-    export BRAIN_LLM_MODEL=$(jq -r '.llm_provider // "gemini/gemini-3.6-flash"' "$OPTIONS_FILE")
-    export BRAIN_LLM_FAST_MODEL=$(jq -r '.llm_fast_model // "gemini/gemini-3.5-flash"' "$OPTIONS_FILE")
+    export BRAIN_LLM_MODEL=$(jq -r '.llm_provider // "gemini/gemini-2.5-pro"' "$OPTIONS_FILE")
+    export BRAIN_LLM_FAST_MODEL=$(jq -r '.llm_fast_model // "gemini/gemini-2.5-flash"' "$OPTIONS_FILE")
     export BRAIN_LLM_API_KEY=$(jq -r '.llm_api_key // ""' "$OPTIONS_FILE")
     export BRAIN_MANAGED_PROXY_URL=$(jq -r '.managed_cloud_proxy_url // ""' "$OPTIONS_FILE")
     export BRAIN_LICENSE_KEY=$(jq -r '.license_key // ""' "$OPTIONS_FILE")
