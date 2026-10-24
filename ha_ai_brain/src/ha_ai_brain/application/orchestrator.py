@@ -420,13 +420,57 @@ class BrainOrchestrator:
         await self.memory.save_run_log(run_log)
         return run_log
 
+    def _is_intent_redundant(self, intent: ActionIntent) -> tuple[bool, str]:
+        """Check if target entities are already in the desired state (prevent redundant proposals)."""
+        if not self._cached_states or not intent.target_entity_ids:
+            return False, ""
+
+        if intent.domain == "cover":
+            if intent.service == "close_cover":
+                if all(
+                    self._cached_states.get(eid) and self._cached_states[eid].state == "closed"
+                    for eid in intent.target_entity_ids
+                ):
+                    return True, "All target covers are already closed."
+            elif intent.service == "open_cover":
+                if all(
+                    self._cached_states.get(eid) and self._cached_states[eid].state == "open"
+                    for eid in intent.target_entity_ids
+                ):
+                    return True, "All target covers are already open."
+
+        if intent.domain in ("switch", "light"):
+            if intent.service in ("turn_off", "turn_on"):
+                target_state = "off" if intent.service == "turn_off" else "on"
+                if all(
+                    self._cached_states.get(eid) and self._cached_states[eid].state == target_state
+                    for eid in intent.target_entity_ids
+                ):
+                    return True, f"All target entities are already {target_state}."
+
+        return False, ""
+
     async def _evaluate_and_dispatch_intents(self, intents: list[ActionIntent]) -> list[dict[str, Any]]:
         """Pass proposed ActionIntents through the Conflict Arbiter and Guardrail Engine."""
         results: list[dict[str, Any]] = []
         endorsed_rules = await self.memory.get_endorsed_rules()
         rejected_signatures = await self.memory.get_rejected_signatures()
+        active_pending = await self.memory.get_pending_approvals()
 
         for intent in intents:
+            # 0. Check for No-Op Redundancy against current entity state
+            is_redundant, redundant_reason = self._is_intent_redundant(intent)
+            if is_redundant:
+                results.append(
+                    {
+                        "intent_id": intent.intent_id,
+                        "signature": intent.repeatable_signature(),
+                        "status": "suppressed_redundant",
+                        "reason": redundant_reason,
+                    }
+                )
+                continue
+
             # 1. Conflict Arbiter Check
             arbiter_ok, arbiter_reason = self.arbiter.evaluate_intent(intent)
             if not arbiter_ok:
@@ -440,7 +484,46 @@ class BrainOrchestrator:
                 )
                 continue
 
-            # 2. Deterministic Guardrail & Repeatable Approval Check
+            # 2. Check Active Pending Approvals for In-Flight Duplicates & Contradictions
+            conflict_found = False
+            for p in active_pending:
+                overlapping = set(p.intent.target_entity_ids).intersection(intent.target_entity_ids)
+                if not overlapping:
+                    continue
+                # Identical domain and service already awaiting user decision
+                if p.intent.domain == intent.domain and p.intent.service == intent.service:
+                    results.append(
+                        {
+                            "intent_id": intent.intent_id,
+                            "signature": intent.repeatable_signature(),
+                            "status": "suppressed_duplicate_pending",
+                            "reason": f"An identical action on {sorted(overlapping)} is already pending user approval (ID: {p.approval_id[:8]}).",
+                        }
+                    )
+                    conflict_found = True
+                    break
+                # Contradictory opposing action already awaiting user decision (e.g. open vs close)
+                if p.intent.domain == intent.domain and (
+                    (p.intent.service == "close_cover" and intent.service in ("open_cover", "set_cover_position"))
+                    or (p.intent.service in ("open_cover", "set_cover_position") and intent.service == "close_cover")
+                    or (p.intent.service == "turn_on" and intent.service == "turn_off")
+                    or (p.intent.service == "turn_off" and intent.service == "turn_on")
+                ):
+                    results.append(
+                        {
+                            "intent_id": intent.intent_id,
+                            "signature": intent.repeatable_signature(),
+                            "status": "blocked_by_conflict",
+                            "reason": f"Opposing action on {sorted(overlapping)} is already pending approval (ID: {p.approval_id[:8]}, {p.intent.service} vs {intent.service}).",
+                        }
+                    )
+                    conflict_found = True
+                    break
+
+            if conflict_found:
+                continue
+
+            # 3. Deterministic Guardrail & Repeatable Approval Check
             eval_res = self.guardrails.evaluate(
                 intent=intent,
                 autonomy_level=self.settings.default_autonomy,

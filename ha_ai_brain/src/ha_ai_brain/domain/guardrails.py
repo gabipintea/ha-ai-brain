@@ -135,7 +135,7 @@ class GuardrailEngine:
         # 7. Check if this repeatable action signature has already been endorsed by the user
         existing_rule = endorsed_rules.get(signature)
         if not existing_rule and endorsed_rules:
-            # Fallback to match by canonical (agent_id, domain_service, target_entity_ids)
+            # Fallback 1: match by canonical (agent_id, domain_service, target_entity_ids)
             intent_targets = sorted(intent.target_entity_ids)
             svc_tag = f"{intent.domain}.{intent.service}"
             for rule in endorsed_rules.values():
@@ -147,6 +147,20 @@ class GuardrailEngine:
                 ):
                     existing_rule = rule
                     break
+
+            # Fallback 2: Generalized entity-level endorsement across multi-target rules
+            # If every target in intent_targets is already covered by user-endorsed rules for this agent & service,
+            # auto-approve the action without re-prompting.
+            if not existing_rule and intent_targets:
+                endorsed_entities_for_svc: set[str] = set()
+                candidate_rule: ApprovalRule | None = None
+                for rule in endorsed_rules.values():
+                    if rule.auto_approve and rule.agent_id == intent.agent_id and rule.domain_service == svc_tag:
+                        endorsed_entities_for_svc.update(rule.target_entity_ids)
+                        if candidate_rule is None:
+                            candidate_rule = rule
+                if candidate_rule and all(t in endorsed_entities_for_svc for t in intent_targets):
+                    existing_rule = candidate_rule
 
         if existing_rule and existing_rule.auto_approve:
             return GuardrailEvaluation(

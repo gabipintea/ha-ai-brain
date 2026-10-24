@@ -10,7 +10,7 @@ from ha_ai_brain.adapters.ha_simulator import SmartHomeSimulatorAdapter
 from ha_ai_brain.api.app import build_orchestrator
 from ha_ai_brain.config import AutonomyLevel, BrainSettings, OperatingMode
 from ha_ai_brain.domain.guardrails import GuardrailDecisionType
-from ha_ai_brain.domain.models import ActionIntent, ActionRiskLevel, FeedbackPolarity
+from ha_ai_brain.domain.models import ActionIntent, ActionRiskLevel, EntityState, FeedbackPolarity
 
 
 class TestClimateAgentPrototype(unittest.IsolatedAsyncioTestCase):
@@ -209,6 +209,73 @@ class TestClimateAgentPrototype(unittest.IsolatedAsyncioTestCase):
         agent_ids = {a.agent_id for a in self.orchestrator.registry.list_agents()}
         self.assertIn("solar_energy_agent", agent_ids)
         self.assertIn("beer_brewery_agent", agent_ids)
+
+    async def test_6_pending_deduplication_and_contradiction_blocking(self) -> None:
+        """Verify that identical in-flight approvals are suppressed and conflicting opposite actions are blocked."""
+        # Seed cached state with closed cover
+        self.orchestrator._cached_states = {
+            "cover.rooftop_front": EntityState(
+                entity_id="cover.rooftop_front",
+                state="closed",
+                attributes={},
+            ),
+            "cover.rooftop_back": EntityState(
+                entity_id="cover.rooftop_back",
+                state="open",
+                attributes={},
+            ),
+        }
+
+        # 1. Proposing close on an already closed cover should be suppressed as redundant
+        close_front = ActionIntent(
+            agent_id="climate_thermal_agent",
+            domain="cover",
+            service="close_cover",
+            target_entity_ids=["cover.rooftop_front"],
+            service_data={},
+            cause_category="solar_overheat",
+            rationale="Close front cover",
+            risk_level=ActionRiskLevel.MEDIUM,
+        )
+        res_redundant = await self.orchestrator._evaluate_and_dispatch_intents([close_front])
+        self.assertEqual(res_redundant[0]["status"], "suppressed_redundant")
+
+        # 2. Proposing close on an open cover creates an active pending approval
+        close_back = ActionIntent(
+            agent_id="climate_thermal_agent",
+            domain="cover",
+            service="close_cover",
+            target_entity_ids=["cover.rooftop_back"],
+            service_data={},
+            cause_category="solar_overheat",
+            rationale="Close back cover",
+            risk_level=ActionRiskLevel.MEDIUM,
+        )
+        res_pending = await self.orchestrator._evaluate_and_dispatch_intents([close_back])
+        self.assertEqual(res_pending[0]["status"], "awaiting_user_approval")
+
+        # 3. Proposing identical close_cover on back again while pending should be suppressed as duplicate
+        res_dup = await self.orchestrator._evaluate_and_dispatch_intents([close_back])
+        self.assertEqual(res_dup[0]["status"], "suppressed_duplicate_pending")
+
+        # 4. If cover is not open (e.g. state='closed'), proposing opposite open_cover on back while close_cover is pending should be blocked by conflict
+        self.orchestrator._cached_states["cover.rooftop_back"] = EntityState(
+            entity_id="cover.rooftop_back",
+            state="closed",
+            attributes={},
+        )
+        open_back = ActionIntent(
+            agent_id="climate_thermal_agent",
+            domain="cover",
+            service="open_cover",
+            target_entity_ids=["cover.rooftop_back"],
+            service_data={},
+            cause_category="passive_solar_heating",
+            rationale="Open back cover for free heat",
+            risk_level=ActionRiskLevel.MEDIUM,
+        )
+        res_opposing = await self.orchestrator._evaluate_and_dispatch_intents([open_back])
+        self.assertEqual(res_opposing[0]["status"], "blocked_by_conflict")
 
 
 if __name__ == "__main__":
