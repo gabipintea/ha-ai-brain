@@ -70,6 +70,7 @@ class ClimateAgentGraph:
         self.memory = memory
         self.research_subagent = research_subagent
         self.computation_subagent = computation_subagent
+        self._cached_findings: dict[str, tuple[datetime, list[ResearchFinding]]] = {}
         self._compiled_graph = self._build_graph()
 
     def _build_graph(self) -> Any:
@@ -167,16 +168,30 @@ class ClimateAgentGraph:
     async def _delegate_research_node(self, state: ClimateGraphState) -> dict[str, Any]:
         """Delegate scientific & domain discovery to the Research Sub-Agent."""
         agent_spec = state["agent_spec"]
+        mode = state.get("mode", "realtime_stream")
+        cache_key = f"{agent_spec.agent_id}:{state.get('area_id') or 'global'}"
+        now = datetime.now(timezone.utc)
+
+        # In realtime_stream mode: reuse cached research findings if fresher than 6 hours (saves ~2,400 tokens!)
+        if mode == "realtime_stream" and cache_key in self._cached_findings:
+            cached_t, cached_findings = self._cached_findings[cache_key]
+            if (now - cached_t).total_seconds() < 21600.0 and cached_findings:
+                return {"research_findings": cached_findings}
+
         findings = await self.research_subagent.investigate(
             agent_specialty=f"{agent_spec.name}: {agent_spec.specialty}. {agent_spec.custom_domain_rules_prompt}",
             site_context=self._compose_effective_site_context(state),
             observed_states=state.get("corroborated_states", {}),
-            mode=state.get("mode", "realtime_stream"),
+            mode=mode,
         )
+        if findings:
+            self._cached_findings[cache_key] = (now, findings)
         return {"research_findings": findings}
 
     async def _delegate_computation_node(self, state: ClimateGraphState) -> dict[str, Any]:
         """Delegate numerical physics & time-series signal extraction to the Computation Sub-Agent."""
+        agent_spec = state["agent_spec"]
+        cache_key = f"{agent_spec.agent_id}:{state.get('area_id') or 'global'}"
         signals = await self.computation_subagent.compute_derived_signals(
             observed_states=state.get("corroborated_states", {}),
             history_series=state.get("history_series", {}),
@@ -186,6 +201,7 @@ class ClimateAgentGraph:
                 {"scope": n.scope, "content": n.content, "related_entities": n.related_entities}
                 for n in state.get("user_context_notes", [])
             ],
+            cache_key=cache_key,
         )
         return {"derived_signals": signals}
 
@@ -199,8 +215,10 @@ class ClimateAgentGraph:
         derived_signals = state.get("derived_signals", [])
         research_findings = state.get("research_findings", [])
         past_feedback = state.get("past_feedback", [])
+        trigger_area = state.get("area_id")
+        trigger_summary = state.get("trigger_summary", "")
 
-        # Identify controllable actuators and existing native HA automations in the corroborated context
+        # Identify controllable actuators in the corroborated context
         actuators = {
             eid: {
                 "domain": st.domain,
@@ -211,15 +229,27 @@ class ClimateAgentGraph:
             for eid, st in corroborated.items()
             if st.domain in agent_spec.controllable_domains and st.domain != "automation"
         }
-        existing_automations = {
-            eid: {
-                "state": st.state,
-                "friendly_name": st.attributes.get("friendly_name", eid),
-                "last_triggered": st.attributes.get("last_triggered"),
-            }
-            for eid, st in corroborated.items()
-            if st.domain == "automation"
-        }
+
+        # Area-scoped telemetry: in real-time mode, only send sensors in the triggered area
+        # plus outdoor/weather/sun and the trigger entity itself (saves ~3,000 tokens)
+        relevant_sensors = {}
+        for eid, s in corroborated.items():
+            if s.domain == "automation" or "_real_feel_" in eid:
+                continue
+            is_trigger = eid in trigger_summary
+            is_same_area = trigger_area and s.area_id == trigger_area
+            is_outdoor_or_global = (
+                s.domain in ("weather", "sun")
+                or s.area_id in ("outdoor", "outside", "exterior", "rooftop")
+                or any(k in eid for k in ("outdoor", "outside", "weather"))
+            )
+            if is_trigger or is_same_area or is_outdoor_or_global or not trigger_area:
+                relevant_sensors[eid] = {
+                    "state": s.state,
+                    "unit": s.unit_of_measurement,
+                    "area": s.area_id,
+                    "attributes": compact_attrs(s.attributes),
+                }
 
         llm_response = await self.llm.generate_json(
             system_prompt=(
@@ -230,8 +260,7 @@ class ClimateAgentGraph:
                 "and the Computation Sub-Agent's derived numerical signals from an expert domain perspective. "
                 "STRICTLY OBEY all `user_context_notes` (e.g. broken device sub-features, physical constraints, or user preferences) "
                 "and never propose actions or notifications that violate them. "
-                "Also respect past human feedback (never repeat actions marked rejected_explicit or overridden_implicit) "
-                "and inspect `existing_automations` so you do not conflict with or duplicate active native HA automations. "
+                "Also respect past human feedback (never repeat actions marked rejected_explicit or overridden_implicit). "
                 "Propose concrete Home Assistant service reactions using available actuators (e.g. `lock.lock`, "
                 "`cover.close_cover`, `climate.set_temperature`, `light.turn_on`).\n"
                 "CRITICAL: Whenever a controllable actuator exists for the action you want to take, ALWAYS propose "
@@ -251,15 +280,10 @@ class ClimateAgentGraph:
                         {"scope": n.scope, "content": n.content, "related_entities": n.related_entities}
                         for n in state.get("user_context_notes", [])
                     ],
-                    "area_id": state.get("area_id"),
-                    "trigger_summary": state.get("trigger_summary", ""),
-                    "sensor_states": {
-                        eid: {"state": s.state, "unit": s.unit_of_measurement, "area": s.area_id, "attributes": compact_attrs(s.attributes)}
-                        for eid, s in corroborated.items()
-                        if s.domain != "automation" and "_real_feel_" not in eid
-                    },
+                    "area_id": trigger_area,
+                    "trigger_summary": trigger_summary,
+                    "sensor_states": relevant_sensors,
                     "available_actuators": actuators,
-                    "existing_automations": existing_automations,
                     "research_findings": [f.model_dump() for f in research_findings],
                     "derived_signals": [d.model_dump(exclude={"python_code_executed"}) for d in derived_signals],
                     "past_feedback": [
@@ -269,18 +293,17 @@ class ClimateAgentGraph:
                             "service": fb.service_called,
                             "note": fb.human_note,
                         }
-                        for fb in past_feedback
+                        for fb in past_feedback[:5]
                     ],
                 }
             ),
-            use_fast_tier=False,
+            use_fast_tier=True,
             context_hint={
                 "task": "synthesize_realtime_reactions",
                 "agent_id": agent_spec.agent_id,
-                "area_id": state.get("area_id"),
+                "area_id": trigger_area,
                 "corroborated": {eid: s.model_dump(mode="json") for eid, s in corroborated.items()},
                 "actuators": actuators,
-                "existing_automations": existing_automations,
                 "derived_signals": [d.model_dump() for d in derived_signals],
                 "research_findings": [f.model_dump() for f in research_findings],
                 "past_feedback": [fb.model_dump(mode="json") for fb in past_feedback],

@@ -86,6 +86,7 @@ class ComputationSubAgent:
     def __init__(self, llm: LLMProviderPort, sandbox: ComputationSandboxPort) -> None:
         self.llm = llm
         self.sandbox = sandbox
+        self._cached_code: dict[str, str] = {}
 
     async def compute_derived_signals(
         self,
@@ -94,11 +95,13 @@ class ComputationSubAgent:
         research_findings: list[ResearchFinding],
         mode: str,
         user_context_notes: list[dict[str, Any]] | None = None,
+        cache_key: str = "default",
     ) -> list[DerivedSignal]:
         """
         Let the LLM decide what derived signals (if any) are useful to compute from the
         available entity keys, states, and historical trajectories, write Python 3 code
         using `math` and `statistics`, and execute it inside the isolated subprocess sandbox.
+        In realtime_stream mode, reuses cached Python code to execute without LLM calls.
         """
         numeric_states: dict[str, float] = {}
         raw_states: dict[str, Any] = {}
@@ -123,6 +126,37 @@ class ComputationSubAgent:
             "history": history_series,
             "mode": mode,
         }
+
+        # In realtime_stream mode: reuse cached Python calculation script if available (0 LLM tokens!)
+        if mode == "realtime_stream" and cache_key in self._cached_code:
+            cached_code = self._cached_code[cache_key]
+            if cached_code:
+                try:
+                    exec_output = await self.sandbox.execute_python(
+                        code=cached_code,
+                        input_variables=sandbox_inputs,
+                        timeout_seconds=5.0,
+                    )
+                    signals_raw = exec_output.get("signals", [])
+                    if isinstance(signals_raw, list) and signals_raw:
+                        derived_signals: list[DerivedSignal] = []
+                        for item in signals_raw:
+                            if isinstance(item, dict) and "signal_name" in item:
+                                derived_signals.append(
+                                    DerivedSignal(
+                                        signal_name=str(item["signal_name"]),
+                                        value=item.get("value", 0.0),
+                                        unit=str(item.get("unit", "")),
+                                        formula_or_method=str(item.get("formula_or_method", "cached_sandbox_execution")),
+                                        source_entities=list(item.get("source_entities", [])),
+                                        interpretation=str(item.get("interpretation", "")),
+                                        python_code_executed=cached_code,
+                                    )
+                                )
+                        if derived_signals:
+                            return derived_signals
+                except Exception:
+                    pass
 
         code_plan = await self.llm.generate_json(
             system_prompt=(
@@ -156,7 +190,7 @@ class ComputationSubAgent:
                     "mode": mode,
                 }
             ),
-            use_fast_tier=False,
+            use_fast_tier=True,
             context_hint={
                 "task": "generate_computation_code",
                 "numeric_states": numeric_states,
@@ -168,6 +202,8 @@ class ComputationSubAgent:
         )
 
         python_code = str(code_plan.get("python_code", "")).strip()
+        if python_code:
+            self._cached_code[cache_key] = python_code
         if not python_code:
             return []
 

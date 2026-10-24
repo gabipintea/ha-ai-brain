@@ -32,8 +32,8 @@ class EdgeSignalTriage:
     DEFAULT_DEADBANDS: dict[str, float] = {
         "temperature": 0.6,   # °C
         "humidity": 2.5,      # %
-        "illuminance": 80.0,  # lx
-        "power": 25.0,        # W
+        "illuminance": 100.0, # lx (indoor/low-light baseline; outdoor uses proportional >=15% & >=1500 lx)
+        "power": 35.0,        # W
         "carbon_dioxide": 50.0,
     }
 
@@ -241,11 +241,33 @@ class EdgeSignalTriage:
 
             if prev_num is not None:
                 delta = abs(new_num - prev_num)
-                if delta < deadband:
-                    return False, f"Delta {delta:.2f} below deadband {deadband}"
+
+                # Dynamic Proportional Deadbands for token conservation:
+                effective_deadband = deadband
+                if dev_class == "illuminance" or "illuminance" in event.entity_id:
+                    if prev_num >= 500.0:
+                        # Outdoor / Daylight lux fluctuates widely with wind/clouds; require >= 15% AND >= 1500 lx
+                        effective_deadband = max(1500.0, prev_num * 0.15)
+                    else:
+                        effective_deadband = 100.0
+                elif dev_class == "power" or "power" in event.entity_id:
+                    if prev_num >= 100.0:
+                        effective_deadband = max(50.0, prev_num * 0.20)
+
+                if delta < effective_deadband:
+                    return False, f"Delta {delta:.2f} below effective deadband {effective_deadband:.1f}"
+
+                # Dwell / Debounce guard for high-frequency noisy telemetry (illuminance, power):
+                # if this sensor triggered an agent < 10m ago, require >= 2x deadband
+                if dev_class in ("illuminance", "power") or any(k in event.entity_id for k in ("illuminance", "power", "_lux", "_w")):
+                    last_t = self._last_triggered_at.get(event.entity_id)
+                    if now is not None and last_t is not None:
+                        elapsed = (now - last_t).total_seconds()
+                        if elapsed < 600.0 and delta < (effective_deadband * 2.0):
+                            return False, f"Debounced: triggered {elapsed:.0f}s ago (<600s) and delta {delta:.1f} < 2x threshold ({effective_deadband * 2.0:.1f})"
+
                 # Anti-flap guard: if the sensor is bouncing back to its previous triggered value within 30 min, ignore
                 older_num = self._prev_triggered_numeric.get(event.entity_id)
-                last_t = self._last_triggered_at.get(event.entity_id)
                 if (
                     older_num is not None
                     and abs(new_num - older_num) < 0.05
