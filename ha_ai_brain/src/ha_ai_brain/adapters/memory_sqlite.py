@@ -190,6 +190,34 @@ class SQLiteMemoryAdapter(MemoryStorePort):
             rules[rule.signature] = rule
         return rules
 
+    async def delete_approval_rule(self, signature: str) -> bool:
+        cur = self._conn.execute("DELETE FROM approval_rules WHERE signature = ?", (signature,))
+        self._conn.commit()
+        return cur.rowcount > 0
+
+    async def get_rejected_suggestions(self) -> list[FeedbackEpisode]:
+        rows = self._conn.execute(
+            "SELECT payload_json FROM feedback_episodes WHERE polarity = ? ORDER BY created_at DESC",
+            (FeedbackPolarity.REJECTED_EXPLICIT.value,),
+        ).fetchall()
+        seen: set[str] = set()
+        latest: list[FeedbackEpisode] = []
+        for r in rows:
+            ep = FeedbackEpisode.model_validate_json(r["payload_json"])
+            if ep.action_signature in seen:
+                continue
+            seen.add(ep.action_signature)
+            latest.append(ep)
+        return latest
+
+    async def unblock_rejected_signature(self, signature: str) -> bool:
+        cur = self._conn.execute(
+            "DELETE FROM feedback_episodes WHERE action_signature = ? AND polarity = ?",
+            (signature, FeedbackPolarity.REJECTED_EXPLICIT.value),
+        )
+        self._conn.commit()
+        return cur.rowcount > 0
+
     async def get_rejected_signatures(self) -> set[str]:
         rows = self._conn.execute(
             "SELECT DISTINCT action_signature FROM feedback_episodes WHERE polarity = ?",

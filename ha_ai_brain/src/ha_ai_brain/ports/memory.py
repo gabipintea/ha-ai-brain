@@ -39,6 +39,18 @@ class MemoryStorePort(ABC):
     async def get_endorsed_rules(self) -> dict[str, ApprovalRule]:
         """Return all active repeatable approval rules keyed by signature."""
 
+    async def delete_approval_rule(self, signature: str) -> bool:
+        """Revoke an endorsed repeatable rule so the action asks for approval again. Returns True if removed."""
+        return False
+
+    async def get_rejected_suggestions(self) -> list[FeedbackEpisode]:
+        """Return the most recent explicit rejection per blocked signature (newest first)."""
+        return []
+
+    async def unblock_rejected_signature(self, signature: str) -> bool:
+        """Remove explicit rejections for a signature so the suggestion may be proposed again."""
+        return False
+
     @abstractmethod
     async def get_rejected_signatures(self) -> set[str]:
         """Return signatures explicitly rejected by the user."""

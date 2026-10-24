@@ -2,11 +2,10 @@ name: "HA AI Brain"
 version: "0.1.0"
 slug: "ha_ai_brain"
 description: "Autonomous Multi-Agent AI Brain for Home Assistant (Climate, Lighting, Security, Repair, and Custom Domain Agents)"
-url: "https://github.com/gabrielpintea/ha-ai-brain"
+url: "https://github.com/gabipintea/ha-ai-brain"
 arch:
   - aarch64
   - amd64
-  - armv7
 startup: application
 boot: auto
 init: false
@@ -22,13 +21,11 @@ map:
   - config:rw
 options:
   operating_mode: "hybrid"
-  default_autonomy_level: "shadow"
-  llm_provider: "openai/gpt-4o"
-  llm_fast_model: "openai/gpt-4o-mini"
+  default_autonomy_level: "copilot"
+  llm_provider: "gemini/gemini-3.6-flash"
+  llm_fast_model: "gemini/gemini-3.5-flash"
   llm_api_key: ""
-  managed_cloud_proxy_url: ""
-  license_key: ""
-  site_context: "Smart property managed by Home Assistant. Discover the building layout, areas, sensor modalities, and controllable actuators directly from the entity states."
+  site_context: ""
   enable_actionable_notifications: true
   notification_service: "notify.notify"
   batch_analysis_interval_minutes: 360
@@ -38,9 +35,7 @@ schema:
   llm_provider: "str"
   llm_fast_model: "str"
   llm_api_key: "password?"
-  managed_cloud_proxy_url: "str?"
-  license_key: "password?"
-  site_context: "str"
+  site_context: "str?"
   enable_actionable_notifications: "bool"
   notification_service: "str"
   batch_analysis_interval_minutes: "int(15,10080)"

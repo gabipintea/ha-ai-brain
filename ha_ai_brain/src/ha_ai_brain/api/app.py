@@ -29,6 +29,9 @@ class SettingsUpdateRequest(BaseModel):
     notification_service: str | None = None
     notifications_enabled: bool | None = None
     site_context: str | None = None
+    llm_model: str | None = None
+    llm_fast_model: str | None = None
+    llm_api_key: str | None = None
 
 
 class FallbackDecisionRequest(BaseModel):
@@ -174,6 +177,7 @@ def create_app(settings: BrainSettings | None = None) -> Any:
             entity_count = len(states)
         pending = await orchestrator.memory.get_pending_approvals()
         rules = await orchestrator.memory.get_endorsed_rules()
+        rejected = await orchestrator.memory.get_rejected_suggestions()
         logs = await orchestrator.memory.get_recent_run_logs(limit=10)
         total_logs = await orchestrator.memory.get_run_logs_count()
         insights = await orchestrator.memory.get_advisory_insights(limit=10)
@@ -181,8 +185,18 @@ def create_app(settings: BrainSettings | None = None) -> Any:
         ignored_targets = await orchestrator.memory.get_ignored_targets()
         notify_services = await orchestrator.smart_home.get_available_notify_services()
 
+        settings_dict = orchestrator.settings.model_dump()
+        raw_key = settings_dict.pop("llm_api_key", "")
+        settings_dict["has_api_key"] = bool(raw_key)
+        if raw_key:
+            prefix = raw_key[:4]
+            suffix = raw_key[-4:] if len(raw_key) >= 8 else ""
+            settings_dict["masked_api_key"] = f"{prefix}••••••••{suffix}"
+        else:
+            settings_dict["masked_api_key"] = ""
+
         return {
-            "settings": orchestrator.settings.model_dump(),
+            "settings": settings_dict,
             "available_notify_services": notify_services,
             "license": lic.model_dump(),
             "llm_quota": quota.to_status_dict(),
@@ -190,12 +204,29 @@ def create_app(settings: BrainSettings | None = None) -> Any:
             "entity_count": entity_count,
             "pending_approvals": [p.model_dump(mode="json") for p in pending],
             "endorsed_rules": {k: v.model_dump(mode="json") for k, v in rules.items()},
+            "rejected_suggestions": [e.model_dump(mode="json") for e in rejected],
             "user_context_notes": [n.model_dump(mode="json") for n in context_notes],
             "ignored_targets": [t.model_dump(mode="json") for t in ignored_targets],
             "recent_logs": [l.model_dump(mode="json") for l in logs],
             "total_logs_count": total_logs,
             "advisory_insights": [i.model_dump(mode="json") for i in insights],
         }
+
+    @app.delete("/api/rejected")
+    async def unblock_rejected(signature: str) -> dict[str, Any]:
+        """Unblock a previously rejected suggestion so agents may propose it again."""
+        removed = await orchestrator.memory.unblock_rejected_signature(signature)
+        if not removed:
+            raise HTTPException(status_code=404, detail="Rejected suggestion not found")
+        return {"status": "unblocked", "signature": signature}
+
+    @app.delete("/api/rules")
+    async def revoke_rule(signature: str) -> dict[str, Any]:
+        """Revoke an 'always allow' rule; the action will require approval again."""
+        removed = await orchestrator.memory.delete_approval_rule(signature)
+        if not removed:
+            raise HTTPException(status_code=404, detail="Rule not found")
+        return {"status": "revoked", "signature": signature}
 
     @app.get("/api/logs")
     async def get_logs(limit: int = 10, offset: int = 0) -> dict[str, Any]:
@@ -235,7 +266,33 @@ def create_app(settings: BrainSettings | None = None) -> Any:
             await orchestrator.memory.save_ui_preference("notifications_enabled", str(req.notifications_enabled))
         if req.site_context is not None:
             orchestrator.settings.site_context = req.site_context
-        return {"status": "updated", "settings": orchestrator.settings.model_dump()}
+            await orchestrator.memory.save_ui_preference("site_context", req.site_context)
+        llm_updated = False
+        if req.llm_model is not None and req.llm_model.strip():
+            orchestrator.settings.llm_model = req.llm_model.strip()
+            await orchestrator.memory.save_ui_preference("llm_model", orchestrator.settings.llm_model)
+            llm_updated = True
+        if req.llm_fast_model is not None and req.llm_fast_model.strip():
+            orchestrator.settings.llm_fast_model = req.llm_fast_model.strip()
+            await orchestrator.memory.save_ui_preference("llm_fast_model", orchestrator.settings.llm_fast_model)
+            llm_updated = True
+        if req.llm_api_key is not None and req.llm_api_key.strip():
+            orchestrator.settings.llm_api_key = req.llm_api_key.strip()
+            await orchestrator.memory.save_ui_preference("llm_api_key", orchestrator.settings.llm_api_key)
+            llm_updated = True
+        if llm_updated and hasattr(orchestrator.llm, "reconfigure"):
+            orchestrator.llm.reconfigure(
+                model=orchestrator.settings.llm_model,
+                fast_model=orchestrator.settings.llm_fast_model,
+                api_key=orchestrator.settings.llm_api_key,
+                fallback_policy=orchestrator.settings.llm_fallback_policy.value,
+            )
+
+        resp_settings = orchestrator.settings.model_dump()
+        raw_key = resp_settings.pop("llm_api_key", "")
+        resp_settings["has_api_key"] = bool(raw_key)
+        resp_settings["masked_api_key"] = f"{raw_key[:4]}••••••••{raw_key[-4:]}" if len(raw_key) >= 8 else ("••••" if raw_key else "")
+        return {"status": "updated", "settings": resp_settings}
 
     @app.post("/api/llm/fallback")
     async def decide_llm_fallback(req: FallbackDecisionRequest) -> dict[str, Any]:

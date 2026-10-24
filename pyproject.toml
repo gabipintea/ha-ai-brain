@@ -33,9 +33,9 @@ dev = [
 ha-ai-brain = "ha_ai_brain.main:run"
 
 [tool.setuptools.packages.find]
-where = ["src"]
+where = ["ha_ai_brain/src"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
-pythonpath = ["src"]
+pythonpath = ["ha_ai_brain/src"]

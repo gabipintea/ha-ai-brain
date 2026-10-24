@@ -56,6 +56,33 @@ class TestControlPlaneAPI(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(res_decide.status_code, 200)
             self.assertTrue(res_decide.json()["repeatable_rule_saved"])
 
+            # 4b. Revoke the endorsed rule; it must disappear and a second revoke must 404
+            rules = (await client.get("/api/status")).json()["endorsed_rules"]
+            self.assertGreaterEqual(len(rules), 1)
+            sig = next(iter(rules))
+            res_revoke = await client.delete("/api/rules", params={"signature": sig})
+            self.assertEqual(res_revoke.status_code, 200)
+            self.assertNotIn(sig, (await client.get("/api/status")).json()["endorsed_rules"])
+            res_again = await client.delete("/api/rules", params={"signature": sig})
+            self.assertEqual(res_again.status_code, 404)
+
+            # 4c. Reject a new suggestion, list it, then unblock it
+            await client.post("/api/events/simulate", json={"scenario": "solar_ufh_gain"})
+            pend = (await client.get("/api/status")).json()["pending_approvals"]
+            self.assertGreaterEqual(len(pend), 1, "solar scenario should leave a pending approval to reject")
+            if pend:
+                await client.post(
+                    f"/api/approvals/{pend[0]['approval_id']}/decide",
+                    json={"decision": "rejected", "human_note": ""},
+                )
+                rej = (await client.get("/api/status")).json()["rejected_suggestions"]
+                self.assertGreaterEqual(len(rej), 1)
+                rsig = rej[0]["action_signature"]
+                self.assertEqual((await client.delete("/api/rejected", params={"signature": rsig})).status_code, 200)
+                after = (await client.get("/api/status")).json()["rejected_suggestions"]
+                self.assertNotIn(rsig, [e["action_signature"] for e in after])
+                self.assertEqual((await client.delete("/api/rejected", params={"signature": rsig})).status_code, 404)
+
             # 5. Trigger Periodic Batch Analysis
             res_batch = await client.post("/api/batch/analyze", json={"agent_id": "climate_thermal_agent"})
             self.assertEqual(res_batch.status_code, 200)
@@ -68,8 +95,24 @@ class TestControlPlaneAPI(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(res_logs.status_code, 200)
             logs_data = res_logs.json()
             self.assertGreaterEqual(logs_data["total"], 2)
-            self.assertEqual(len(logs_data["logs"]), 2)
-            self.assertFalse(logs_data["has_more"])
+            self.assertEqual(len(logs_data["logs"]), min(5, logs_data["total"]))
+            self.assertEqual(logs_data["has_more"], logs_data["total"] > 5)
+
+            # 7. Test AI Provider & Model live reconfiguration
+            res_set = await client.post("/api/settings", json={
+                "llm_model": "openai/gpt-4o",
+                "llm_fast_model": "openai/gpt-4o-mini",
+                "llm_api_key": "sk-1234567890abcdef1234",
+                "site_context": "Test property with underfloor heating.",
+            })
+            self.assertEqual(res_set.status_code, 200)
+            st_data = (await client.get("/api/status")).json()
+            self.assertEqual(st_data["settings"]["llm_model"], "openai/gpt-4o")
+            self.assertEqual(st_data["settings"]["site_context"], "Test property with underfloor heating.")
+            self.assertTrue(st_data["settings"]["has_api_key"])
+            self.assertTrue(st_data["settings"]["masked_api_key"].startswith("sk-1"))
+            self.assertTrue(st_data["settings"]["masked_api_key"].endswith("1234"))
+            self.assertNotIn("sk-1234567890abcdef1234", str(st_data))
 
 
 if __name__ == "__main__":

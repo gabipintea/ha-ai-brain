@@ -133,6 +133,7 @@ class BaseQuotaMonitorAdapter(LLMQuotaMonitorPort):
         policy = self._snapshot.fallback_policy
         if policy == "disabled" or not available_fallbacks:
             self._snapshot.active_model = primary
+            self._snapshot.model = primary
             self._snapshot.using_fallback_model = False
             self._snapshot.awaiting_fallback_confirmation = False
             self._snapshot.quota_exhausted = True
@@ -153,6 +154,7 @@ class BaseQuotaMonitorAdapter(LLMQuotaMonitorPort):
         confirmed = self._snapshot.user_confirmed_fallback_model
         if confirmed == "__WAIT_PRIMARY__":
             self._snapshot.active_model = primary
+            self._snapshot.model = primary
             self._snapshot.using_fallback_model = False
             self._snapshot.awaiting_fallback_confirmation = False
             self._snapshot.quota_exhausted = True
@@ -167,6 +169,7 @@ class BaseQuotaMonitorAdapter(LLMQuotaMonitorPort):
         else:
             # Waiting for user confirmation before switching to fallback
             self._snapshot.active_model = primary
+            self._snapshot.model = primary
             self._snapshot.using_fallback_model = False
             self._snapshot.awaiting_fallback_confirmation = True
             self._snapshot.quota_exhausted = True

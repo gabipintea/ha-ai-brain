@@ -56,6 +56,28 @@ class LiteLLMAdapter(LLMProviderPort):
     def set_fallback_policy(self, policy: str) -> None:
         self.quota_monitor.set_fallback_policy(policy)
 
+    def reconfigure(
+        self,
+        model: str | None = None,
+        fast_model: str | None = None,
+        api_key: str | None = None,
+        fallback_policy: str | None = None,
+    ) -> None:
+        """Dynamically reconfigure LLM model, fast model, and API key at runtime."""
+        if model:
+            self.model = model.strip()
+        if fast_model:
+            self.fast_model = fast_model.strip()
+        if api_key is not None:
+            self.api_key = api_key.strip()
+        current_policy = fallback_policy or getattr(self.quota_monitor, "_snapshot", None) and self.quota_monitor._snapshot.fallback_policy or "auto"
+        self.quota_monitor = create_quota_monitor_for_model(
+            model=self.model,
+            api_key=self.api_key,
+            fallback_policy=current_policy,
+        )
+        logger.info("LiteLLMAdapter reconfigured to model=%s, fast_model=%s (has_key=%s)", self.model, self.fast_model, bool(self.api_key))
+
     def approve_fallback_model(self, model: str | None = None) -> str | None:
         return self.quota_monitor.approve_fallback_model(model)
 

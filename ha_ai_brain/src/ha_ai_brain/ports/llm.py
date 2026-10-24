@@ -111,3 +111,13 @@ class LLMProviderPort(ABC):
     async def get_quota_status(self) -> LLMQuotaAndUsageSnapshot:
         """Return current provider quota, cooldown, and spend telemetry."""
         return LLMQuotaAndUsageSnapshot()
+
+    def reconfigure(
+        self,
+        model: str | None = None,
+        fast_model: str | None = None,
+        api_key: str | None = None,
+        fallback_policy: str | None = None,
+    ) -> None:
+        """Dynamically reconfigure provider model settings at runtime."""
+        pass

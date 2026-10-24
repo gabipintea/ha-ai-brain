@@ -132,5 +132,8 @@ class BrainSettings(BaseModel):
             notification_service=os.getenv("BRAIN_NOTIFICATION_SERVICE", "notify.notify"),
             batch_interval_minutes=int(os.getenv("BRAIN_BATCH_INTERVAL_MINUTES", "360")),
             db_path=os.getenv("BRAIN_DB_PATH", "ha_ai_brain.db"),
-            custom_agents_dir=os.getenv("BRAIN_CUSTOM_AGENTS_DIR", "agents"),
+            custom_agents_dir=os.getenv(
+                "BRAIN_CUSTOM_AGENTS_DIR",
+                "agents" if os.path.isdir("agents") else ("ha_ai_brain/agents" if os.path.isdir("ha_ai_brain/agents") else "agents"),
+            ),
         )

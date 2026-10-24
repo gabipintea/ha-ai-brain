@@ -1,6 +1,6 @@
 services:
   ha-ai-brain:
-    build: .
+    build: ./ha_ai_brain
     container_name: ha-ai-brain
     restart: unless-stopped
     ports:
@@ -9,4 +9,4 @@ services:
       - .env
     volumes:
       - ./data:/data
-      - ./agents:/app/agents
+      - ./ha_ai_brain/agents:/app/agents

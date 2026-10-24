@@ -144,6 +144,26 @@ class BrainOrchestrator:
                 self.notification.notify_service = prefs["notification_service"]
         if "notifications_enabled" in prefs:
             self.settings.notifications_enabled = prefs["notifications_enabled"].lower() == "true"
+        if "site_context" in prefs and prefs["site_context"]:
+            self.settings.site_context = prefs["site_context"]
+        llm_changed = False
+        new_model = self.settings.llm_model
+        new_fast = self.settings.llm_fast_model
+        new_key = self.settings.llm_api_key
+        if "llm_model" in prefs and prefs["llm_model"]:
+            new_model = prefs["llm_model"]
+            self.settings.llm_model = new_model
+            llm_changed = True
+        if "llm_fast_model" in prefs and prefs["llm_fast_model"]:
+            new_fast = prefs["llm_fast_model"]
+            self.settings.llm_fast_model = new_fast
+            llm_changed = True
+        if "llm_api_key" in prefs and prefs["llm_api_key"]:
+            new_key = prefs["llm_api_key"]
+            self.settings.llm_api_key = new_key
+            llm_changed = True
+        if llm_changed and hasattr(self.llm, "reconfigure"):
+            self.llm.reconfigure(model=new_model, fast_model=new_fast, api_key=new_key)
 
     async def _restore_persisted_ui_preferences(self) -> None:
         """Load user preferences saved from the Web UI so restarts never reset user choices."""
