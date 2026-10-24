@@ -125,6 +125,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       font: inherit; font-size: 0.86rem; font-weight: 600; padding: 8px 14px; border-radius: 8px; cursor: pointer;
       border: 1px solid var(--border); background: var(--panel-2); color: var(--text);
       transition: background 0.15s, border-color 0.15s, transform 0.08s;
+      white-space: nowrap; flex-shrink: 0;
     }
     button:hover { border-color: var(--accent); }
     button:active { transform: scale(0.98); }
@@ -132,7 +133,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     button.success { background: var(--ok); border-color: var(--ok); color: #05150e; }
     button.danger { background: transparent; border-color: var(--danger); color: var(--danger); }
     button.danger:hover { background: rgba(248,113,113,0.12); }
-    button.icon { padding: 3px 9px; font-size: 0.8rem; }
+    button.icon { padding: 5px 12px; font-size: 0.8rem; white-space: nowrap; flex-shrink: 0; min-width: fit-content; text-align: center; }
     .btn-row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
     select, input[type="text"], textarea {
       width: 100%; max-width: 100%; font: inherit; font-size: 16px; color: var(--text);
@@ -149,6 +150,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
     .item:last-child { margin-bottom: 0; }
     .row { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+    .row > div:first-child { min-width: 0; flex: 1 1 auto; overflow-wrap: anywhere; word-break: break-word; }
+    .row > button { flex-shrink: 0; white-space: nowrap; align-self: flex-start; margin-left: 8px; }
     code {
       font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.8rem;
       background: rgba(255,255,255,0.05); padding: 1px 6px; border-radius: 5px; overflow-wrap: anywhere; word-break: break-all;
@@ -177,6 +180,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       header { flex-direction: column; align-items: flex-start; }
       .nav-tabs { gap: 6px; }
       .tab-btn { padding: 7px 12px; font-size: 0.82rem; }
+      .inline-form { flex-direction: column; }
+      .inline-form input { width: 100%; flex: 1 1 100%; }
+      .inline-form button { width: 100%; }
+      .row { gap: 10px; }
+      .row > button { padding: 6px 12px; font-size: 0.82rem; }
     }
   </style>
 </head>
