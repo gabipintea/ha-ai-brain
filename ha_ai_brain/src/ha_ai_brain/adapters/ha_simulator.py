@@ -22,6 +22,11 @@ class SmartHomeSimulatorAdapter(SmartHomePort):
         self._event_queue: asyncio.Queue[StateChangedEvent] = asyncio.Queue()
         self._service_call_log: list[dict[str, Any]] = []
         self._created_automations: dict[str, NativeAutomationProposal] = {}
+        self._available_notify_services: list[str] = [
+            "notify.notify",
+            "notify.mobile_app_phone",
+            "notify.persistent_notification",
+        ]
 
     def _build_initial_states(self) -> dict[str, EntityState]:
         entities = [
@@ -265,11 +270,7 @@ class SmartHomeSimulatorAdapter(SmartHomePort):
         ][:limit]
 
     async def get_available_notify_services(self) -> list[str]:
-        return [
-            "notify.notify",
-            "notify.mobile_app_phone",
-            "notify.persistent_notification",
-        ]
+        return list(self._available_notify_services)
 
     async def subscribe_state_changes(self) -> AsyncIterator[StateChangedEvent]:
         while True:

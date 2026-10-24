@@ -504,6 +504,48 @@ class TestLiveHomeAssistantReadiness(unittest.IsolatedAsyncioTestCase):
         frames3, _ = triage.evaluate_event(ev3, agents=[], all_states={})
         self.assertIsNotNone(frames3)
 
+    async def test_12_notify_service_smart_resolution_and_fallback(self) -> None:
+        """
+        Verify that HomeAssistantNotificationAdapter automatically resolves notify services:
+        - 'notify.gabriels_iphone' -> 'notify.mobile_app_gabriels_iphone'
+        - Fallbacks to 'notify.notify' on unrecognized targets
+        - Catches service errors without raising uncaught exceptions in periodic batch
+        """
+        from ha_ai_brain.adapters.notification_ha import HomeAssistantNotificationAdapter
+        from ha_ai_brain.domain.models import AdvisoryInsight
+
+        sim = SmartHomeSimulatorAdapter()
+        # Mock available services
+        sim._available_notify_services = [
+            "notify.mobile_app_gabriels_iphone",
+            "notify.mobile_app_gabis_mac",
+            "notify.notify",
+        ]
+
+        # 1. User specified notify.gabriels_iphone (missing mobile_app_)
+        notif = HomeAssistantNotificationAdapter(smart_home=sim, notify_service="notify.gabriels_iphone")
+        domain, service = await notif._resolve_service_name()
+        self.assertEqual(domain, "notify")
+        self.assertEqual(service, "mobile_app_gabriels_iphone")
+
+        # 2. User specified non-existent device -> falls back to notify.notify
+        notif_unknown = HomeAssistantNotificationAdapter(smart_home=sim, notify_service="notify.unknown_tablet")
+        d2, s2 = await notif_unknown._resolve_service_name()
+        self.assertEqual(d2, "notify")
+        self.assertEqual(s2, "notify")
+
+        # 3. Test send_advisory_alert works seamlessly
+        insight = AdvisoryInsight(
+            agent_id="climate_thermal_agent",
+            category="thermal_insulation",
+            title="High Humidity Alert",
+            finding_details="Humidity is 74%",
+            recommended_human_action="Turn off humidifier",
+        )
+        await notif.send_advisory_alert(insight)
+        self.assertEqual(len(notif.sent_notifications), 1)
+        self.assertEqual(sim.service_call_log[-1]["service"], "mobile_app_gabriels_iphone")
+
 
 if __name__ == "__main__":
     unittest.main()

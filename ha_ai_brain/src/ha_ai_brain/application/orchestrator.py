@@ -402,7 +402,10 @@ class BrainOrchestrator:
         for insight in insights:
             await self.memory.save_advisory_insight(insight)
             if self.settings.notifications_enabled and self.settings.default_autonomy != "shadow":
-                await self.notification.send_advisory_alert(insight)
+                try:
+                    await self.notification.send_advisory_alert(insight)
+                except Exception as exc:
+                    logger.warning("Could not dispatch advisory notification: %s", exc)
 
         exec_results = await self._evaluate_and_dispatch_intents(intents)
 
@@ -598,20 +601,34 @@ class BrainOrchestrator:
                 res = await self.smart_home.upsert_automation(intent.native_automation)
             elif intent.domain == "notify":
                 # Strictly use the single notification service chosen by the user in Settings / UI
-                _, _, configured_notify_svc = self.settings.notification_service.partition(".")
-                notify_service = configured_notify_svc or "notify"
+                if hasattr(self.notification, "_resolve_service_name"):
+                    domain, notify_service = await self.notification._resolve_service_name()
+                else:
+                    domain, _, configured_notify_svc = self.settings.notification_service.partition(".")
+                    notify_service = configured_notify_svc or "notify"
+                    domain = domain or "notify"
                 payload = dict(intent.service_data)
                 if "message" not in payload:
                     payload["message"] = intent.rationale
                 if "title" not in payload:
                     payload["title"] = f"HA AI Brain ({intent.agent_id})"
-                res = await self.smart_home.call_service(
-                    domain="notify",
-                    service=notify_service,
-                    target_entity_ids=[],
-                    service_data=payload,
-                    context_id=context_id,
-                )
+                try:
+                    res = await self.smart_home.call_service(
+                        domain=domain,
+                        service=notify_service,
+                        target_entity_ids=[],
+                        service_data=payload,
+                        context_id=context_id,
+                    )
+                except Exception as exc:
+                    logger.warning("Service call %s.%s failed: %s; falling back to notify.notify", domain, notify_service, exc)
+                    res = await self.smart_home.call_service(
+                        domain="notify",
+                        service="notify",
+                        target_entity_ids=[],
+                        service_data=payload,
+                        context_id=context_id,
+                    )
             else:
                 res = await self.smart_home.call_service(
                     domain=intent.domain,

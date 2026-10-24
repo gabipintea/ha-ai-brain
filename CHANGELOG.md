@@ -2,6 +2,15 @@
 
 All notable changes to **HA AI Brain** are documented in this file.
 
+## 0.1.6 - 2026-10-24
+
+### Fixed & Improved
+- **Smart Notification Service Resolution & Fallback**:
+  - Automatically resolves notification service names (e.g. `notify.gabriels_iphone` $\rightarrow$ `notify.mobile_app_gabriels_iphone`) using discovered Home Assistant notify services, eliminating 400 Bad Request errors when users omit the `mobile_app_` prefix.
+  - Automatically falls back to `notify.notify` if an invalid, unregistered, or renamed device target is encountered.
+  - Hardened periodic batch scheduler and alert dispatch in `orchestrator.py`: notification delivery failures (e.g. 400 Bad Request or unreachable mobile clients) are logged gracefully and will never halt background audits or prevent insights and automations from persisting into episodic memory.
+  - Clarified Home Assistant Add-on configuration documentation and translations for `notification_service`.
+
 ## 0.1.5 - 2026-10-24
 
 ### Fixed & Aligned

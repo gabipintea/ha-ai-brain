@@ -22,7 +22,7 @@ configuration:
     description: "Send interactive iOS and Android push notifications with Approve Once, Always Allow, and Dismiss buttons."
   notification_service:
     name: "Notification Service"
-    description: "Home Assistant notification target (e.g. notify.mobile_app_your_phone or notify.notify)."
+    description: "Home Assistant notification target (e.g. notify.mobile_app_your_phone or notify.notify). Note: Companion App notifications use the 'mobile_app_' prefix."
   batch_analysis_interval_minutes:
     name: "Batch Audit Interval (Minutes)"
     description: "Interval in minutes between periodic deep-think batch audits (default: 360 min = 6 hours)."
