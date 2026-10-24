@@ -29,17 +29,25 @@ That's it! Your Home Assistant entities, areas, and devices are automatically di
 
 ---
 
-## 🤖 Supported AI Providers
+## 🤖 Supported AI Providers & Model Selection Guide
 
-HA AI Brain works seamlessly out of the box with all leading AI models via LiteLLM:
+HA AI Brain works seamlessly out of the box with all leading AI models via LiteLLM.
 
-| Provider | Model Name Examples | API Key / Setup | Notes |
-| :--- | :--- | :--- | :--- |
-| **Google Gemini** | `gemini/gemini-3.6-flash`<br>`gemini/gemini-3.5-flash` | Free key from [aistudio.google.com](https://aistudio.google.com/) | High speed, generous free tier, automatic fallback rotation. |
-| **OpenAI** | `openai/gpt-4o`<br>`openai/gpt-4o-mini`<br>`openai/o3-mini` | API key (`sk-...`) from platform.openai.com | High accuracy structured JSON reasoning and HTTP rate limit tracking. |
-| **Anthropic** | `anthropic/claude-3-5-sonnet-20241022`<br>`anthropic/claude-3-5-haiku-20241022` | API key (`sk-ant-...`) from console.anthropic.com | Deep reasoning and prompt caching. |
-| **OpenRouter** | `openrouter/anthropic/claude-3.5-sonnet`<br>`openrouter/meta-llama/llama-3.3-70b-instruct` | API key (`sk-or-...`) from openrouter.ai | Flexible single key for hundreds of models. |
-| **Local Ollama** | `ollama/llama3.2`<br>`ollama/mistral` | **None** (Point to your Ollama host) | **100% Private, offline, zero cloud spend.** |
+### Do Cheaper Models Perform Well in Home Assistant?
+**Yes—compact "Flash / Mini" models are ideal for real-time smart home reflexes:**
+* **Sub-Second Speed**: `gpt-4o-mini` and `gemini-2.5-flash` respond in **300–600ms**, allowing instant actuator reflexes.
+* **Flawless JSON Schema Adherence**: Modern small models follow JSON schemas reliably for Home Assistant service calls.
+* **Frontier Models for Batch**: Reserve flagship models (`claude-3-5-sonnet`, `gemini-2.5-pro`, `gpt-4o`) for scheduled Periodic Batch runs (every 6 hours) to author complex YAML automations and thermodynamic decay models.
+
+### Recommended Models per Provider
+
+| Provider | Primary Model (Real-Time & Sub-Agents) | Deep Batch Model (Periodic Audits & Automations) | Fallback Model | Est. Monthly Cost | Why This Combination? |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **Google Gemini** *(Free / Budget)* | `gemini/gemini-2.5-flash` | `gemini/gemini-2.5-pro` | `gemini/gemini-1.5-flash` | **$0.00** *(Free Tier)*<br>< $0.30/mo *(Paid)* | **Best for budget/free setups.** Very fast, massive context, free tier on Google AI Studio. |
+| **OpenAI** *(Most Reliable)* | `openai/gpt-4o-mini` | `openai/gpt-4o` | `openai/gpt-4o-mini` | **~$0.20 – $0.50 / mo** | **Best for rock-solid stability.** Near-perfect schema adherence and high reliability. |
+| **Anthropic Claude** *(Best Reasoning)* | `anthropic/claude-3-5-haiku-20241022` | `anthropic/claude-3-5-sonnet-20241022` | `openai/gpt-4o-mini` | **~$0.50 – $1.20 / mo** | **Highest intelligence.** Sonnet crafts the most sophisticated Home Assistant native automations. |
+| **OpenRouter** *(Aggregator)* | `openrouter/google/gemini-2.5-flash` | `openrouter/anthropic/claude-3.5-sonnet` | `openrouter/openai/gpt-4o-mini` | **~$0.30 – $0.80 / mo** | **Maximum flexibility.** Use a single API key to mix Gemini for instant reflexes and Claude for deep batch audits. |
+| **Local Ollama** *(100% Private)* | `ollama/qwen2.5:7b` *(or `llama3.2:3b`)* | `ollama/qwen2.5:14b` *(or `llama3.3:70b`)* | `ollama/qwen2.5:7b` | **$0.00** *(Zero cloud spend)* | **Best for strict privacy.** 100% offline, zero data leaves your local network. |
 
 ---
 
