@@ -569,6 +569,13 @@ class BrainOrchestrator:
         if pending is None:
             raise KeyError(f"PendingApproval '{approval_id}' not found")
 
+        # Automatically clear/dismiss the push notification on the user's mobile devices
+        if hasattr(self.notification, "dismiss_approval_notification"):
+            try:
+                await self.notification.dismiss_approval_notification(approval_id)
+            except Exception:
+                pass
+
         intent = pending.intent
         signature = pending.signature
 
@@ -654,6 +661,13 @@ class BrainOrchestrator:
         }
 
     async def dismiss_all_pending(self) -> int:
+        pending = await self.memory.get_pending_approvals()
+        for p in pending:
+            if hasattr(self.notification, "dismiss_approval_notification"):
+                try:
+                    await self.notification.dismiss_approval_notification(p.approval_id)
+                except Exception:
+                    pass
         count = await self.memory.dismiss_all_pending_approvals()
         logger.info("[APPROVAL DECISION -> DISMISSED ALL] Dismissed %d pending approvals.", count)
         return count

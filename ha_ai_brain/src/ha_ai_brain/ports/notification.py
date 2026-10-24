@@ -22,3 +22,7 @@ class NotificationPort(ABC):
     @abstractmethod
     async def send_advisory_alert(self, insight: AdvisoryInsight) -> None:
         """Notify the human of an important physical/insulation/automation insight."""
+
+    async def dismiss_approval_notification(self, approval_id: str) -> None:
+        """Dismiss/clear the actionable push notification from user devices."""
+        pass

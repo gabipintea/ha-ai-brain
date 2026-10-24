@@ -67,6 +67,25 @@ class HomeAssistantNotificationAdapter(NotificationPort):
             service_data=payload,
         )
 
+    async def dismiss_approval_notification(self, approval_id: str) -> None:
+        domain, _, service = self.notify_service.partition(".")
+        service = service or "notify"
+        payload = {
+            "message": "clear_notification",
+            "data": {
+                "tag": f"ha_ai_brain_{approval_id}",
+            },
+        }
+        try:
+            await self.smart_home.call_service(
+                domain=domain or "notify",
+                service=service,
+                target_entity_ids=[],
+                service_data=payload,
+            )
+        except Exception:
+            pass
+
     async def send_advisory_alert(self, insight: AdvisoryInsight) -> None:
         domain, _, service = self.notify_service.partition(".")
         service = service or "notify"
