@@ -36,6 +36,9 @@ class HomeAssistantNotificationAdapter(NotificationPort):
             ),
             "data": {
                 "tag": f"ha_ai_brain_{aid}",
+                "group": "ha_ai_brain_approvals",
+                "url": "/ha_ai_brain",
+                "clickAction": "/ha_ai_brain",
                 "actions": [
                     {
                         "action": f"BRAIN_APPROVE_ONCE:{aid}",

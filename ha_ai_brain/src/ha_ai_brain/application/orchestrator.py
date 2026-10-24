@@ -510,32 +510,39 @@ class BrainOrchestrator:
             service_data=intent.service_data,
         )
 
-        if intent.domain == "automation" and intent.native_automation is not None:
-            res = await self.smart_home.upsert_automation(intent.native_automation)
-        elif intent.domain == "notify":
-            # Strictly use the single notification service chosen by the user in Settings / UI
-            _, _, configured_notify_svc = self.settings.notification_service.partition(".")
-            notify_service = configured_notify_svc or "notify"
-            payload = dict(intent.service_data)
-            if "message" not in payload:
-                payload["message"] = intent.rationale
-            if "title" not in payload:
-                payload["title"] = f"HA AI Brain ({intent.agent_id})"
-            res = await self.smart_home.call_service(
-                domain="notify",
-                service=notify_service,
-                target_entity_ids=[],
-                service_data=payload,
-                context_id=context_id,
+        try:
+            if intent.domain == "automation" and intent.native_automation is not None:
+                res = await self.smart_home.upsert_automation(intent.native_automation)
+            elif intent.domain == "notify":
+                # Strictly use the single notification service chosen by the user in Settings / UI
+                _, _, configured_notify_svc = self.settings.notification_service.partition(".")
+                notify_service = configured_notify_svc or "notify"
+                payload = dict(intent.service_data)
+                if "message" not in payload:
+                    payload["message"] = intent.rationale
+                if "title" not in payload:
+                    payload["title"] = f"HA AI Brain ({intent.agent_id})"
+                res = await self.smart_home.call_service(
+                    domain="notify",
+                    service=notify_service,
+                    target_entity_ids=[],
+                    service_data=payload,
+                    context_id=context_id,
+                )
+            else:
+                res = await self.smart_home.call_service(
+                    domain=intent.domain,
+                    service=intent.service,
+                    target_entity_ids=intent.target_entity_ids,
+                    service_data=intent.service_data,
+                    context_id=context_id,
+                )
+        except Exception as exc:
+            logger.error(
+                "Execution error calling %s.%s on %s: %s",
+                intent.domain, intent.service, intent.target_entity_ids, exc,
             )
-        else:
-            res = await self.smart_home.call_service(
-                domain=intent.domain,
-                service=intent.service,
-                target_entity_ids=intent.target_entity_ids,
-                service_data=intent.service_data,
-                context_id=context_id,
-            )
+            res = {"status": "error", "error": str(exc), "domain": intent.domain, "service": intent.service}
 
         if intent.expected_outcome is not None:
             await self.memory.save_expected_outcome(intent.expected_outcome)

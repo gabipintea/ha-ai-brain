@@ -251,12 +251,30 @@ class HomeAssistantAdapter(SmartHomePort):
         if target_entity_ids and domain != "notify":
             payload["entity_id"] = target_entity_ids
 
+        # Normalize common LLM parameter quirks to prevent HA 400 Bad Request rejections
+        if domain == "cover":
+            if service in ("close_cover", "open_cover", "stop_cover"):
+                pos = payload.pop("position", None)
+                if pos is not None:
+                    try:
+                        pos_int = int(pos)
+                        if 0 < pos_int < 100:
+                            service = "set_cover_position"
+                            payload["position"] = pos_int
+                    except (ValueError, TypeError):
+                        pass
+
         async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.post(
                 f"{self.base_url}/api/services/{domain}/{service}",
                 headers=self._headers(),
                 json=payload,
             )
+            if resp.status_code >= 400:
+                logger.error(
+                    "[HA SERVICE CALL ERROR %d] %s.%s targets=%s body=%s sent_payload=%s",
+                    resp.status_code, domain, service, target_entity_ids, resp.text, payload,
+                )
             resp.raise_for_status()
             return {"status": "ok", "domain": domain, "service": service, "response": resp.json()}
 
@@ -333,14 +351,18 @@ class HomeAssistantAdapter(SmartHomePort):
             await ws.send(json.dumps({"id": 1, "type": "subscribe_events", "event_type": "state_changed"}))
             await ws.recv()
 
-            # 4. Also subscribe to Companion App actionable notification button taps
+            # 4. Also subscribe to Companion App actionable notification button taps (universal & iOS)
             await ws.send(
                 json.dumps({"id": 2, "type": "subscribe_events", "event_type": "mobile_app_notification_action"})
             )
             await ws.recv()
+            await ws.send(
+                json.dumps({"id": 3, "type": "subscribe_events", "event_type": "ios.notification_action_fired"})
+            )
+            await ws.recv()
 
             # 5. Subscribe to native HA `automation_triggered` events for causal attribution
-            await ws.send(json.dumps({"id": 3, "type": "subscribe_events", "event_type": "automation_triggered"}))
+            await ws.send(json.dumps({"id": 4, "type": "subscribe_events", "event_type": "automation_triggered"}))
             await ws.recv()
 
             # 6. Stream events
@@ -364,10 +386,10 @@ class HomeAssistantAdapter(SmartHomePort):
                             del self._automation_context_map[oldest]
                     continue
 
-                # Handle phone notification button taps (Approve Once / Always Allow / Reject)
-                if event_type == "mobile_app_notification_action":
-                    logger.info("[MOBILE NOTIFICATION ACTION RECEIVED] data=%s", data)
-                    action_str = str(data.get("action", ""))
+                # Handle phone notification button taps (Approve Once / Always Allow / Dismiss / Reject)
+                if event_type in ("mobile_app_notification_action", "ios.notification_action_fired"):
+                    logger.info("[MOBILE NOTIFICATION ACTION RECEIVED] event=%s data=%s", event_type, data)
+                    action_str = str(data.get("action") or data.get("actionName") or "")
                     if self._notification_action_handler and ":" in action_str:
                         prefix, approval_id = action_str.split(":", 1)
                         decision_map = {
