@@ -608,10 +608,14 @@ class BrainOrchestrator:
                     notify_service = configured_notify_svc or "notify"
                     domain = domain or "notify"
                 payload = dict(intent.service_data)
+                if "title" not in payload:
+                    payload["title"] = "🧠 AI Brain Notice"
                 if "message" not in payload:
                     payload["message"] = intent.rationale
-                if "title" not in payload:
-                    payload["title"] = f"HA AI Brain ({intent.agent_id})"
+                data = dict(payload.get("data") or {})
+                data.setdefault("url", "/ha_ai_brain")
+                data.setdefault("clickAction", "/ha_ai_brain")
+                payload["data"] = data
                 try:
                     res = await self.smart_home.call_service(
                         domain=domain,

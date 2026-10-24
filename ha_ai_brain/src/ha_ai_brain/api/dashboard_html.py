@@ -473,7 +473,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     div.innerHTML = `
       <div><strong>${esc(p.intent.domain)}.${esc(p.intent.service)}</strong>
         &rarr; <code>${esc((p.intent.target_entity_ids || []).join(', '))}</code></div>
-      <div class="muted" style="margin:6px 0;">${esc(p.intent.rationale)}</div>
+      <div class="muted" style="margin:6px 0; white-space: pre-wrap; line-height: 1.4;">${esc(p.intent.rationale)}</div>
       <input type="text" id="note_${esc(p.approval_id)}" autocomplete="off" placeholder="Optional note for the Brain (saved if you reject)" />
       <div class="btn-row">
         <button class="primary" onclick="decideApproval('${esc(p.approval_id)}', 'approved_once')">Approve once</button>
@@ -672,9 +672,20 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       if (i.domain === 'automation' || i.native_automation) proposals.push({agent: l.agent_id, intent: i});
     }));
     let html = (data.advisory_insights || []).map(ins => `
-      <div class="item"><div class="row"><strong>${esc(ins.title)}</strong><span class="pill">${esc(ins.category)}</span></div>
-        <div class="muted" style="margin:6px 0;">${esc(ins.finding_details)}</div>
-        <div><strong>Recommended:</strong> ${esc(ins.recommended_human_action)}</div></div>`).join('');
+      <div class="item">
+        <div class="row">
+          <div>
+            <strong>${esc(ins.title)}</strong>
+            ${ins.created_at ? `<div class="muted" style="font-size:11px; margin-top:2px;">${esc(new Date(ins.created_at).toLocaleString())}</div>` : ''}
+          </div>
+          <span class="pill">${esc((ins.category || 'advisory').replace(/_/g, ' '))}</span>
+        </div>
+        <div class="muted" style="margin:8px 0; white-space: pre-wrap; line-height: 1.45;">${esc(ins.finding_details)}</div>
+        <div style="margin-top:6px; padding:6px 10px; background:rgba(46, 204, 113, 0.12); border-left:3px solid #2ecc71; border-radius:4px; font-size:13px;">
+          <strong>Recommended:</strong> ${esc(ins.recommended_human_action)}
+        </div>
+        ${ins.estimated_impact ? `<div class="muted" style="margin-top:6px; font-size:12px;"><strong>Impact:</strong> ${esc(ins.estimated_impact)}</div>` : ''}
+      </div>`).join('');
     html += proposals.map(({agent, intent}) => `
       <div class="item"><strong>Proposed automation</strong> <span class="muted">${esc(agent)}</span>
         <div class="muted" style="margin:6px 0;">${esc(intent.rationale)}</div>

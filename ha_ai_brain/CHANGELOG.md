@@ -2,6 +2,15 @@
 
 All notable changes to **HA AI Brain** are documented in this file.
 
+## 0.1.7 - 2026-10-24
+
+### Improved
+- **Compact Mobile Notification Cards & Full-Fidelity Web UI**:
+  - **Phone Notification Optimization**: Push notification titles and messages are now formatted specifically for mobile lockscreen banners and notification cards (<= 44 chars for titles, leading directly with the actionable recommendation and concise context).
+  - **Tap to Open Dashboard**: Push notifications now carry deep link parameters (`url: "/ha_ai_brain"` and `clickAction: "/ha_ai_brain"`) and iOS category subtitles, allowing homeowners to tap the notification and jump straight to the Brain dashboard.
+  - **Preserved Web UI Fidelity**: The Web UI continues to display 100% of the comprehensive multi-paragraph physical rationale, sensor readings, and psychrometric formulas with formatted line breaks (`white-space: pre-wrap`), discovery timestamps, category pills, and impact estimates.
+  - **Prompt Guidance**: Instructed batch reasoning agents to generate crisp 4-8 word insight titles and direct homeowner actions while keeping in-depth physics in `finding_details`.
+
 ## 0.1.6 - 2026-10-24
 
 ### Fixed & Improved

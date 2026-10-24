@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
-from ha_ai_brain.domain.models import AdvisoryInsight, PendingApproval
+from ha_ai_brain.domain.models import ActionIntent, AdvisoryInsight, PendingApproval
 from ha_ai_brain.ports.notification import NotificationPort
 from ha_ai_brain.ports.smart_home import SmartHomePort
 
@@ -66,20 +67,100 @@ class HomeAssistantNotificationAdapter(NotificationPort):
 
         return domain, service
 
+    @staticmethod
+    def _compact_title(raw_title: str, prefix: str = "🧠 AI Brain", max_chars: int = 44) -> str:
+        """
+        Format a concise title for mobile push notification cards/lockscreens.
+        Strips common redundant prefixes (e.g. 'AI Brain Insight:', 'AI Brain:')
+        and truncates cleanly at word boundaries with an ellipsis if needed.
+        """
+        t = (raw_title or "").strip()
+        for drop in (
+            "AI Brain Insight:",
+            "AI Brain Approval:",
+            "AI Brain:",
+            "Insight:",
+            "Advisory:",
+            "Warning:",
+            "Alert:",
+        ):
+            if t.lower().startswith(drop.lower()):
+                t = t[len(drop):].strip()
+
+        if not t:
+            return f"{prefix} Notice"
+        full = f"{prefix} · {t}"
+        if len(full) <= max_chars:
+            return full
+        truncated = full[:max_chars].rsplit(" ", 1)[0].rstrip(" ,.-;:")
+        return f"{truncated}…"
+
+    @staticmethod
+    def _compact_insight_message(insight: AdvisoryInsight, max_chars: int = 180) -> str:
+        """
+        Format a concise, actionable message for mobile notification cards.
+        Leads with the recommended action so it is immediately legible on phone lockscreens,
+        followed by key telemetry context. The full analysis remains preserved in the Web UI.
+        """
+        rec = (insight.recommended_human_action or "").strip()
+        for drop in ("Recommendation:", "Action:", "Recommended:"):
+            if rec.lower().startswith(drop.lower()):
+                rec = rec[len(drop):].strip()
+
+        details = (insight.finding_details or "").strip().replace("\n", " ")
+        # Extract first sentence for context
+        sentences = re.split(r"(?<=[.!?])\s+", details)
+        first_sentence = sentences[0].strip() if sentences else ""
+
+        if rec and first_sentence:
+            if len(rec) >= 110:
+                msg = f"👉 {rec}"
+            else:
+                msg = f"👉 {rec}\n{first_sentence}"
+        elif rec:
+            msg = f"👉 {rec}"
+        else:
+            msg = first_sentence or details
+
+        if len(msg) > max_chars:
+            msg = msg[:max_chars].rsplit(" ", 1)[0].rstrip(" ,.-;:") + "…"
+        return msg
+
+    @staticmethod
+    def _compact_approval_message(intent: ActionIntent, max_chars: int = 180) -> str:
+        """
+        Format a compact approval message for mobile cards:
+        Action target on line 1, first sentence of rationale on line 2.
+        Full rationale and raw service parameters remain visible in Web UI.
+        """
+        targets = ", ".join(intent.target_entity_ids) if intent.target_entity_ids else "system"
+        header = f"{intent.domain}.{intent.service} → {targets}"
+
+        why = (intent.rationale or "").strip().replace("\n", " ")
+        sentences = re.split(r"(?<=[.!?])\s+", why)
+        short_why = sentences[0].strip() if sentences else why
+
+        msg = f"{header}\n{short_why}"
+        if len(msg) > max_chars:
+            msg = msg[:max_chars].rsplit(" ", 1)[0].rstrip(" ,.-;:") + "…"
+        return msg
+
     async def send_approval_request(self, pending: PendingApproval) -> None:
         domain, service = await self._resolve_service_name()
         intent = pending.intent
         aid = pending.approval_id
 
+        title = "🧠 AI Brain · Approval Needed"
+        message = self._compact_approval_message(intent)
+        subtitle = f"{intent.domain}.{intent.service}"
+
         payload = {
-            "title": f"AI Brain Approval ({intent.agent_id})",
-            "message": (
-                f"Action: {intent.domain}.{intent.service} on {', '.join(intent.target_entity_ids)}\n"
-                f"Why: {intent.rationale}"
-            ),
+            "title": title,
+            "message": message,
             "data": {
                 "tag": f"ha_ai_brain_{aid}",
                 "group": "ha_ai_brain_approvals",
+                "subtitle": subtitle,
                 "url": "/ha_ai_brain",
                 "clickAction": "/ha_ai_brain",
                 "actions": [
@@ -143,9 +224,20 @@ class HomeAssistantNotificationAdapter(NotificationPort):
 
     async def send_advisory_alert(self, insight: AdvisoryInsight) -> None:
         domain, service = await self._resolve_service_name()
+        title = self._compact_title(insight.title, prefix="🧠 AI Brain")
+        message = self._compact_insight_message(insight)
+        category_title = (insight.category or "Advisory").replace("_", " ").title()
+
         payload = {
-            "title": f"AI Brain Insight: {insight.title}",
-            "message": f"{insight.finding_details}\nRecommendation: {insight.recommended_human_action}",
+            "title": title,
+            "message": message,
+            "data": {
+                "tag": f"ha_ai_brain_insight_{insight.insight_id}",
+                "group": "ha_ai_brain_insights",
+                "subtitle": category_title,
+                "url": "/ha_ai_brain",
+                "clickAction": "/ha_ai_brain",
+            },
         }
         self.sent_notifications.append({"type": "advisory_insight", "insight_id": insight.insight_id, "payload": payload})
         try:

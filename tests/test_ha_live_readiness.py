@@ -534,7 +534,7 @@ class TestLiveHomeAssistantReadiness(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(d2, "notify")
         self.assertEqual(s2, "notify")
 
-        # 3. Test send_advisory_alert works seamlessly
+        # 3. Test send_advisory_alert works seamlessly with compact mobile layout & deep-link
         insight = AdvisoryInsight(
             agent_id="climate_thermal_agent",
             category="thermal_insulation",
@@ -545,6 +545,51 @@ class TestLiveHomeAssistantReadiness(unittest.IsolatedAsyncioTestCase):
         await notif.send_advisory_alert(insight)
         self.assertEqual(len(notif.sent_notifications), 1)
         self.assertEqual(sim.service_call_log[-1]["service"], "mobile_app_gabriels_iphone")
+        p1 = notif.sent_notifications[-1]["payload"]
+        self.assertEqual(p1["title"], "🧠 AI Brain · High Humidity Alert")
+        self.assertTrue(p1["message"].startswith("👉 Turn off humidifier"))
+        self.assertEqual(p1["data"]["url"], "/ha_ai_brain")
+        self.assertEqual(p1["data"]["subtitle"], "Thermal Insulation")
+
+        # 4. Test very long title and message are compacted cleanly for mobile lockscreen cards
+        long_insight = AdvisoryInsight(
+            agent_id="climate_thermal_agent",
+            category="excessive_relative_humidity",
+            title="Excessive Relative Humidity and Active Humidifier Conflict in Master Suite",
+            finding_details=(
+                "Sensor telemetry indicates ambient humidity in the Master Suite is between 68% and 74%. "
+                "Despite exceeding safe indoor humidity thresholds, the humidifier is actively running at 60% setpoint."
+            ),
+            recommended_human_action="Set the master purifier humidifier target to 50% or switch it to off when seasonal ambient humidity exceeds 60% RH.",
+        )
+        await notif.send_advisory_alert(long_insight)
+        p2 = notif.sent_notifications[-1]["payload"]
+        self.assertLessEqual(len(p2["title"]), 46)
+        self.assertTrue(p2["title"].endswith("…"))
+        self.assertTrue(p2["message"].startswith("👉 Set the master purifier"))
+        self.assertLessEqual(len(p2["message"]), 180)
+        # 5. Test send_approval_request formatting is compact and actionable
+        from ha_ai_brain.domain.models import ActionIntent, PendingApproval
+        app_intent = ActionIntent(
+            agent_id="climate_thermal_agent",
+            cause_category="thermal_loss_pre_trim",
+            domain="climate",
+            service="set_temperature",
+            target_entity_ids=["climate.master_bedroom_ufh"],
+            service_data={"temperature": 21.5},
+            rationale="Outdoor temperature plummeted by 4.2°C over the past 2 hours, increasing floor slab thermal dissipation rate significantly.",
+        )
+        pending = PendingApproval(
+            intent=app_intent,
+            signature="climate.set_temperature:climate.master_bedroom_ufh",
+        )
+        await notif.send_approval_request(pending)
+        app_payload = notif.sent_notifications[-1]["payload"]
+        self.assertEqual(app_payload["title"], "🧠 AI Brain · Approval Needed")
+        self.assertTrue(app_payload["message"].startswith("climate.set_temperature → climate.master_bedroom_ufh"))
+        self.assertLessEqual(len(app_payload["message"]), 180)
+        self.assertEqual(app_payload["data"]["subtitle"], "climate.set_temperature")
+        self.assertEqual(len(app_payload["data"]["actions"]), 4)
 
 
 if __name__ == "__main__":
