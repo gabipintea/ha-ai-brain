@@ -50,10 +50,10 @@ class BrainSettings(BaseModel):
     llm_fast_model: str = Field(default="openai/gpt-4o-mini", description="Fast/cheap model for triage & sub-tasks")
     llm_fallback_models: list[str] = Field(
         default_factory=lambda: [
-            "gemini/gemini-2.5-flash",
-            "gemini/gemini-1.5-flash",
-            "gemini/gemini-2.0-flash",
-            "gemini/gemini-2.5-pro",
+            "gemini/gemini-3.8-flash",
+            "gemini/gemini-3.6-flash",
+            "gemini/gemini-3.5-flash",
+            "gemini/gemini-3.1-flash-lite",
         ],
         description="Ordered fallback models used when primary model is in quota cooldown",
     )
@@ -105,7 +105,7 @@ class BrainSettings(BaseModel):
 
         fallback_env = os.getenv(
             "BRAIN_LLM_FALLBACK_MODELS",
-            "gemini/gemini-2.5-flash,gemini/gemini-1.5-flash,gemini/gemini-2.0-flash,gemini/gemini-2.5-pro",
+            "gemini/gemini-3.8-flash,gemini/gemini-3.6-flash,gemini/gemini-3.5-flash,gemini/gemini-3.1-flash-lite",
         )
         fallback_models = [m.strip() for m in fallback_env.split(",") if m.strip()]
 

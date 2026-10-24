@@ -2,6 +2,13 @@
 
 All notable changes to **HA AI Brain** are documented in this file.
 
+## 0.1.5 - 2026-10-24
+
+### Fixed & Aligned
+- **Updated Google Gemini Models to Live Supported API Versions (`gemini-3.8-flash` & `gemini-3.5-flash`)**:
+  - Legacy `gemini-2.5`, `gemini-2.0`, and `gemini-1.5` endpoints have been retired by Google API with HTTP 404 (*"This model is no longer available. Please update your code to use models/gemini-3.8-flash"*).
+  - Configured `gemini/gemini-3.8-flash` as the default Primary Deep Batch Model and `gemini/gemini-3.5-flash` as the Fast Reflex Model across documentation, Add-on configuration schema, supervisor options, and quota monitor fallback chains.
+
 ## 0.1.4 - 2026-10-24
 
 ### Fixed

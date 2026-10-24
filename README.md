@@ -41,15 +41,15 @@ In the dashboard **Settings** tab:
 ### Do Cheaper Models Perform the Same in Our Context?
 **Yes—and in fact, compact "Flash / Mini" models are often superior for real-time smart home reflexes:**
 
-1. **Sub-Second Latency**: Real-time reflexes (closing covers on solar spike, turning on ventilation on humidity surge) require sub-second reaction times. Models like `gpt-4o-mini` and `gemini-2.5-flash` respond in **300–600ms**, compared to 3–8 seconds for frontier reasoning models.
+1. **Sub-Second Latency**: Real-time reflexes (closing covers on solar spike, turning on ventilation on humidity surge) require sub-second reaction times. Models like `gpt-4o-mini` and `gemini-3.5-flash` respond in **300–600ms**, compared to 3–8 seconds for frontier reasoning models.
 2. **Structured JSON Specialization**: Our agents feed structured JSON telemetry and expect clean JSON service calls. Modern lightweight models are heavily fine-tuned on JSON schema adherence and perform with near 100% reliability on smart home actions.
-3. **Where Frontier Models Shine**: High-reasoning models (`claude-3-5-sonnet`, `gemini-2.5-pro`, `gpt-4o`) are best reserved for **Periodic Deep Batch Analysis** (running once every 4–6 hours) to author complex Home Assistant YAML automations and thermodynamic decay models.
+3. **Where Frontier Models Shine**: High-reasoning models (`claude-3-5-sonnet`, `gemini-3.8-flash`, `gpt-4o`) are best reserved for **Periodic Deep Batch Analysis** (running once every 4–6 hours) to author complex Home Assistant YAML automations and thermodynamic decay models.
 
 ### Recommended Model Split per Provider
 
 | Provider | Primary Model (Real-Time & Sub-Agents) | Deep Batch Model (Periodic Audits & Automations) | Fallback Model | Est. Monthly Cost | Why This Combination? |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **Google Gemini** *(Free / Budget)* | `gemini/gemini-2.5-flash` | `gemini/gemini-2.5-pro` | `gemini/gemini-1.5-flash` | **$0.00** *(Free Tier)*<br>< $0.30/mo *(Pay-as-you-go)* | **Best for free/budget setups.** Massive context window, very fast JSON output, and generous free tier on Google AI Studio. |
+| **Google Gemini** *(Free / Budget)* | `gemini/gemini-3.5-flash` | `gemini/gemini-3.8-flash` | `gemini/gemini-3.6-flash` | **$0.00** *(Free Tier)*<br>< $0.30/mo *(Pay-as-you-go)* | **Best for free/budget setups.** Massive context window, ultra-fast reflexes on Gemini 3.5, and deep reasoning on Gemini 3.8. |
 | **OpenAI** *(Most Reliable)* | `openai/gpt-4o-mini` | `openai/gpt-4o` | `openai/gpt-4o-mini` | **~$0.20 – $0.50 / mo** | **Best for rock-solid stability.** Exceptional uptime, zero schema deviations, and rock-bottom pricing for `gpt-4o-mini`. |
 | **Anthropic Claude** *(Best Reasoning)* | `anthropic/claude-3-5-haiku-20241022` | `anthropic/claude-3-5-sonnet-20241022` | `anthropic/claude-3-haiku-20240307` | **~$0.50 – $1.20 / mo** | **Highest intelligence.** Sonnet produces the most sophisticated Home Assistant native automations and building physics insights. |
 | **OpenRouter** *(Aggregator)* | `openrouter/google/gemini-2.5-flash` | `openrouter/anthropic/claude-3.5-sonnet` | `openrouter/openai/gpt-4o-mini` | **~$0.30 – $0.80 / mo** | **Maximum flexibility.** Use a single API key to mix Gemini for instant reflexes and Claude for deep batch audits. |

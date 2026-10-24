@@ -7,10 +7,10 @@ configuration:
     description: "copilot (ask approval before executing changes), shadow (observe and log only), or autonomous (execute directly)."
   llm_provider:
     name: "Primary / Deep Batch Model"
-    description: "Model for complex periodic audits & automations (e.g. gemini/gemini-2.5-pro, openai/gpt-4o, anthropic/claude-3-5-sonnet-20241022)."
+    description: "Model for complex periodic audits & automations (e.g. gemini/gemini-3.8-flash, openai/gpt-4o, anthropic/claude-3-5-sonnet-20241022)."
   llm_fast_model:
     name: "Fast Reflex Model"
-    description: "Model for instant real-time reactions & sub-agents (e.g. gemini/gemini-2.5-flash, openai/gpt-4o-mini, anthropic/claude-3-5-haiku-20241022)."
+    description: "Model for instant real-time reactions & sub-agents (e.g. gemini/gemini-3.5-flash, gemini/gemini-3.1-flash-lite, openai/gpt-4o-mini)."
   llm_api_key:
     name: "LLM API Key"
     description: "API key from Google AI Studio (AIza...), Vertex AI (AQ...), OpenAI (sk-...), Anthropic, or OpenRouter."

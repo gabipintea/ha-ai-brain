@@ -347,15 +347,15 @@ class GeminiQuotaMonitorAdapter(BaseQuotaMonitorAdapter):
 
     def __init__(
         self,
-        default_model: str = "gemini-2.5-flash",
+        default_model: str = "gemini-3.8-flash",
         fallback_models: list[str] | None = None,
         fallback_policy: str = "auto",
     ) -> None:
         default_fallbacks = fallback_models or [
-            "gemini-2.5-flash",
-            "gemini-1.5-flash",
-            "gemini-2.0-flash",
-            "gemini-2.5-pro",
+            "gemini-3.8-flash",
+            "gemini-3.6-flash",
+            "gemini-3.5-flash",
+            "gemini-3.1-flash-lite",
         ]
         super().__init__(
             provider="google_gemini",

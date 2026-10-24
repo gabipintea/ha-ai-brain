@@ -362,10 +362,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           </label>
           <div class="grid two" style="gap:12px; margin:0;">
             <label class="field">Primary Model (Deep Batch Audits)
-              <input type="text" id="llmModelInput" placeholder="e.g. gemini/gemini-2.5-pro or openai/gpt-4o" />
+              <input type="text" id="llmModelInput" placeholder="e.g. gemini/gemini-3.8-flash or openai/gpt-4o" />
             </label>
             <label class="field">Fast Model (Real-Time Reflexes & Triage)
-              <input type="text" id="llmFastModelInput" placeholder="e.g. gemini/gemini-2.5-flash or openai/gpt-4o-mini" />
+              <input type="text" id="llmFastModelInput" placeholder="e.g. gemini/gemini-3.5-flash or openai/gpt-4o-mini" />
             </label>
           </div>
           <label class="field">API Key
@@ -688,7 +688,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
   function onProviderPresetChange(val) {
     const presets = {
-      'gemini': {model: 'gemini/gemini-2.5-pro', fast: 'gemini/gemini-2.5-flash', placeholder: 'Paste Google AI Studio (AIza...) or Vertex (AQ...) key'},
+      'gemini': {model: 'gemini/gemini-3.8-flash', fast: 'gemini/gemini-3.5-flash', placeholder: 'Paste Google AI Studio (AIza...) or Vertex (AQ...) key'},
       'openai': {model: 'openai/gpt-4o', fast: 'openai/gpt-4o-mini', placeholder: 'Paste OpenAI API key (sk-...)'},
       'anthropic': {model: 'anthropic/claude-3-5-sonnet-20241022', fast: 'anthropic/claude-3-5-haiku-20241022', placeholder: 'Paste Anthropic API key (sk-ant-...)'},
       'openrouter': {model: 'openrouter/anthropic/claude-3.5-sonnet', fast: 'openrouter/google/gemini-2.5-flash', placeholder: 'Paste OpenRouter API key (sk-or-...)'},
