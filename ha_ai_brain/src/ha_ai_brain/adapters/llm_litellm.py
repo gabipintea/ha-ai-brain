@@ -84,6 +84,26 @@ class LiteLLMAdapter(LLMProviderPort):
     def reject_fallback_and_wait_for_primary(self) -> None:
         self.quota_monitor.reject_fallback_and_wait_for_primary()
 
+    def _format_litellm_model(self, model: str) -> str:
+        provider = getattr(self.quota_monitor, "_snapshot", None) and self.quota_monitor._snapshot.provider or ""
+        if provider == "openrouter":
+            return model if model.startswith("openrouter/") else f"openrouter/{model}"
+        if provider == "anthropic":
+            if model.startswith("anthropic/"):
+                return model
+            if "/" not in model:
+                return f"anthropic/{model}"
+            return model
+        if provider == "openai":
+            if model.startswith("openai/"):
+                return model
+            if "/" not in model:
+                return f"openai/{model}"
+            return model
+        if provider in ("ollama", "ollama_local"):
+            return model if model.startswith("ollama/") else f"ollama/{model}"
+        return model
+
     async def generate_json(
         self,
         system_prompt: str,
@@ -113,62 +133,104 @@ class LiteLLMAdapter(LLMProviderPort):
                 task_name=task_name,
             )
 
-        in_cooldown, cooldown_rem = self.quota_monitor.is_in_cooldown()
-        if in_cooldown:
-            logger.warning(
-                "LiteLLMAdapter: Skipping %s (%s) — AI model quota cooldown active for %ds more.",
-                task_name,
-                chosen_model,
-                cooldown_rem,
-            )
+        available_models = self.quota_monitor.select_execution_candidates(chosen_model)
+        if not available_models:
+            snap = await self.quota_monitor.get_quota_and_usage_snapshot()
+            if snap.awaiting_fallback_confirmation:
+                logger.warning(
+                    "[LITELLM] Pausing %s — primary model %s is in cooldown (%ds remaining) and fallback_policy='confirm' is waiting for user approval to switch to %s.",
+                    task_name,
+                    snap.primary_model,
+                    snap.primary_cooldown_seconds_remaining,
+                    snap.available_fallback_models,
+                )
+            else:
+                logger.warning(
+                    "[LITELLM] Skipping %s (%s) — no eligible AI models available (cooldown active for %ds more, policy=%s).",
+                    task_name,
+                    chosen_model,
+                    snap.cooldown_seconds_remaining,
+                    snap.fallback_policy,
+                )
             return {}
 
         import litellm
 
-        kwargs: dict[str, Any] = {
-            "model": chosen_model,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            "response_format": {"type": "json_object"},
-            "temperature": 0.1,
-        }
-        if self.api_key:
-            kwargs["api_key"] = self.api_key
-        if self.managed_proxy_url:
-            kwargs["api_base"] = self.managed_proxy_url
+        last_err = ""
+        for m_id in available_models:
+            litellm_model = self._format_litellm_model(m_id)
+            kwargs: dict[str, Any] = {
+                "model": litellm_model,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                "response_format": {"type": "json_object"},
+                "temperature": 0.1,
+            }
+            if self.api_key:
+                kwargs["api_key"] = self.api_key
+            if self.managed_proxy_url:
+                kwargs["api_base"] = self.managed_proxy_url
 
-        try:
-            resp = await litellm.acompletion(**kwargs)
-        except Exception as exc:
-            status_code = int(getattr(exc, "status_code", 429 if "429" in str(exc) else 500))
-            self.quota_monitor.record_quota_or_rate_limit_error(
-                model=chosen_model,
-                status_code=status_code,
-                error_body=str(exc),
-                headers=getattr(exc, "llm_provider_response_headers", None),
-            )
-            logger.error("LiteLLM call failed for %s: %s", chosen_model, exc)
-            return {}
+            try:
+                resp = await litellm.acompletion(**kwargs)
+            except Exception as exc:
+                status_code = int(getattr(exc, "status_code", 429 if "429" in str(exc) else 500))
+                raw_hdrs = getattr(exc, "llm_provider_response_headers", None) or getattr(exc, "headers", None)
+                headers_dict = dict(raw_hdrs) if isinstance(raw_hdrs, dict) else {}
+                snap = self.quota_monitor.record_quota_or_rate_limit_error(
+                    model=m_id,
+                    status_code=status_code,
+                    error_body=str(exc),
+                    headers=headers_dict,
+                )
+                last_err = f"{litellm_model} -> {status_code}: {exc}"
+                logger.warning(
+                    "[LITELLM %s] Call failed on %s (status=%d, cooldown=%ds): %s",
+                    litellm_model,
+                    task_name,
+                    status_code,
+                    snap.cooldown_seconds_remaining,
+                    exc,
+                )
+                if status_code in (401, 403):
+                    break
+                continue
 
-        usage = getattr(resp, "usage", None)
-        p_tok = int(getattr(usage, "prompt_tokens", 0)) if usage else 0
-        c_tok = int(getattr(usage, "completion_tokens", 0)) if usage else 0
-        self.quota_monitor.record_success(
-            model=chosen_model,
-            prompt_tokens=p_tok,
-            completion_tokens=c_tok,
-            headers=getattr(resp, "_response_headers", None),
-        )
-        if usage and self.license_port:
-            await self.license_port.record_token_usage(
-                agent_id=agent_id,
+            usage = getattr(resp, "usage", None)
+            p_tok = int(getattr(usage, "prompt_tokens", 0)) if usage else 0
+            c_tok = int(getattr(usage, "completion_tokens", 0)) if usage else 0
+            resp_hdrs = getattr(resp, "_response_headers", None)
+            headers_dict = dict(resp_hdrs) if isinstance(resp_hdrs, dict) else {}
+            self.quota_monitor.record_success(
+                model=m_id,
                 prompt_tokens=p_tok,
                 completion_tokens=c_tok,
+                headers=headers_dict,
             )
-        content = resp.choices[0].message.content
-        return self._parse_json_safely(content)
+            if usage and self.license_port:
+                await self.license_port.record_token_usage(
+                    agent_id=agent_id,
+                    prompt_tokens=p_tok,
+                    completion_tokens=c_tok,
+                )
+            choices = getattr(resp, "choices", []) or []
+            content = choices[0].message.content if choices else ""
+            parsed = self._parse_json_safely(content or "")
+            logger.info(
+                "[LITELLM %s] task=%s tokens=%d (prompt=%d, completion=%d) keys=%s",
+                litellm_model,
+                task_name,
+                p_tok + c_tok,
+                p_tok,
+                c_tok,
+                list(parsed.keys()),
+            )
+            return parsed
+
+        logger.error("LiteLLM call failed on all candidate models for %s: %s", chosen_model, last_err)
+        return {}
 
     async def _call_google_gemini(
         self,

@@ -19,16 +19,49 @@ MODEL_PRICING_PER_1M: dict[str, tuple[float, float]] = {
     "gemini-3.5-flash": (0.15, 0.60),
     "gemini-3.1-flash-lite": (0.075, 0.30),
     "gemini-3.1-pro-preview": (1.25, 5.00),
+    "gemini-2.5-flash": (0.15, 0.60),
+    "gemini-2.5-pro": (1.25, 5.00),
+    "gemini-1.5-flash": (0.075, 0.30),
     "gpt-4o": (2.50, 10.00),
     "gpt-4o-mini": (0.15, 0.60),
+    "gpt-3.5-turbo": (0.50, 1.50),
     "claude-3-5-sonnet": (3.00, 15.00),
+    "claude-3-5-sonnet-20241022": (3.00, 15.00),
     "claude-3-5-haiku": (0.80, 4.00),
+    "claude-3-5-haiku-20241022": (0.80, 4.00),
+    "claude-3-haiku-20240307": (0.25, 1.25),
+}
+
+DEFAULT_FALLBACKS_BY_PROVIDER: dict[str, list[str]] = {
+    "openai": [
+        "gpt-4o-mini",
+        "gpt-4o",
+        "gpt-3.5-turbo",
+    ],
+    "anthropic": [
+        "claude-3-5-haiku-20241022",
+        "claude-3-5-sonnet-20241022",
+        "claude-3-haiku-20240307",
+    ],
+    "openrouter": [
+        "google/gemini-2.5-flash",
+        "openai/gpt-4o-mini",
+        "anthropic/claude-3.5-sonnet",
+    ],
 }
 
 
 def _estimate_cost(model: str, prompt_tokens: int, completion_tokens: int) -> float:
     short_m = model.split("/", 1)[-1]
-    in_rate, out_rate = MODEL_PRICING_PER_1M.get(short_m, (0.15, 0.60))
+    rate = MODEL_PRICING_PER_1M.get(short_m)
+    if rate is None:
+        for k, v in MODEL_PRICING_PER_1M.items():
+            if short_m.startswith(k) or k.startswith(short_m):
+                rate = v
+                break
+    if rate is None:
+        rate = (0.15, 0.60)
+    in_rate, out_rate = rate
     return round((prompt_tokens * in_rate + completion_tokens * out_rate) / 1_000_000.0, 6)
 
 
@@ -178,26 +211,45 @@ class BaseQuotaMonitorAdapter(LLMQuotaMonitorPort):
     def select_execution_candidates(self, requested_model: str) -> list[str]:
         """
         Return the ordered list of models allowed to execute right now according to:
-        1) Whether the primary model's cooldown has ended (always prefers primary first when healthy)
+        1) Whether the requested/primary model's cooldown has ended (prefers requested model first when healthy)
         2) The configured fallback policy ('auto' vs 'confirm' vs 'disabled')
         """
         self._refresh_routing_state()
-        req_short = requested_model.split("/", 1)[-1]
+        req_short = requested_model.split("/", 1)[-1] if requested_model else self._snapshot.primary_model
         primary = self._snapshot.primary_model or req_short
 
-        # If primary is healthy, try primary first; if policy == 'auto', also allow fallbacks on mid-call 429
-        if not self.is_model_in_cooldown(primary)[0]:
-            if self._snapshot.fallback_policy == "auto":
-                return [primary] + [m for m in self._snapshot.available_fallback_models if m != primary]
-            return [primary]
+        req_in_cooldown, _ = self.is_model_in_cooldown(req_short)
 
-        # Primary is in cooldown
+        # 1. If requested model is healthy:
+        if not req_in_cooldown:
+            if self._snapshot.fallback_policy == "auto":
+                candidates = [req_short]
+                if primary != req_short and not self.is_model_in_cooldown(primary)[0]:
+                    candidates.append(primary)
+                for m in self._snapshot.available_fallback_models:
+                    if m not in candidates:
+                        candidates.append(m)
+                return candidates
+            return [req_short]
+
+        # 2. Requested model is currently in cooldown:
         if self._snapshot.fallback_policy == "auto":
-            return list(self._snapshot.available_fallback_models)
+            candidates: list[str] = []
+            if primary != req_short and not self.is_model_in_cooldown(primary)[0]:
+                candidates.append(primary)
+            for m in self._snapshot.available_fallback_models:
+                if m != req_short and m not in candidates:
+                    candidates.append(m)
+            return candidates
+
         if self._snapshot.fallback_policy == "confirm":
             confirmed = self._snapshot.user_confirmed_fallback_model
             if confirmed and confirmed != "__WAIT_PRIMARY__" and not self.is_model_in_cooldown(confirmed)[0]:
-                return [confirmed] + [m for m in self._snapshot.available_fallback_models if m != confirmed]
+                candidates = [confirmed]
+                for m in self._snapshot.available_fallback_models:
+                    if m != confirmed and m != req_short and m not in candidates:
+                        candidates.append(m)
+                return candidates
             return []
         return []
 
@@ -415,11 +467,16 @@ class OpenAIAnthropicHeadersQuotaMonitorAdapter(BaseQuotaMonitorAdapter):
             "anthropic": "https://console.anthropic.com/settings/plans",
             "openrouter": "https://openrouter.ai/activity",
         }.get(provider, "")
+        default_fallbacks = (
+            fallback_models
+            if fallback_models is not None
+            else DEFAULT_FALLBACKS_BY_PROVIDER.get(provider, [])
+        )
         super().__init__(
             provider=provider,
             default_model=default_model,
             external_usage_url=ext_url,
-            fallback_models=fallback_models,
+            fallback_models=default_fallbacks,
             fallback_policy=fallback_policy,
         )
         self.api_key = api_key
@@ -457,6 +514,36 @@ class OpenAIAnthropicHeadersQuotaMonitorAdapter(BaseQuotaMonitorAdapter):
                 retry_seconds = float(lower["retry-after"])
             except ValueError:
                 pass
+        elif "retry-after-ms" in lower:
+            try:
+                retry_seconds = float(lower["retry-after-ms"]) / 1000.0
+            except ValueError:
+                pass
+        elif "x-ratelimit-reset-requests" in lower:
+            val = lower["x-ratelimit-reset-requests"].strip()
+            m_sec = re.match(r"^([0-9]+(?:\.[0-9]+)?)s?$", val)
+            if m_sec:
+                try:
+                    retry_seconds = float(m_sec.group(1))
+                except ValueError:
+                    pass
+        elif "anthropic-ratelimit-requests-reset" in lower:
+            val = lower["anthropic-ratelimit-requests-reset"].strip()
+            m_sec = re.match(r"^([0-9]+(?:\.[0-9]+)?)s?$", val)
+            if m_sec:
+                try:
+                    retry_seconds = float(m_sec.group(1))
+                except ValueError:
+                    pass
+
+        if retry_seconds == 30.0 and error_body:
+            m_body = re.search(r"(?:retry|try again) in\s+([0-9]+(?:\.[0-9]+)?)\s*(?:s|seconds)", error_body, re.IGNORECASE)
+            if m_body:
+                try:
+                    retry_seconds = float(m_body.group(1))
+                except ValueError:
+                    pass
+
         self._snapshot.quota_exhausted = True
         self._snapshot.cooldown_until = now + timedelta(seconds=max(5.0, retry_seconds))
         short_m = self._snapshot.model.split("/", 1)[-1]

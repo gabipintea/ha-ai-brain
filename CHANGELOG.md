@@ -2,6 +2,21 @@
 
 All notable changes to **HA AI Brain** are documented in this file.
 
+## 0.1.2 - 2026-10-24
+
+### Added & Improved
+- **Unified Multi-Candidate In-Flight Fallback Across All Providers**:
+  - **Zero Action Drops on HTTP 429**: When any provider (OpenAI, Anthropic Claude, OpenRouter, Google Gemini) encounters a rate limit (HTTP 429) or transient provider error, the adapter automatically rotates mid-flight to secondary candidate models without aborting the reasoning turn or dropping Home Assistant actions.
+  - **Provider-Specific Default Fallback Chains**:
+    - **OpenAI**: `gpt-4o-mini` $\leftrightarrow$ `gpt-4o` $\leftrightarrow$ `gpt-3.5-turbo`.
+    - **Anthropic Claude**: `claude-3-5-haiku-20241022` $\leftrightarrow$ `claude-3-5-sonnet-20241022` $\leftrightarrow$ `claude-3-haiku-20240307`.
+    - **OpenRouter**: `google/gemini-2.5-flash` $\leftrightarrow$ `openai/gpt-4o-mini` $\leftrightarrow$ `anthropic/claude-3.5-sonnet`.
+    - **Google Gemini**: `gemini-3.6-flash` $\leftrightarrow$ `gemini-3.5-flash` $\leftrightarrow$ `gemini-3.1-flash-lite` $\leftrightarrow$ `gemini-3.8-flash`.
+  - **Symmetric Candidate Anchoring**: Fast-tier reflex calls and deep periodic audits correctly anchor their respective requested model as Candidate 0 while preserving healthy fallback ordering.
+  - **Multi-Header Reset & Retry-After Parser**: Extracts backoff windows from standard HTTP `Retry-After`, `retry-after-ms`, `x-ratelimit-reset-requests`, and `anthropic-ratelimit-requests-reset` headers as well as provider regex error payloads.
+  - **Automatic Primary Cooldown Recovery**: As soon as a cooled-down model's backoff timer expires, requests transparently resume using the primary model.
+  - **Fast Fail on Auth Errors**: Aborts candidate iteration immediately on HTTP 401/403 to prevent burning quota across candidates on invalid API keys.
+
 ## 0.1.1 - 2026-10-24
 
 ### Changed & Optimized

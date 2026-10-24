@@ -341,6 +341,123 @@ class TestLiveHomeAssistantReadiness(unittest.IsolatedAsyncioTestCase):
         notify_calls = [c for c in sim.service_call_log if c["domain"] == "notify"]
         self.assertTrue(all(c["service"] == "mobile_app_phone" for c in notify_calls))
 
+    async def test_10_multi_provider_inflight_fallback_and_recovery(self) -> None:
+        """
+        Verify that OpenAI, Anthropic, and OpenRouter adapters support unified in-flight fallback:
+        1. Quota monitor initializes with provider-specific default fallback chains.
+        2. Fast-tier and primary-tier requests both anchor candidate 0 correctly.
+        3. When a candidate encounters HTTP 429, LiteLLMAdapter fails over in-flight to the next candidate model.
+        4. Cooldown expiration restores candidate 1 automatically.
+        5. HTTP 401/403 (invalid key) terminates candidate loop immediately without retrying.
+        """
+        from datetime import datetime, timedelta, timezone
+        from unittest.mock import MagicMock, patch
+        from ha_ai_brain.adapters.quota_monitor import OpenAIAnthropicHeadersQuotaMonitorAdapter
+        from ha_ai_brain.adapters.llm_litellm import LiteLLMAdapter
+
+        # 1. Test OpenAI candidate rotation & default fallbacks
+        oai_mon = OpenAIAnthropicHeadersQuotaMonitorAdapter(provider="openai", default_model="openai/gpt-4o")
+        self.assertEqual(oai_mon._snapshot.fallback_models, ["gpt-4o-mini", "gpt-3.5-turbo"])
+        # Deep audit requesting primary gpt-4o:
+        candidates_deep = oai_mon.select_execution_candidates("openai/gpt-4o")
+        self.assertEqual(candidates_deep, ["gpt-4o", "gpt-4o-mini", "gpt-3.5-turbo"])
+        # Fast reflex tier requesting gpt-4o-mini:
+        candidates_fast = oai_mon.select_execution_candidates("openai/gpt-4o-mini")
+        self.assertEqual(candidates_fast, ["gpt-4o-mini", "gpt-4o", "gpt-3.5-turbo"])
+
+        # When gpt-4o-mini hits 429:
+        oai_mon.record_quota_or_rate_limit_error(
+            model="gpt-4o-mini",
+            status_code=429,
+            error_body="Rate limit reached for model gpt-4o-mini. Please retry in 15s.",
+            headers={"Retry-After": "15"},
+        )
+        self.assertTrue(oai_mon.is_model_in_cooldown("gpt-4o-mini")[0])
+        self.assertFalse(oai_mon.is_model_in_cooldown("gpt-4o")[0])
+        # gpt-4o-mini is now in cooldown, candidates fail over to remaining models:
+        self.assertEqual(oai_mon.select_execution_candidates("openai/gpt-4o-mini"), ["gpt-4o", "gpt-3.5-turbo"])
+
+        # When gpt-4o-mini cooldown expires:
+        oai_mon._model_cooldowns["gpt-4o-mini"] = datetime.now(timezone.utc) - timedelta(seconds=1)
+        self.assertEqual(oai_mon.select_execution_candidates("openai/gpt-4o-mini"), ["gpt-4o-mini", "gpt-4o", "gpt-3.5-turbo"])
+
+        # 2. Test Anthropic default fallbacks
+        anthropic_mon = OpenAIAnthropicHeadersQuotaMonitorAdapter(
+            provider="anthropic",
+            default_model="anthropic/claude-3-5-sonnet-20241022",
+        )
+        self.assertIn("claude-3-5-haiku-20241022", anthropic_mon._snapshot.fallback_models)
+        self.assertIn("claude-3-haiku-20240307", anthropic_mon._snapshot.fallback_models)
+
+        # 3. Test LiteLLMAdapter in-flight multi-candidate failover
+        llm = LiteLLMAdapter(
+            model="openai/gpt-4o",
+            fast_model="openai/gpt-4o-mini",
+            api_key="sk-test-key",
+            fallback_policy="auto",
+        )
+
+        mock_err_429 = Exception("Rate limit exceeded")
+        mock_err_429.status_code = 429
+        mock_err_429.llm_provider_response_headers = {"retry-after": "25"}
+
+        mock_success_resp = MagicMock()
+        mock_choice = MagicMock()
+        mock_choice.message.content = '{"suggested_actions": ["climate.set_temperature"], "target_celsius": 21.5}'
+        mock_success_resp.choices = [mock_choice]
+        mock_success_resp.usage.prompt_tokens = 250
+        mock_success_resp.usage.completion_tokens = 50
+        mock_success_resp._response_headers = {"x-ratelimit-remaining-requests": "450"}
+
+        called_models = []
+
+        async def fake_acompletion(**kwargs):
+            m = kwargs.get("model")
+            called_models.append(m)
+            if m == "openai/gpt-4o-mini":
+                raise mock_err_429
+            return mock_success_resp
+
+        with patch("litellm.acompletion", side_effect=fake_acompletion):
+            res = await llm.generate_json(
+                system_prompt="Test sys",
+                user_prompt="Test user",
+                use_fast_tier=True,
+                context_hint={"task": "reflex_test"},
+            )
+
+        self.assertEqual(res.get("suggested_actions"), ["climate.set_temperature"])
+        self.assertEqual(res.get("target_celsius"), 21.5)
+        # Verify it attempted candidate 1 first, failed on 429, then succeeded on candidate 2:
+        self.assertEqual(called_models, ["openai/gpt-4o-mini", "openai/gpt-4o"])
+
+        # Check quota status recorded both the rate limit on candidate 1 and success on candidate 2:
+        snap = await llm.get_quota_status()
+        self.assertEqual(snap.requests_rate_limited_session, 1)
+        self.assertEqual(snap.requests_succeeded_session, 1)
+        self.assertTrue(llm.quota_monitor.is_model_in_cooldown("gpt-4o-mini")[0])
+
+        # 4. Verify HTTP 401 terminates early without rotating candidates
+        called_models_401 = []
+        mock_err_401 = Exception("Invalid API key")
+        mock_err_401.status_code = 401
+
+        async def fake_acompletion_401(**kwargs):
+            called_models_401.append(kwargs.get("model"))
+            raise mock_err_401
+
+        with patch("litellm.acompletion", side_effect=fake_acompletion_401):
+            res_401 = await llm.generate_json(
+                system_prompt="Test sys",
+                user_prompt="Test user",
+                use_fast_tier=False,
+                context_hint={"task": "auth_test"},
+            )
+
+        self.assertEqual(res_401, {})
+        # Should stop after first candidate because 401 is invalid auth:
+        self.assertEqual(len(called_models_401), 1)
+
 
 if __name__ == "__main__":
     unittest.main()
