@@ -373,6 +373,7 @@ class HomeAssistantAdapter(SmartHomePort):
                         decision_map = {
                             "BRAIN_APPROVE_ONCE": "approved_once",
                             "BRAIN_APPROVE_REPEATABLE": "approved_repeatable",
+                            "BRAIN_DISMISS": "dismissed",
                             "BRAIN_REJECT": "rejected",
                         }
                         if prefix in decision_map:

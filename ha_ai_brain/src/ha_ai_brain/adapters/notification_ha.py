@@ -43,7 +43,11 @@ class HomeAssistantNotificationAdapter(NotificationPort):
                     },
                     {
                         "action": f"BRAIN_APPROVE_REPEATABLE:{aid}",
-                        "title": "Always Allow This",
+                        "title": "Always Allow",
+                    },
+                    {
+                        "action": f"BRAIN_DISMISS:{aid}",
+                        "title": "Dismiss",
                     },
                     {
                         "action": f"BRAIN_REJECT:{aid}",

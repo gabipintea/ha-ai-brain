@@ -555,7 +555,7 @@ class BrainOrchestrator:
           actions execute automatically without asking for confirmation again!
         - `rejected`: Cancels action and records REJECTED_EXPLICIT feedback.
         """
-        if decision not in ("approved_once", "approved_repeatable", "rejected"):
+        if decision not in ("approved_once", "approved_repeatable", "rejected", "dismissed"):
             raise ValueError(f"Invalid approval decision: {decision}")
 
         pending = await self.memory.resolve_pending_approval(approval_id=approval_id, status=decision)
@@ -564,6 +564,15 @@ class BrainOrchestrator:
 
         intent = pending.intent
         signature = pending.signature
+
+        if decision == "dismissed":
+            logger.info(
+                "[APPROVAL DECISION -> DISMISSED] Dismissed %s (%s.%s) without execution or permanent block.",
+                approval_id,
+                intent.domain,
+                intent.service,
+            )
+            return {"approval_id": approval_id, "status": "dismissed", "signature": signature}
 
         if decision == "rejected":
             episode = FeedbackEpisode(
@@ -636,3 +645,8 @@ class BrainOrchestrator:
             "repeatable_rule_saved": decision == "approved_repeatable",
             "service_output": exec_res,
         }
+
+    async def dismiss_all_pending(self) -> int:
+        count = await self.memory.dismiss_all_pending_approvals()
+        logger.info("[APPROVAL DECISION -> DISMISSED ALL] Dismissed %d pending approvals.", count)
+        return count

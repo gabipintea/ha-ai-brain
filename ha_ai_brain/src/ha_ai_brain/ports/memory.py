@@ -65,7 +65,15 @@ class MemoryStorePort(ABC):
 
     @abstractmethod
     async def resolve_pending_approval(self, approval_id: str, status: str) -> PendingApproval | None:
-        """Mark a pending approval as approved_once, approved_repeatable, or rejected."""
+        """Mark a pending approval as approved_once, approved_repeatable, rejected, or dismissed."""
+
+    async def dismiss_pending_approval(self, approval_id: str) -> bool:
+        """Dismiss a pending proposal without executing or recording a permanent rejection."""
+        return False
+
+    async def dismiss_all_pending_approvals(self) -> int:
+        """Dismiss all currently pending proposals."""
+        return 0
 
     @abstractmethod
     async def save_run_log(self, log: AgentRunLog) -> None:

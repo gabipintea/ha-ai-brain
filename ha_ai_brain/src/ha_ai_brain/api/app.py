@@ -337,6 +337,11 @@ def create_app(settings: BrainSettings | None = None) -> Any:
         log = await orchestrator.run_periodic_batch_analysis(agent_id=req.agent_id, area_id=req.area_id)
         return {"run_log": log.model_dump(mode="json")}
 
+    @app.post("/api/approvals/dismiss-all")
+    async def dismiss_all_approvals() -> dict[str, Any]:
+        count = await orchestrator.dismiss_all_pending()
+        return {"status": "dismissed_all", "count": count}
+
     @app.post("/api/approvals/{approval_id}/decide")
     async def decide_approval(approval_id: str, req: ApprovalDecisionRequest) -> dict[str, Any]:
         try:

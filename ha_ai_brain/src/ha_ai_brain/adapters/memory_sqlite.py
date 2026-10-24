@@ -261,6 +261,26 @@ class SQLiteMemoryAdapter(MemoryStorePort):
         await self.save_pending_approval(pending)
         return pending
 
+    async def dismiss_pending_approval(self, approval_id: str) -> bool:
+        """Dismiss a pending proposal without executing or adding to rejected memory."""
+        res = await self.resolve_pending_approval(approval_id=approval_id, status="dismissed")
+        return res is not None
+
+    async def dismiss_all_pending_approvals(self) -> int:
+        """Dismiss all pending proposals in one shot."""
+        rows = self._conn.execute(
+            "SELECT approval_id, payload_json FROM pending_approvals WHERE status = 'pending'"
+        ).fetchall()
+        now = datetime.now(timezone.utc)
+        count = 0
+        for r in rows:
+            pending = PendingApproval.model_validate_json(r["payload_json"])
+            pending.status = "dismissed"
+            pending.resolved_at = now
+            await self.save_pending_approval(pending)
+            count += 1
+        return count
+
     async def save_run_log(self, log: AgentRunLog) -> None:
         self._conn.execute(
             """

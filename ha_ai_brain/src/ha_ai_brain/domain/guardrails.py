@@ -63,7 +63,19 @@ class GuardrailEngine:
         signature = intent.repeatable_signature()
 
         # 1. Check if the user previously explicitly banned/rejected this repeatable signature
-        if rejected_signatures and signature in rejected_signatures:
+        matched_rejection = False
+        if rejected_signatures:
+            if signature in rejected_signatures:
+                matched_rejection = True
+            else:
+                svc_tag = f"{intent.domain}.{intent.service}"
+                for rej_sig in rejected_signatures:
+                    if intent.agent_id in rej_sig and svc_tag in rej_sig:
+                        if not intent.target_entity_ids or any(t in rej_sig for t in intent.target_entity_ids):
+                            matched_rejection = True
+                            break
+
+        if matched_rejection:
             return GuardrailEvaluation(
                 decision=GuardrailDecisionType.HARD_BLOCKED,
                 effective_risk=intent.risk_level,
@@ -122,6 +134,20 @@ class GuardrailEngine:
 
         # 7. Check if this repeatable action signature has already been endorsed by the user
         existing_rule = endorsed_rules.get(signature)
+        if not existing_rule and endorsed_rules:
+            # Fallback to match by canonical (agent_id, domain_service, target_entity_ids)
+            intent_targets = sorted(intent.target_entity_ids)
+            svc_tag = f"{intent.domain}.{intent.service}"
+            for rule in endorsed_rules.values():
+                if (
+                    rule.auto_approve
+                    and rule.agent_id == intent.agent_id
+                    and rule.domain_service == svc_tag
+                    and sorted(rule.target_entity_ids) == intent_targets
+                ):
+                    existing_rule = rule
+                    break
+
         if existing_rule and existing_rule.auto_approve:
             return GuardrailEvaluation(
                 decision=GuardrailDecisionType.EXECUTE_IMMEDIATELY,

@@ -228,7 +228,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       <div class="card">
         <div class="card-head">
           <h2>Pending approvals</h2>
-          <span class="pill warn" id="pendingCount" style="display:none;">0</span>
+          <div style="display:flex; align-items:center; gap:8px;">
+            <button id="dismissAllBtn" class="icon" style="display:none; font-size:12px; padding:4px 8px;" onclick="dismissAllApprovals()">Dismiss all</button>
+            <span class="pill warn" id="pendingCount" style="display:none;">0</span>
+          </div>
         </div>
         <div id="pendingEmpty" class="empty">Nothing is waiting for your approval. All actions are either auto-approved or system is observing.</div>
         <div id="pendingList"></div>
@@ -467,6 +470,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       <div class="btn-row">
         <button class="primary" onclick="decideApproval('${esc(p.approval_id)}', 'approved_once')">Approve once</button>
         <button class="success" onclick="decideApproval('${esc(p.approval_id)}', 'approved_repeatable')">Always allow</button>
+        <button class="icon" title="Dismiss this proposal without executing or permanently blocking" onclick="decideApproval('${esc(p.approval_id)}', 'dismissed')">Dismiss</button>
         <button class="danger" onclick="decideApproval('${esc(p.approval_id)}', 'rejected')">Reject</button>
       </div>`;
     return div;
@@ -484,6 +488,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     const badge = $('pendingCount');
     badge.style.display = pending.length ? 'inline-flex' : 'none';
     badge.textContent = pending.length;
+    const dBtn = $('dismissAllBtn');
+    if (dBtn) dBtn.style.display = pending.length > 1 ? 'inline-block' : 'none';
 
     const tabBadge = $('tabBadge-approvals');
     if (tabBadge) {
@@ -744,6 +750,12 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     const noteEl = document.getElementById('note_' + id);
     const humanNote = noteEl ? noteEl.value.trim() : '';
     await post('./api/approvals/' + id + '/decide', {decision, human_note: humanNote});
+    await refreshAll();
+  }
+
+  async function dismissAllApprovals() {
+    if (!confirm('Dismiss all pending proposals?')) return;
+    await post('./api/approvals/dismiss-all', {});
     await refreshAll();
   }
 

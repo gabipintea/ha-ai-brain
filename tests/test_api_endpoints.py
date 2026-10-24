@@ -114,6 +114,27 @@ class TestControlPlaneAPI(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(st_data["settings"]["masked_api_key"].endswith("1234"))
             self.assertNotIn("sk-1234567890abcdef1234", str(st_data))
 
+            # 8. Test Dismissing Proposals without Rejection
+            await client.post("/api/events/simulate", json={"scenario": "condensation_risk"})
+            p_list = (await client.get("/api/status")).json()["pending_approvals"]
+            self.assertGreaterEqual(len(p_list), 1)
+            target_aid = p_list[0]["approval_id"]
+            # Dismiss it
+            res_dis = await client.post(f"/api/approvals/{target_aid}/decide", json={"decision": "dismissed"})
+            self.assertEqual(res_dis.status_code, 200)
+            self.assertEqual(res_dis.json()["status"], "dismissed")
+            # Verify not pending and not in rejected list
+            cur_status = (await client.get("/api/status")).json()
+            self.assertNotIn(target_aid, [p["approval_id"] for p in cur_status["pending_approvals"]])
+            self.assertNotIn(p_list[0]["signature"], [r["action_signature"] for r in cur_status["rejected_suggestions"]])
+
+            # Test dismiss-all endpoint
+            await client.post("/api/events/simulate", json={"scenario": "condensation_risk"})
+            res_dis_all = await client.post("/api/approvals/dismiss-all")
+            self.assertEqual(res_dis_all.status_code, 200)
+            cur_pend = (await client.get("/api/status")).json()["pending_approvals"]
+            self.assertEqual(len(cur_pend), 0)
+
 
 if __name__ == "__main__":
     unittest.main()

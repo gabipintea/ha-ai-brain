@@ -198,13 +198,12 @@ class ActionIntent(BaseModel):
     def repeatable_signature(self) -> str:
         """
         Compute a canonical, repeatable signature for this class of action.
-        Once approved as repeatable by the human, future actions matching this signature
-        will execute automatically without asking for confirmation again.
+        Canonical signature is derived strictly from (agent_id, domain.service, target_entity_ids).
+        By excluding free-form LLM rationale and variable cause_category descriptions,
+        rules and rejections endorsed by the user will reliably match future proposals.
         """
-        targets = ",".join(sorted(self.target_entity_ids))
-        raw = f"{self.agent_id}|{self.domain}.{self.service}|{targets}|{self.cause_category}"
-        digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:12]
-        return f"sig:{self.agent_id}:{self.domain}.{self.service}:{self.cause_category}:{digest}"
+        targets = ",".join(sorted(self.target_entity_ids)) or "all"
+        return f"sig:{self.agent_id}:{self.domain}.{self.service}:{targets}"
 
 
 class ApprovalRule(BaseModel):
