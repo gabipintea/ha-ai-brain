@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator, Callable, Coroutine
 from datetime import datetime, timedelta, timezone
+import asyncio
 import json
 import logging
 from typing import Any
@@ -347,104 +348,145 @@ class HomeAssistantAdapter(SmartHomePort):
             if auth_res.get("type") != "auth_ok":
                 raise RuntimeError(f"HA WebSocket authentication failed: {auth_res}")
 
-            # 3. Subscribe to state_changed events
-            await ws.send(json.dumps({"id": 1, "type": "subscribe_events", "event_type": "state_changed"}))
-            await ws.recv()
+            # 3. Subscribe to all events in a single call so we never miss actions or drop frames
+            await ws.send(json.dumps({"id": 1, "type": "subscribe_events"}))
+            sub_res = json.loads(await ws.recv())
+            if not sub_res.get("success"):
+                raise RuntimeError(f"HA WebSocket subscribe_events failed: {sub_res}")
 
-            # 4. Also subscribe to Companion App actionable notification button taps (universal & iOS)
-            await ws.send(
-                json.dumps({"id": 2, "type": "subscribe_events", "event_type": "mobile_app_notification_action"})
-            )
-            await ws.recv()
-            await ws.send(
-                json.dumps({"id": 3, "type": "subscribe_events", "event_type": "ios.notification_action_fired"})
-            )
-            await ws.recv()
+            event_queue: asyncio.Queue[StateChangedEvent | None | Exception] = asyncio.Queue(maxsize=1000)
 
-            # 5. Subscribe to native HA `automation_triggered` events for causal attribution
-            await ws.send(json.dumps({"id": 4, "type": "subscribe_events", "event_type": "automation_triggered"}))
-            await ws.recv()
+            async def _ws_reader_loop() -> None:
+                try:
+                    async for raw_msg in ws:
+                        msg = json.loads(raw_msg)
+                        if msg.get("type") != "event":
+                            continue
+                        event_obj = msg.get("event", {})
+                        event_type = event_obj.get("event_type", "")
+                        data = event_obj.get("data", {})
+                        ctx = event_obj.get("context", {}) or {}
 
-            # 6. Stream events
-            async for raw_msg in ws:
-                msg = json.loads(raw_msg)
-                if msg.get("type") != "event":
-                    continue
-                event_obj = msg.get("event", {})
-                event_type = event_obj.get("event_type")
-                data = event_obj.get("data", {})
-                ctx = event_obj.get("context", {}) or {}
+                        # 1. Process Mobile Notification actions IMMEDIATELY without waiting for LLMs or queues
+                        if (
+                            event_type in ("mobile_app_notification_action", "ios.notification_action_fired")
+                            or "notification" in event_type
+                        ):
+                            logger.info("[MOBILE NOTIFICATION EVENT RECEIVED] event=%s data=%s", event_type, data)
+                            action_str = str(
+                                data.get("action")
+                                or data.get("actionName")
+                                or (data.get("action_data", {}) if isinstance(data.get("action_data"), dict) else {}).get("action")
+                                or ""
+                            )
+                            decision_map = {
+                                "BRAIN_APPROVE_ONCE": "approved_once",
+                                "BRAIN_APPROVE_REPEATABLE": "approved_repeatable",
+                                "BRAIN_DISMISS": "dismissed",
+                                "BRAIN_REJECT": "rejected",
+                            }
+                            matched = False
+                            for prefix, decision in decision_map.items():
+                                if prefix in action_str:
+                                    approval_id = action_str.split(prefix + ":", 1)[-1].strip()
+                                    matched = True
+                                    logger.info(
+                                        "[MOBILE NOTIFICATION ACTION DISPATCHED] approval_id=%s decision=%s (from action_str=%s)",
+                                        approval_id, decision, action_str,
+                                    )
+                                    if self._notification_action_handler:
+                                        asyncio.create_task(self._notification_action_handler(approval_id, decision))
+                                    break
+                            if matched:
+                                continue
 
-                # Track native HA automation trigger contexts
-                if event_type == "automation_triggered":
-                    trig_ctx_id = ctx.get("id")
-                    auto_eid = str(data.get("entity_id", "automation.unknown"))
-                    if trig_ctx_id:
-                        self._automation_context_map[trig_ctx_id] = auto_eid
-                        if len(self._automation_context_map) > 2000:
-                            oldest = next(iter(self._automation_context_map))
-                            del self._automation_context_map[oldest]
-                    continue
+                        # 2. Track native HA automation trigger contexts for causal attribution
+                        if event_type == "automation_triggered":
+                            trig_ctx_id = ctx.get("id")
+                            auto_eid = str(data.get("entity_id", "automation.unknown"))
+                            if trig_ctx_id:
+                                self._automation_context_map[trig_ctx_id] = auto_eid
+                                if len(self._automation_context_map) > 2000:
+                                    oldest = next(iter(self._automation_context_map))
+                                    del self._automation_context_map[oldest]
+                            continue
 
-                # Handle phone notification button taps (Approve Once / Always Allow / Dismiss / Reject)
-                if event_type in ("mobile_app_notification_action", "ios.notification_action_fired"):
-                    logger.info("[MOBILE NOTIFICATION ACTION RECEIVED] event=%s data=%s", event_type, data)
-                    action_str = str(data.get("action") or data.get("actionName") or "")
-                    if self._notification_action_handler and ":" in action_str:
-                        prefix, approval_id = action_str.split(":", 1)
-                        decision_map = {
-                            "BRAIN_APPROVE_ONCE": "approved_once",
-                            "BRAIN_APPROVE_REPEATABLE": "approved_repeatable",
-                            "BRAIN_DISMISS": "dismissed",
-                            "BRAIN_REJECT": "rejected",
-                        }
-                        if prefix in decision_map:
-                            await self._notification_action_handler(approval_id, decision_map[prefix])
-                    continue
+                        # 3. Only state_changed events are buffered for downstream agent processing
+                        if event_type != "state_changed":
+                            continue
 
-                new_raw = data.get("new_state")
-                if not new_raw:
-                    continue
-                old_raw = data.get("old_state")
+                        new_raw = data.get("new_state")
+                        if not new_raw:
+                            continue
+                        old_raw = data.get("old_state")
 
-                eid = new_raw["entity_id"]
-                new_attrs = new_raw.get("attributes", {}) or {}
-                area_id = self._resolve_area_id(eid, new_attrs)
+                        eid = new_raw["entity_id"]
+                        new_attrs = new_raw.get("attributes", {}) or {}
+                        area_id = self._resolve_area_id(eid, new_attrs)
 
-                ctx_id = ctx.get("id")
-                parent_id = ctx.get("parent_id")
-                auto_eid_matched = (
-                    (self._automation_context_map.get(ctx_id) if ctx_id else None)
-                    or (self._automation_context_map.get(parent_id) if parent_id else None)
-                )
-                if auto_eid_matched and ctx_id:
-                    self._automation_context_map[ctx_id] = auto_eid_matched
+                        ctx_id = ctx.get("id")
+                        parent_id = ctx.get("parent_id")
+                        auto_eid_matched = (
+                            (self._automation_context_map.get(ctx_id) if ctx_id else None)
+                            or (self._automation_context_map.get(parent_id) if parent_id else None)
+                        )
+                        if auto_eid_matched and ctx_id:
+                            self._automation_context_map[ctx_id] = auto_eid_matched
 
-                new_state = EntityState(
-                    entity_id=eid,
-                    state=str(new_raw.get("state", "unknown")),
-                    attributes=new_attrs,
-                    area_id=area_id,
-                    context_id=ctx_id,
-                    context_user_id=ctx.get("user_id"),
-                )
-                old_state = (
-                    EntityState(
-                        entity_id=old_raw["entity_id"],
-                        state=str(old_raw.get("state", "unknown")),
-                        attributes=old_raw.get("attributes", {}) or {},
-                        area_id=area_id,
-                    )
-                    if old_raw
-                    else None
-                )
-                yield StateChangedEvent(
-                    entity_id=new_state.entity_id,
-                    old_state=old_state,
-                    new_state=new_state,
-                    context_id=ctx_id,
-                    context_parent_id=parent_id,
-                    context_user_id=ctx.get("user_id"),
-                    origin=EventOrigin.HA_AUTOMATION if auto_eid_matched else EventOrigin.HUMAN_OR_PHYSICAL,
-                    triggered_by_automation_id=auto_eid_matched,
-                )
+                        new_state = EntityState(
+                            entity_id=eid,
+                            state=str(new_raw.get("state", "unknown")),
+                            attributes=new_attrs,
+                            area_id=area_id,
+                            context_id=ctx_id,
+                            context_user_id=ctx.get("user_id"),
+                        )
+                        old_state = (
+                            EntityState(
+                                entity_id=old_raw["entity_id"],
+                                state=str(old_raw.get("state", "unknown")),
+                                attributes=old_raw.get("attributes", {}) or {},
+                                area_id=area_id,
+                            )
+                            if old_raw
+                            else None
+                        )
+                        sc_event = StateChangedEvent(
+                            entity_id=new_state.entity_id,
+                            old_state=old_state,
+                            new_state=new_state,
+                            context_id=ctx_id,
+                            context_parent_id=parent_id,
+                            context_user_id=ctx.get("user_id"),
+                            origin=EventOrigin.HA_AUTOMATION if auto_eid_matched else EventOrigin.HUMAN_OR_PHYSICAL,
+                            triggered_by_automation_id=auto_eid_matched,
+                        )
+
+                        if event_queue.full():
+                            try:
+                                event_queue.get_nowait()
+                            except asyncio.QueueEmpty:
+                                pass
+                        await event_queue.put(sc_event)
+                except asyncio.CancelledError:
+                    pass
+                except Exception as exc:
+                    await event_queue.put(exc)
+                finally:
+                    await event_queue.put(None)
+
+            reader_task = asyncio.create_task(_ws_reader_loop())
+            try:
+                while True:
+                    item = await event_queue.get()
+                    if item is None:
+                        break
+                    if isinstance(item, Exception):
+                        raise item
+                    yield item
+            finally:
+                reader_task.cancel()
+                try:
+                    await reader_task
+                except (asyncio.CancelledError, Exception):
+                    pass
