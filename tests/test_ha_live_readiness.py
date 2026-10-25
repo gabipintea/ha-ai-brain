@@ -507,7 +507,7 @@ class TestLiveHomeAssistantReadiness(unittest.IsolatedAsyncioTestCase):
     async def test_12_notify_service_smart_resolution_and_fallback(self) -> None:
         """
         Verify that HomeAssistantNotificationAdapter automatically resolves notify services:
-        - 'notify.gabriels_iphone' -> 'notify.mobile_app_gabriels_iphone'
+        - 'notify.phone' -> 'notify.mobile_app_phone'
         - Fallbacks to 'notify.notify' on unrecognized targets
         - Catches service errors without raising uncaught exceptions in periodic batch
         """
@@ -517,16 +517,16 @@ class TestLiveHomeAssistantReadiness(unittest.IsolatedAsyncioTestCase):
         sim = SmartHomeSimulatorAdapter()
         # Mock available services
         sim._available_notify_services = [
-            "notify.mobile_app_gabriels_iphone",
-            "notify.mobile_app_gabis_mac",
+            "notify.mobile_app_phone",
+            "notify.mobile_app_tablet",
             "notify.notify",
         ]
 
-        # 1. User specified notify.gabriels_iphone (missing mobile_app_)
-        notif = HomeAssistantNotificationAdapter(smart_home=sim, notify_service="notify.gabriels_iphone")
+        # 1. User specified notify.phone (missing mobile_app_)
+        notif = HomeAssistantNotificationAdapter(smart_home=sim, notify_service="notify.phone")
         domain, service = await notif._resolve_service_name()
         self.assertEqual(domain, "notify")
-        self.assertEqual(service, "mobile_app_gabriels_iphone")
+        self.assertEqual(service, "mobile_app_phone")
 
         # 2. User specified non-existent device -> falls back to notify.notify
         notif_unknown = HomeAssistantNotificationAdapter(smart_home=sim, notify_service="notify.unknown_tablet")
@@ -544,7 +544,7 @@ class TestLiveHomeAssistantReadiness(unittest.IsolatedAsyncioTestCase):
         )
         await notif.send_advisory_alert(insight)
         self.assertEqual(len(notif.sent_notifications), 1)
-        self.assertEqual(sim.service_call_log[-1]["service"], "mobile_app_gabriels_iphone")
+        self.assertEqual(sim.service_call_log[-1]["service"], "mobile_app_phone")
         p1 = notif.sent_notifications[-1]["payload"]
         self.assertEqual(p1["title"], "🧠 AI Brain · High Humidity Alert")
         self.assertTrue(p1["message"].startswith("👉 Turn off humidifier"))
@@ -590,6 +590,39 @@ class TestLiveHomeAssistantReadiness(unittest.IsolatedAsyncioTestCase):
         self.assertLessEqual(len(app_payload["message"]), 180)
         self.assertEqual(app_payload["data"]["subtitle"], "climate.set_temperature")
         self.assertEqual(len(app_payload["data"]["actions"]), 4)
+
+    def test_13_codebase_zero_personal_entity_leakage(self) -> None:
+        """
+        Verify that no user-specific device names, personal emails, or proprietary brand strings
+        are hardcoded in ha_ai_brain source code.
+        """
+        import os
+        from pathlib import Path
+
+        forbidden_tokens = [
+            "gabis_mac",
+            "andrada_s_iphone",
+            "gabriels_iphone",
+            "lenovo_",
+            "_energy_returned",
+            "_perception",
+            "master_ac_",
+            "daikin",
+        ]
+        src_dir = Path(__file__).resolve().parent.parent / "ha_ai_brain" / "src" / "ha_ai_brain"
+        self.assertTrue(src_dir.exists())
+
+        for root, _, files in os.walk(src_dir):
+            for file in files:
+                if file.endswith(".py"):
+                    full_p = Path(root) / file
+                    content = full_p.read_text(encoding="utf-8")
+                    for token in forbidden_tokens:
+                        self.assertNotIn(
+                            token,
+                            content,
+                            f"Forbidden personal token '{token}' found in {full_p.name}",
+                        )
 
 
 if __name__ == "__main__":

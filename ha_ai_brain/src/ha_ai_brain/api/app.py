@@ -48,8 +48,9 @@ class SimulateEventRequest(BaseModel):
 
 
 class BatchAnalyzeRequest(BaseModel):
-    agent_id: str = "climate_thermal_agent"
+    agent_id: str = "all"
     area_id: str | None = None
+    lookback_hours: int | None = None
 
 
 class ApprovalDecisionRequest(BaseModel):
@@ -334,8 +335,23 @@ def create_app(settings: BrainSettings | None = None) -> Any:
 
     @app.post("/api/batch/analyze")
     async def run_batch(req: BatchAnalyzeRequest) -> dict[str, Any]:
-        log = await orchestrator.run_periodic_batch_analysis(agent_id=req.agent_id, area_id=req.area_id)
-        return {"run_log": log.model_dump(mode="json")}
+        if req.agent_id == "all":
+            logs = await orchestrator.run_all_periodic_batch_analyses(
+                lookback_hours=req.lookback_hours,
+                area_id=req.area_id,
+            )
+            return {
+                "status": "completed",
+                "agents_analyzed": len(logs),
+                "run_logs": [l.model_dump(mode="json") for l in logs],
+                "run_log": logs[0].model_dump(mode="json") if logs else None,
+            }
+        log = await orchestrator.run_periodic_batch_analysis(
+            agent_id=req.agent_id,
+            area_id=req.area_id,
+            lookback_hours=req.lookback_hours,
+        )
+        return {"run_log": log.model_dump(mode="json"), "run_logs": [log.model_dump(mode="json")]}
 
     @app.post("/api/approvals/dismiss-all")
     async def dismiss_all_approvals() -> dict[str, Any]:

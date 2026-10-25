@@ -1,4 +1,4 @@
-"""LangGraph StateGraph implementation for the Autonomous Climate & Thermal Agent (and Custom Agents)."""
+"""LangGraph StateGraph implementation for Autonomous Specialized Domain Agents (Climate, Lighting, Security, Energy, Covers, Diagnostics, and Custom Agents)."""
 
 from __future__ import annotations
 
@@ -27,12 +27,13 @@ from ha_ai_brain.ports.memory import MemoryStorePort
 from ha_ai_brain.ports.smart_home import SmartHomePort
 
 
-class ClimateGraphState(TypedDict, total=False):
-    """Typed state flowing through the LangGraph StateGraph."""
+class AgentGraphState(TypedDict, total=False):
+    """Typed state flowing through the specialized domain agent LangGraph StateGraph."""
 
     agent_spec: AgentSpec
     site_context: str
     mode: str  # "realtime_stream" or "periodic_batch"
+    lookback_hours: int
     area_id: str | None
     trigger_summary: str
     corroborated_states: dict[str, EntityState]
@@ -45,9 +46,14 @@ class ClimateGraphState(TypedDict, total=False):
     advisory_insights: list[AdvisoryInsight]
 
 
-class ClimateAgentGraph:
+# Backward compatibility alias
+ClimateGraphState = AgentGraphState
+
+
+class SpecializedAgentGraph:
     """
-    LangGraph workflow orchestrating the Climate & Thermal Agent:
+    Generalized LangGraph workflow orchestrating any specialized domain agent
+    (Climate, Lighting, Security, Energy, Covers, Diagnostics, or Custom Agents):
       START
         -> corroborate_context
         -> delegate_research_subagent
@@ -116,7 +122,7 @@ class ClimateAgentGraph:
             corroborated = await self.smart_home.get_all_states()
 
         now = datetime.now(timezone.utc)
-        lookback_hours = 24 if state.get("mode") == "periodic_batch" else 4
+        lookback_hours = state.get("lookback_hours") or (24 if state.get("mode") == "periodic_batch" else 4)
         history_series = await self.smart_home.get_history(
             entity_ids=list(corroborated.keys()),
             start_time=now - timedelta(hours=lookback_hours),
@@ -342,6 +348,7 @@ class ClimateAgentGraph:
         llm_response = await self.llm.generate_json(
             system_prompt=(
                 f"You are the {agent_spec.name} ({agent_spec.specialty}) running in Periodic Deep Batch Analysis Mode. "
+                f"You are analyzing historical entity trajectories over the past {state.get('lookback_hours', 24)} hours. "
                 "Examine the historical entity trajectories, the Research Sub-Agent's findings, the Computation "
                 "Sub-Agent's derived signals, and the `existing_automations` already configured in Home Assistant.\n"
                 "CRITICAL RULES FOR EXISTING AUTOMATIONS & USER CONTEXT NOTES:\n"
@@ -510,3 +517,7 @@ class ClimateAgentGraph:
 
             intents.append(intent)
         return intents
+
+
+# Backward compatibility alias
+ClimateAgentGraph = SpecializedAgentGraph

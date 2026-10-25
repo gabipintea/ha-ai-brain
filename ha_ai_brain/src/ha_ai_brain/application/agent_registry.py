@@ -74,6 +74,44 @@ def get_builtin_agents() -> list[AgentSpec]:
             is_custom=False,
         ),
         AgentSpec(
+            agent_id="energy_efficiency_agent",
+            name="Energy, Power & Solar Optimization Agent",
+            specialty="Residential Energy Storage, Solar Photovoltaics & Load Shifting Engineer",
+            description=(
+                "Analyzes whole-home power draw, solar generation, grid export/import, battery state of charge, "
+                "and heavy appliance cycles to minimize electricity bills and maximize solar self-consumption."
+            ),
+            monitored_domains=["sensor", "switch", "climate", "binary_sensor"],
+            monitored_device_classes=["power", "energy", "battery", "current", "voltage"],
+            controllable_domains=["switch", "climate", "automation", "notify"],
+            goals=[
+                "Analyze historical power consumption and solar production profiles to identify baseload waste and phantom loads",
+                "Recommend or synthesize native automations to schedule flexible loads (EV charging, heat pumps, water heaters, dehumidifiers) during peak solar or cheap tariffs",
+                "Emit advisory insights for unusually high standby power consumption or energy anomalies",
+            ],
+            enabled=True,
+            is_custom=False,
+        ),
+        AgentSpec(
+            agent_id="cover_shading_agent",
+            name="Cover & Solar Shading Agent",
+            specialty="Passive Solar Architecture & Automated Envelope Shading Specialist",
+            description=(
+                "Manages motorized blinds, roller shutters, curtains, and awnings to balance natural day-lighting, "
+                "passive solar winter heating, summer overheating protection, and night-time privacy."
+            ),
+            monitored_domains=["cover", "sensor", "sun", "weather", "binary_sensor"],
+            monitored_device_classes=["blind", "curtain", "shade", "shutter", "window", "illuminance", "temperature"],
+            controllable_domains=["cover", "automation", "notify"],
+            goals=[
+                "Coordinate cover positions with solar elevation, azimuth, and outdoor illuminance to optimize indoor comfort and glare",
+                "Automate night-time closing to reduce thermal envelope radiation losses in winter",
+                "Detect un-automated manual adjustments to motorized shading and propose native automations",
+            ],
+            enabled=True,
+            is_custom=False,
+        ),
+        AgentSpec(
             agent_id="repair_diagnostics_agent",
             name="Repair & Diagnostics Agent",
             specialty="Smart Home Systems Reliability & Network Diagnostics Engineer",
@@ -131,3 +169,7 @@ class AgentRegistry:
 
     def list_agents(self) -> list[AgentSpec]:
         return list(self._agents.values())
+
+    def get_active_agents(self) -> list[AgentSpec]:
+        """Return all enabled registered agents."""
+        return [a for a in self._agents.values() if a.enabled]

@@ -83,12 +83,20 @@ class TestControlPlaneAPI(unittest.IsolatedAsyncioTestCase):
                 self.assertNotIn(rsig, [e["action_signature"] for e in after])
                 self.assertEqual((await client.delete("/api/rejected", params={"signature": rsig})).status_code, 404)
 
-            # 5. Trigger Periodic Batch Analysis
-            res_batch = await client.post("/api/batch/analyze", json={"agent_id": "climate_thermal_agent"})
+            # 5. Trigger Periodic Batch Analysis (single agent and all agents with lookback)
+            res_batch = await client.post("/api/batch/analyze", json={"agent_id": "climate_thermal_agent", "lookback_hours": 24})
             self.assertEqual(res_batch.status_code, 200)
             batch_log = res_batch.json()["run_log"]
             self.assertEqual(batch_log["mode"], "periodic_batch")
             self.assertGreaterEqual(len(batch_log["advisory_insights"]), 1)
+
+            # 5b. Trigger batch across all registered agents
+            res_batch_all = await client.post("/api/batch/analyze", json={"agent_id": "all", "lookback_hours": 48})
+            self.assertEqual(res_batch_all.status_code, 200)
+            all_batch_data = res_batch_all.json()
+            self.assertEqual(all_batch_data["status"], "completed")
+            self.assertGreaterEqual(all_batch_data["agents_analyzed"], 4)
+            self.assertEqual(len(all_batch_data["run_logs"]), all_batch_data["agents_analyzed"])
 
             # 6. Verify paginated /api/logs endpoint
             res_logs = await client.get("/api/logs?limit=5&offset=0")

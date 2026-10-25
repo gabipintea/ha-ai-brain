@@ -395,6 +395,14 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         <div id="ignoredTargetsList" style="margin-top:14px;"></div>
       </div>
     </div>
+
+    <div class="grid">
+      <div class="card">
+        <div class="card-head"><h2>Active Specialized Domain Agents</h2><span class="pill" id="agentsCountBadge">0</span></div>
+        <div class="hint">Specialized cognitive agents that analyze both real-time stream events and periodic historical batch patterns.</div>
+        <div id="agentsList" style="margin-top:14px;"></div>
+      </div>
+    </div>
   </div>
 
 </div>
@@ -641,6 +649,28 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         <button class="danger icon" title="Remove" onclick="deleteIgnoredTarget('${esc(t.ignore_id)}')">Remove</button></div>`).join('')
       : '<div class="empty">Nothing is ignored.</div>';
 
+    const agents = data.agents || [];
+    const aBadge = $('agentsCountBadge');
+    if (aBadge) aBadge.textContent = agents.length;
+    const aList = $('agentsList');
+    if (aList) {
+      aList.innerHTML = agents.length ? agents.map(a => `
+        <div class="item">
+          <div class="row">
+            <div>
+              <strong>${esc(a.name)}</strong>
+              <div class="muted" style="font-size:12px;">${esc(a.specialty)}</div>
+            </div>
+            <span class="pill ${a.enabled ? 'ok' : ''}">${esc(a.enabled ? 'Active' : 'Disabled')}</span>
+          </div>
+          <div class="muted" style="font-size:12px; margin:6px 0;">${esc(a.description)}</div>
+          <div class="muted" style="font-size:11px;">
+            <strong>Monitored domains:</strong> ${esc((a.monitored_domains || []).join(', '))}
+            ${(a.monitored_device_classes || []).length ? ` &middot; <strong>Classes:</strong> ${esc(a.monitored_device_classes.join(', '))}` : ''}
+          </div>
+        </div>`).join('') : '<div class="empty">No agents registered.</div>';
+    }
+
     totalServerLogs = data.total_logs_count || (data.recent_logs || []).length;
     $('logsCountBadge').textContent = totalServerLogs;
     const tabActBadge = $('tabBadge-activity');
@@ -759,8 +789,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
   async function triggerBatch() {
     const btn = $('batchBtn');
-    btn.disabled = true; btn.textContent = 'Analyzing...';
-    try { await post('./api/batch/analyze', {agent_id: 'climate_thermal_agent'}); }
+    btn.disabled = true; btn.textContent = 'Analyzing all agents...';
+    try { await post('./api/batch/analyze', {agent_id: 'all'}); }
     finally { btn.disabled = false; btn.textContent = 'Run analysis now'; }
     await refreshAll();
   }

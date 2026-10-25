@@ -76,6 +76,10 @@ class BrainSettings(BaseModel):
     notifications_enabled: bool = Field(default=True)
     notification_service: str = Field(default="notify.notify")
     batch_interval_minutes: int = Field(default=360)
+    batch_lookback_hours: int = Field(
+        default=24,
+        description="Number of past hours of historical telemetry analyzed by agents during batch audits (e.g. 24 for 1 day, 168 for 1 week)",
+    )
     manual_override_cooldown_seconds: int = Field(default=900, description="15 min backoff when human overrides an agent")
     db_path: str = Field(default="ha_ai_brain.db")
     custom_agents_dir: str = Field(default="agents")
@@ -131,6 +135,7 @@ class BrainSettings(BaseModel):
             notifications_enabled=os.getenv("BRAIN_NOTIFICATIONS_ENABLED", "true").lower() == "true",
             notification_service=os.getenv("BRAIN_NOTIFICATION_SERVICE", "notify.notify"),
             batch_interval_minutes=int(os.getenv("BRAIN_BATCH_INTERVAL_MINUTES", "360")),
+            batch_lookback_hours=int(os.getenv("BRAIN_BATCH_LOOKBACK_HOURS", "24")),
             db_path=os.getenv("BRAIN_DB_PATH", "ha_ai_brain.db"),
             custom_agents_dir=os.getenv(
                 "BRAIN_CUSTOM_AGENTS_DIR",

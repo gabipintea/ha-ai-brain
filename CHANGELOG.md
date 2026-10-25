@@ -2,6 +2,25 @@
 
 All notable changes to **HA AI Brain** are documented in this file.
 
+## 0.1.8 - 2026-10-25
+
+### Fixed & Generalized
+- **Zero Personal Entity Leakage**:
+  - Removed all hardcoded personal devices, names, and manufacturer-specific entity tokens from `orchestrator.py`, `triage.py`, `notification_ha.py`, and test suites.
+  - Implemented generic `matches_device_class_or_heuristics()` using standard Home Assistant device classes, standard units (`°C`, `%`, `lx`, `W`, `kWh`, `ppm`), and universal domain naming patterns.
+  - Added regression test `test_13_codebase_zero_personal_entity_leakage` to strictly enforce zero personal entity string presence in public source code.
+
+- **Configurable Batch Analysis Lookback Window**:
+  - Explicitly clarified and documented the role of `smart_home.get_all_states()` as the live entity discovery/inventory catalog, followed by `smart_home.get_history()` across the analyzed time window.
+  - Added `batch_lookback_hours` (default: 24h, configurable up to 168h / 7 days) in settings, supervisor add-on schema, translations, and API.
+  - Emitted structured timestamps and entity counts in logs upon starting batch analysis.
+
+- **Full Multi-Agent Suite & Multi-Agent Batch Scheduler**:
+  - `_periodic_batch_scheduler_loop()` now iterates through **all active specialized agents** in the registry (Climate, Lighting, Security, Energy, Covers, Diagnostics, Custom), allowing each domain specialist to synthesize insights and native automations.
+  - Expanded built-in suite with `energy_efficiency_agent` (Solar PV, vampire loads, load shifting) and `cover_shading_agent` (passive solar heat gain & envelope protection).
+  - Generalized StateGraph architecture (`SpecializedAgentGraph` / `AgentGraphState`) to run any domain agent persona polymorphically.
+  - Added support in `/api/batch/analyze` and the Web UI to run batch analysis across all active agents or specific agents on demand.
+
 ## 0.1.7 - 2026-10-24
 
 ### Improved

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timedelta, timezone
 import logging
 from typing import Any
 import uuid
@@ -24,7 +25,7 @@ from ha_ai_brain.domain.models import (
     StateChangedEvent,
     UserContextNote,
 )
-from ha_ai_brain.domain.triage import EdgeSignalTriage
+from ha_ai_brain.domain.triage import EdgeSignalTriage, matches_device_class_or_heuristics
 from ha_ai_brain.ports.billing import LicensePort
 from ha_ai_brain.ports.llm import LLMProviderPort
 from ha_ai_brain.ports.mcp import McpClientPort
@@ -205,8 +206,19 @@ class BrainOrchestrator:
                 if not self._running:
                     break
                 if self.settings.operating_mode in (OperatingMode.PERIODIC_BATCH, OperatingMode.HYBRID):
-                    logger.info("Running Periodic Batch Analysis with %s...", self.settings.llm_model)
-                    await self.run_periodic_batch_analysis(agent_id="climate_thermal_agent")
+                    active_agents = self.registry.get_active_agents()
+                    logger.info("Executing Periodic Batch Analysis across %d active specialized agents...", len(active_agents))
+                    for agent in active_agents:
+                        if not self._running:
+                            break
+                        try:
+                            logger.info("Running Batch Analysis for agent: %s (%s)...", agent.name, agent.agent_id)
+                            await self.run_periodic_batch_analysis(
+                                agent_id=agent.agent_id,
+                                lookback_hours=self.settings.batch_lookback_hours,
+                            )
+                        except Exception as agent_exc:
+                            logger.error("Error in periodic batch analysis for agent %s: %s", agent.agent_id, agent_exc)
             except asyncio.CancelledError:
                 break
             except Exception as exc:
@@ -356,42 +368,57 @@ class BrainOrchestrator:
         self,
         agent_id: str = "climate_thermal_agent",
         area_id: str | None = None,
+        lookback_hours: int | None = None,
     ) -> AgentRunLog:
         """
         Execute Mode B: Periodic / On-Demand Batch Analysis across historical entity states.
-        Identifies structural issues and synthesizes native Home Assistant automations.
+        
+        Step 1: Discover all available entities in Home Assistant via smart_home.get_all_states().
+        Step 2: Filter entities matching the target agent's monitored and controllable domains.
+        Step 3: Analyze historical state trajectories over [now - lookback_hours, now].
+        Step 4: Execute Research Sub-Agent, Computation Sub-Agent, and LLM synthesis to produce
+                advisory insights and native Home Assistant automations.
         """
         agent_spec = self.registry.get_agent(agent_id)
         if not agent_spec:
             raise ValueError(f"Unknown agent_id: {agent_id}")
 
+        effective_lookback = lookback_hours or getattr(self.settings, "batch_lookback_hours", 24)
         all_states = await self.smart_home.get_all_states()
         ignored_targets = await self.memory.get_ignored_targets()
         filtered_states = {}
         for eid, st in all_states.items():
             if ignored_targets and any(t.matches(eid) for t in ignored_targets):
                 continue
-            if area_id and st.area_id != area_id and st.domain not in ("weather", "automation") and "outdoor" not in eid:
+            if area_id and st.area_id != area_id and st.domain not in ("weather", "automation", "sun") and "outdoor" not in eid:
                 continue
             if st.domain == "automation":
                 filtered_states[eid] = st
             elif st.domain in agent_spec.monitored_domains or st.domain in agent_spec.controllable_domains:
-                if any(skip in eid for skip in ("gabis_mac", "andrada_s_iphone", "gabriels_iphone", "lenovo_", "_energy_returned", "_perception")):
-                    continue
                 if st.domain == "sensor" and agent_spec.monitored_device_classes:
-                    if st.device_class in agent_spec.monitored_device_classes or any(
-                        k in eid for k in ("temperature", "humidity", "illuminance", "dew_point", "_uh_", "master_ac_", "daikin")
-                    ):
+                    if matches_device_class_or_heuristics(st, agent_spec.monitored_device_classes):
                         filtered_states[eid] = st
                 else:
                     filtered_states[eid] = st
+
+        now = datetime.now(timezone.utc)
+        start_time = now - timedelta(hours=effective_lookback)
+        logger.info(
+            "Starting Batch Analysis for agent '%s' across %d domain entities over past %d hours (window: %s to %s)...",
+            agent_spec.name,
+            len(filtered_states),
+            effective_lookback,
+            start_time.strftime("%Y-%m-%d %H:%M:%S UTC"),
+            now.strftime("%Y-%m-%d %H:%M:%S UTC"),
+        )
 
         initial_state: ClimateGraphState = {
             "agent_spec": agent_spec,
             "site_context": self.settings.site_context,
             "mode": "periodic_batch",
+            "lookback_hours": effective_lookback,
             "area_id": area_id,
-            "trigger_summary": f"Periodic/Manual Batch Analysis for {agent_spec.name}",
+            "trigger_summary": f"Periodic/Manual Batch Analysis for {agent_spec.name} ({effective_lookback}h lookback)",
             "corroborated_states": filtered_states,
         }
 
@@ -412,7 +439,7 @@ class BrainOrchestrator:
         run_log = AgentRunLog(
             agent_id=agent_spec.agent_id,
             mode="periodic_batch",
-            trigger_summary=f"Batch Historical Analysis ({len(filtered_states)} relevant entities analyzed)",
+            trigger_summary=f"Batch Historical Analysis ({len(filtered_states)} relevant entities analyzed over {effective_lookback}h)",
             research_findings=final_state.get("research_findings", []),
             derived_signals=final_state.get("derived_signals", []),
             proposed_intents=intents,
@@ -422,6 +449,26 @@ class BrainOrchestrator:
         self._log_agent_run_summary(run_log)
         await self.memory.save_run_log(run_log)
         return run_log
+
+    async def run_all_periodic_batch_analyses(
+        self,
+        lookback_hours: int | None = None,
+        area_id: str | None = None,
+    ) -> list[AgentRunLog]:
+        """Run batch analysis sequentially across all active registered agents."""
+        active_agents = self.registry.get_active_agents()
+        logs: list[AgentRunLog] = []
+        for agent in active_agents:
+            try:
+                log = await self.run_periodic_batch_analysis(
+                    agent_id=agent.agent_id,
+                    area_id=area_id,
+                    lookback_hours=lookback_hours,
+                )
+                logs.append(log)
+            except Exception as exc:
+                logger.error("Error during batch analysis for agent '%s': %s", agent.agent_id, exc)
+        return logs
 
     def _is_intent_redundant(self, intent: ActionIntent) -> tuple[bool, str]:
         """Check if target entities are already in the desired state (prevent redundant proposals)."""

@@ -353,4 +353,51 @@ class SimulatorMockLLMAdapter(LLMProviderPort):
                         }
                     )
 
+        agent_id = hint.get("agent_id", "")
+        if not insights and agent_id == "lighting_pattern_agent":
+            insights.append({
+                "category": "lighting_ergonomics",
+                "title": "Kitchen Lights Frequently Left On in Empty Room",
+                "finding_details": "Motion sensor indicates kitchen is unoccupied 40% of the time ceiling lights remain energized.",
+                "evidence_metrics": {"wasted_hours_per_day": 3.2},
+                "recommended_human_action": "Enable automatic vacancy shutoff after 15 minutes of inactivity.",
+                "estimated_impact": "Saves ~18 kWh/month.",
+            })
+        elif not insights and agent_id == "energy_efficiency_agent":
+            insights.append({
+                "category": "solar_load_shifting",
+                "title": "EV Charging During Grid Peak Rather Than Solar Peak",
+                "finding_details": "EV wall connector was energized at 19:00 during peak tariffs while 3.2 kW solar power was exported at noon.",
+                "evidence_metrics": {"solar_curtailed_kwh": 14.5},
+                "recommended_human_action": "Schedule high-draw charging between 11:00 and 15:00 to match solar generation.",
+                "estimated_impact": "Reduces electricity import costs by up to 35%.",
+            })
+        elif not insights and agent_id == "security_safety_agent":
+            insights.append({
+                "category": "perimeter_integrity",
+                "title": "Front Door Remains Unlocked After 23:00",
+                "finding_details": "Deadbolt was left disengaged on 4 of the last 7 nights while all occupants were asleep.",
+                "evidence_metrics": {"unsecured_nights": 4},
+                "recommended_human_action": "Enable auto-lock verification when night mode is active.",
+                "estimated_impact": "Ensures home perimeter integrity.",
+            })
+        elif not insights and agent_id == "cover_shading_agent":
+            insights.append({
+                "category": "passive_solar_shading",
+                "title": "South Blinds Left Open During Winter Night Cooling",
+                "finding_details": "Living room south blinds remained open between 22:00 and 06:00, increasing radiation heat loss through glazing.",
+                "evidence_metrics": {"estimated_u_value_loss_pct": 12.0},
+                "recommended_human_action": "Close motorized blinds at sunset during winter to retain interior heat.",
+                "estimated_impact": "Reduces night-time floor heating cycle frequency.",
+            })
+        elif not insights and agent_id == "repair_diagnostics_agent":
+            insights.append({
+                "category": "integration_diagnostics",
+                "title": "All Monitored Integrations Operating Normally",
+                "finding_details": "No flapping sensors or unavailable entities detected during historical audit period.",
+                "evidence_metrics": {"unavailable_count": 0},
+                "recommended_human_action": "No repair action required.",
+                "estimated_impact": "Maintains 100% smart home telemetry reliability.",
+            })
+
         return {"advisory_insights": insights, "native_automations": automations, "actions": []}

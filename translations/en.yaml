@@ -26,3 +26,6 @@ configuration:
   batch_analysis_interval_minutes:
     name: "Batch Audit Interval (Minutes)"
     description: "Interval in minutes between periodic deep-think batch audits (default: 360 min = 6 hours)."
+  batch_lookback_hours:
+    name: "Batch History Lookback Window (Hours)"
+    description: "Number of past hours of historical telemetry analyzed by agents during batch audits (e.g. 24 = 1 day, 72 = 3 days, 168 = 1 week)."

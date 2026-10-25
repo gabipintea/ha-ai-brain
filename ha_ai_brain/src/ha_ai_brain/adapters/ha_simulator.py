@@ -125,6 +125,78 @@ class SmartHomeSimulatorAdapter(SmartHomePort):
                 area_id="north_office",
                 attributes={"friendly_name": "North Office UFH Thermostat", "temperature": 21.0, "current_temperature": 18.4},
             ),
+            # Lighting & Occupancy
+            EntityState(
+                entity_id="light.kitchen_ceiling",
+                state="on",
+                area_id="kitchen",
+                attributes={"friendly_name": "Kitchen Ceiling Spotlights", "brightness": 255},
+            ),
+            EntityState(
+                entity_id="light.living_room_dimmer",
+                state="off",
+                area_id="living_room",
+                attributes={"friendly_name": "Living Room Ambient Light", "brightness": 0},
+            ),
+            EntityState(
+                entity_id="binary_sensor.kitchen_motion",
+                state="off",
+                area_id="kitchen",
+                device_class="motion",
+                attributes={"friendly_name": "Kitchen Ceiling Motion Sensor"},
+            ),
+            # Security & Safety
+            EntityState(
+                entity_id="binary_sensor.front_door_contact",
+                state="off",
+                area_id="entrance",
+                device_class="door",
+                attributes={"friendly_name": "Front Door Contact Sensor"},
+            ),
+            EntityState(
+                entity_id="lock.front_door",
+                state="locked",
+                area_id="entrance",
+                attributes={"friendly_name": "Smart Front Door Deadbolt"},
+            ),
+            EntityState(
+                entity_id="binary_sensor.utility_water_leak",
+                state="off",
+                area_id="utility_room",
+                device_class="moisture",
+                attributes={"friendly_name": "Water Heater Flood Sensor"},
+            ),
+            # Energy & Power
+            EntityState(
+                entity_id="sensor.whole_home_power",
+                state="1420",
+                area_id="utility_room",
+                device_class="power",
+                unit_of_measurement="W",
+                attributes={"friendly_name": "Whole Home Active Power Draw"},
+            ),
+            EntityState(
+                entity_id="sensor.solar_inverter_power",
+                state="3200",
+                area_id="outdoor",
+                device_class="power",
+                unit_of_measurement="W",
+                attributes={"friendly_name": "Solar Array Inverter Output"},
+            ),
+            EntityState(
+                entity_id="sensor.home_battery_soc",
+                state="85.0",
+                area_id="utility_room",
+                device_class="battery",
+                unit_of_measurement="%",
+                attributes={"friendly_name": "Home Battery State of Charge"},
+            ),
+            EntityState(
+                entity_id="switch.ev_charger",
+                state="off",
+                area_id="garage",
+                attributes={"friendly_name": "Level 2 EV Wall Connector"},
+            ),
             # Outdoor & Weather
             EntityState(
                 entity_id="sensor.outdoor_temperature",

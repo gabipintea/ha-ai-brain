@@ -1,5 +1,5 @@
 name: "HA AI Brain"
-version: "0.1.7"
+version: "0.1.8"
 slug: "ha_ai_brain"
 description: "Autonomous Multi-Agent AI Brain for Home Assistant (Climate, Lighting, Security, Repair, and Custom Domain Agents)"
 url: "https://github.com/gabipintea/ha-ai-brain"
@@ -29,6 +29,7 @@ options:
   enable_actionable_notifications: true
   notification_service: "notify.notify"
   batch_analysis_interval_minutes: 360
+  batch_lookback_hours: 24
 schema:
   operating_mode: "list(realtime_stream|periodic_batch|hybrid)"
   default_autonomy_level: "list(shadow|copilot|autonomous)"
@@ -39,3 +40,4 @@ schema:
   enable_actionable_notifications: "bool"
   notification_service: "str"
   batch_analysis_interval_minutes: "int(15,10080)"
+  batch_lookback_hours: "int(1,168)?"

@@ -17,6 +17,47 @@ from ha_ai_brain.domain.models import (
 )
 
 
+def matches_device_class_or_heuristics(state: EntityState, monitored_classes: list[str]) -> bool:
+    """
+    Check if an entity matches any monitored device classes, either through official
+    HA state.device_class or standard generic Home Assistant unit and naming patterns.
+    Completely abstract and free from any hardcoded brand or personal names.
+    """
+    if not monitored_classes:
+        return True
+    if state.device_class and state.device_class in monitored_classes:
+        return True
+
+    eid = state.entity_id.lower()
+    unit = (state.unit_of_measurement or "").lower()
+    friendly = str(state.attributes.get("friendly_name", "")).lower()
+
+    for cls in monitored_classes:
+        if cls == "temperature" and (unit in ("°c", "°f", "k", "c", "f") or "temp" in eid or "temp" in friendly):
+            return True
+        if cls == "humidity" and (unit == "%" and ("humid" in eid or "humid" in friendly or "rh" in eid)):
+            return True
+        if cls == "illuminance" and (unit in ("lx", "lux") or "illumin" in eid or "lux" in eid or "light" in eid):
+            return True
+        if cls in ("power", "energy") and (unit in ("w", "kw", "kwh", "wh", "va", "var") or "power" in eid or "energy" in eid):
+            return True
+        if cls == "battery" and (unit == "%" and ("battery" in eid or "battery" in friendly)):
+            return True
+        if cls in ("carbon_dioxide", "carbon_monoxide") and ("co2" in eid or "carbon" in eid or "ppm" in unit):
+            return True
+        if cls == "volatile_organic_compounds" and ("voc" in eid or "aqi" in eid or "air_quality" in eid):
+            return True
+        if cls in ("door", "window", "opening") and ("door" in eid or "window" in eid or "gate" in eid or "garage" in eid):
+            return True
+        if cls in ("motion", "occupancy", "presence") and ("motion" in eid or "occupan" in eid or "presence" in eid):
+            return True
+        if cls in ("moisture", "water", "leak") and ("leak" in eid or "moist" in eid or "water" in eid or "flood" in eid):
+            return True
+        if cls in ("smoke", "gas") and ("smoke" in eid or "gas" in eid or "fire" in eid):
+            return True
+    return False
+
+
 class EdgeSignalTriage:
     """
     Pre-processes the raw Home Assistant state stream before waking up LLM agents:
@@ -293,15 +334,12 @@ class EdgeSignalTriage:
 
     def _matches_agent(self, state: EntityState, agent: AgentSpec) -> bool:
         """Check if an entity state belongs to the specialty of the given agent."""
-        if any(skip in state.entity_id for skip in ("gabis_mac", "andrada_s_iphone", "gabriels_iphone", "lenovo_")):
-            return False
         if agent.agent_id == "repair_diagnostics_agent":
             return state.state in ("unavailable", "unknown")
         if state.domain in agent.monitored_domains:
             if not agent.monitored_device_classes or state.domain != "sensor":
                 return True
-            if state.device_class in agent.monitored_device_classes:
-                return True
+            return matches_device_class_or_heuristics(state, agent.monitored_device_classes)
         return False
 
     def _corroborate_context(

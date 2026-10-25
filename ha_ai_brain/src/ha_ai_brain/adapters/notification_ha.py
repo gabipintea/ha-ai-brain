@@ -30,8 +30,8 @@ class HomeAssistantNotificationAdapter(NotificationPort):
         """
         Intelligently resolve the configured notification service name against available services in HA.
         Handles cases like:
-        - User configured 'notify.gabriels_iphone' -> resolves to 'notify.mobile_app_gabriels_iphone'
-        - User configured 'mobile_app_gabriels_iphone' -> resolves to domain='notify', service='mobile_app_gabriels_iphone'
+        - User configured 'notify.your_phone' -> resolves to 'notify.mobile_app_your_phone'
+        - User configured 'mobile_app_your_phone' -> resolves to domain='notify', service='mobile_app_your_phone'
         - User configured invalid/missing service -> falls back to 'notify.notify'
         """
         raw = (self.notify_service or "notify.notify").strip()
@@ -52,7 +52,7 @@ class HomeAssistantNotificationAdapter(NotificationPort):
             if mobile_candidate in available:
                 return "notify", f"mobile_app_{service}"
 
-            # Try matching substring (e.g. 'gabriels_iphone' in 'notify.mobile_app_gabriels_iphone')
+            # Try matching substring (e.g. 'your_phone' in 'notify.mobile_app_your_phone')
             for avail in available:
                 if service in avail or avail.endswith(f"_{service}"):
                     d, _, s = avail.partition(".")
