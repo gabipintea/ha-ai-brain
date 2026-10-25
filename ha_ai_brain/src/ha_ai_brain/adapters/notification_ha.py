@@ -147,6 +147,13 @@ class HomeAssistantNotificationAdapter(NotificationPort):
 
         message = self._compact_approval_message(intent)
 
+        panel_path = "/ha_ai_brain"
+        if hasattr(self.smart_home, "get_addon_panel_path"):
+            try:
+                panel_path = await self.smart_home.get_addon_panel_path()
+            except Exception:
+                panel_path = "/ha_ai_brain"
+
         payload = {
             "title": title,
             "message": message,
@@ -154,8 +161,8 @@ class HomeAssistantNotificationAdapter(NotificationPort):
                 "tag": f"ha_ai_brain_{aid}",
                 "group": "ha_ai_brain_approvals",
                 "subtitle": subtitle,
-                "url": f"/ha_ai_brain#approval-{aid}",
-                "clickAction": f"/ha_ai_brain#approval-{aid}",
+                "url": f"{panel_path}#approval-{aid}",
+                "clickAction": f"{panel_path}#approval-{aid}",
                 "actions": [
                     {
                         "action": f"BRAIN_APPROVE_ONCE:{aid}",
@@ -221,6 +228,13 @@ class HomeAssistantNotificationAdapter(NotificationPort):
         message = self._compact_insight_message(insight)
         category_title = (insight.category or "Advisory").replace("_", " ").title()
 
+        panel_path = "/ha_ai_brain"
+        if hasattr(self.smart_home, "get_addon_panel_path"):
+            try:
+                panel_path = await self.smart_home.get_addon_panel_path()
+            except Exception:
+                panel_path = "/ha_ai_brain"
+
         payload = {
             "title": title,
             "message": message,
@@ -228,8 +242,8 @@ class HomeAssistantNotificationAdapter(NotificationPort):
                 "tag": f"ha_ai_brain_insight_{insight.insight_id}",
                 "group": "ha_ai_brain_insights",
                 "subtitle": category_title,
-                "url": f"/ha_ai_brain#insight-{insight.insight_id}",
-                "clickAction": f"/ha_ai_brain#insight-{insight.insight_id}",
+                "url": f"{panel_path}#insight-{insight.insight_id}",
+                "clickAction": f"{panel_path}#insight-{insight.insight_id}",
             },
         }
         self.sent_notifications.append({"type": "advisory_insight", "insight_id": insight.insight_id, "payload": payload})

@@ -2,6 +2,20 @@
 
 All notable changes to **HA AI Brain** are documented in this file.
 
+## 0.1.21 - 2026-10-25
+
+### Fixed & Improved
+- **Automatic Frontend Ingress Panel Discovery & Notification Deep-Linking**:
+  - Eliminated 404 Not Found error when tapping push notifications on mobile devices by replacing hardcoded `/ha_ai_brain` URLs with dynamic panel path discovery (`get_addon_panel_path()`).
+  - Implemented multi-tier automated panel path discovery that automatically works out of the box for all Home Assistant users across official, custom repo (`<repo-hash>_ha_ai_brain`), and local development add-on installations:
+    1. **Supervisor API (`http://supervisor/addons/self/info`)**: Reads the exact container slug directly from Home Assistant's supervisor.
+    2. **WebSocket Ingress Panel Registry (`get_panels`)**: Scans registered Home Assistant frontend panels for add-on references matching `ha_ai_brain` or titled "AI Brain" to retrieve the exact `url_path`.
+    3. Safe generic fallback to `/ha_ai_brain`.
+  - Updated notification payloads in `HomeAssistantNotificationAdapter` and `BrainOrchestrator` to format `url` and `clickAction` with `{panel_path}#approval-{aid}` and `{panel_path}#insight-{id}`.
+  - Implemented `getActiveHash()` in dashboard JavaScript to bridge the outer Home Assistant window URL hash (`window.parent.location.hash`) into the ingress iframe with cross-origin safety, enabling immediate direct scrolling and pulse-highlighting to targeted approvals and insights upon tapping push notifications.
+  - Added parent `hashchange` event listener and two-way hash synchronization when switching dashboard tabs.
+  - Added test case `test_6_dynamic_addon_panel_path_and_notification_urls` verifying dynamic panel discovery and notification deep-link generation.
+
 ## 0.1.20 - 2026-10-25
 
 ### Fixed & Improved

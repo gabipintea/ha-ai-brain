@@ -45,6 +45,7 @@ class HomeAssistantAdapter(SmartHomePort):
         # context_id -> automation_entity_id from `automation_triggered` events
         self._automation_context_map: dict[str, str] = {}
         self._notification_action_handler: Callable[[str, str], Coroutine[Any, Any, None]] | None = None
+        self._discovered_panel_path: str | None = None
 
     def set_notification_action_handler(
         self,
@@ -97,6 +98,19 @@ class HomeAssistantAdapter(SmartHomePort):
                 await ws.send(json.dumps({"id": 103, "type": "config/entity_registry/list"}))
                 entities_msg = json.loads(await ws.recv())
                 entities_list = entities_msg.get("result") or []
+
+                # 4. Fetch Panels to discover Add-on's exact frontend URL path
+                await ws.send(json.dumps({"id": 104, "type": "get_panels"}))
+                panels_msg = json.loads(await ws.recv())
+                panels_dict = panels_msg.get("result") or {}
+                for k, v in panels_dict.items():
+                    addon_ref = (v.get("config") or {}).get("addon", "")
+                    title = v.get("title") or ""
+                    url_path = v.get("url_path") or k
+                    if addon_ref.endswith("ha_ai_brain") or k.endswith("ha_ai_brain") or title == "AI Brain":
+                        self._discovered_panel_path = f"/{url_path}"
+                        logger.info("Discovered HA Add-on Ingress panel path: %s", self._discovered_panel_path)
+                        break
 
             area_names: dict[str, str] = {}
             for a in areas_list:
@@ -381,6 +395,43 @@ class HomeAssistantAdapter(SmartHomePort):
         if not self._available_notify_services:
             await self.get_available_services()
         return self._available_notify_services or ["notify.notify"]
+
+    async def get_addon_panel_path(self) -> str:
+        """
+        Dynamically discover the Home Assistant frontend panel path for this add-on.
+        Works across any user installation (custom repos, local add-ons, or official store).
+        """
+        if self._discovered_panel_path:
+            return self._discovered_panel_path
+
+        # 1. Try Supervisor API (available inside HA add-on container)
+        import os
+        supervisor_token = os.getenv("SUPERVISOR_TOKEN") or os.getenv("HASSIO_TOKEN")
+        if supervisor_token:
+            try:
+                import httpx
+                async with httpx.AsyncClient(timeout=4.0) as client:
+                    resp = await client.get(
+                        "http://supervisor/addons/self/info",
+                        headers={"Authorization": f"Bearer {supervisor_token}"},
+                    )
+                    if resp.status_code == 200:
+                        slug = resp.json().get("data", {}).get("slug")
+                        if slug:
+                            self._discovered_panel_path = f"/{slug}"
+                            return self._discovered_panel_path
+            except Exception as exc:
+                logger.debug("Supervisor self/info lookup: %s", exc)
+
+        # 2. Refresh area registry map which queries get_panels over WebSocket
+        try:
+            await self.refresh_area_registry_map(force=True)
+            if self._discovered_panel_path:
+                return self._discovered_panel_path
+        except Exception as exc:
+            logger.debug("WebSocket get_panels lookup: %s", exc)
+
+        return "/ha_ai_brain"
 
     async def subscribe_state_changes(self) -> AsyncIterator[StateChangedEvent]:
         import websockets

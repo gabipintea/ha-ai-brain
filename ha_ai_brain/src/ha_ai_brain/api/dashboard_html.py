@@ -606,8 +606,22 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     pendingHashTarget = elementId;
   }
 
+  function getActiveHash() {
+    let rawHash = (window.location.hash || '').replace('#', '').trim();
+    if (!rawHash) {
+      try {
+        if (window.parent && window.parent !== window && window.parent.location && window.parent.location.hash) {
+          rawHash = (window.parent.location.hash || '').replace('#', '').trim();
+        }
+      } catch (e) {
+        // Cross-origin iframe fallback
+      }
+    }
+    return rawHash;
+  }
+
   function handleHashNav() {
-    const rawHash = (window.location.hash || '').replace('#', '').trim();
+    const rawHash = getActiveHash();
     if (!rawHash) return;
     if (['approvals', 'activity', 'memory', 'settings'].includes(rawHash)) {
       switchTab(rawHash);
@@ -632,15 +646,20 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       if (pane) pane.classList.toggle('active', t === tabName);
     });
     if (window.history && window.history.replaceState) {
-      const curHash = (window.location.hash || '').replace('#', '');
+      const curHash = getActiveHash();
       if (['approvals', 'activity', 'memory', 'settings'].includes(curHash)) {
         window.history.replaceState(null, null, '#' + tabName);
+        try {
+          if (window.parent && window.parent !== window && window.parent.history && window.parent.history.replaceState) {
+            window.parent.history.replaceState(null, null, '#' + tabName);
+          }
+        } catch (e) {}
       }
     }
   }
 
   function initTabs() {
-    const hash = (window.location.hash || '').replace('#', '').trim();
+    const hash = getActiveHash();
     if (['approvals', 'activity', 'memory', 'settings'].includes(hash)) {
       switchTab(hash);
     } else if (hash) {
@@ -1333,6 +1352,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
   initTabs();
   window.addEventListener('hashchange', handleHashNav);
+  try {
+    if (window.parent && window.parent !== window) {
+      window.parent.addEventListener('hashchange', handleHashNav);
+    }
+  } catch (e) {}
   refreshAll();
   setInterval(refreshAll, 5000);
 </script>

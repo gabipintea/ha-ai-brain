@@ -709,9 +709,15 @@ class BrainOrchestrator:
                     payload["title"] = "🧠 AI Brain Notice"
                 if "message" not in payload:
                     payload["message"] = intent.rationale
+                panel_path = "/ha_ai_brain"
+                if hasattr(self.smart_home, "get_addon_panel_path"):
+                    try:
+                        panel_path = await self.smart_home.get_addon_panel_path()
+                    except Exception:
+                        panel_path = "/ha_ai_brain"
                 data = dict(payload.get("data") or {})
-                data.setdefault("url", "/ha_ai_brain")
-                data.setdefault("clickAction", "/ha_ai_brain")
+                data.setdefault("url", panel_path)
+                data.setdefault("clickAction", panel_path)
                 payload["data"] = data
                 try:
                     res = await self.smart_home.call_service(

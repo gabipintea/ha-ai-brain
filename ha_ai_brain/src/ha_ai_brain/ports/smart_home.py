@@ -56,3 +56,7 @@ class SmartHomePort(ABC):
     async def get_available_notify_services(self) -> list[str]:
         """Return all available `notify.*` service targets discovered in Home Assistant."""
         return ["notify.notify"]
+
+    async def get_addon_panel_path(self) -> str:
+        """Dynamically discover the Home Assistant frontend panel path for this add-on."""
+        return "/ha_ai_brain"

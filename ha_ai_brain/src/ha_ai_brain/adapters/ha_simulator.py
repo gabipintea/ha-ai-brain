@@ -352,6 +352,9 @@ class SmartHomeSimulatorAdapter(SmartHomePort):
             }
         ][:limit]
 
+    async def get_addon_panel_path(self) -> str:
+        return "/ha_ai_brain"
+
     async def get_available_services(self) -> dict[str, list[str]]:
         return {
             "notify": ["notify", "mobile_app_phone", "persistent_notification"],

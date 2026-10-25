@@ -251,3 +251,63 @@ class TestServiceResolverAndAutomations(unittest.IsolatedAsyncioTestCase):
                     p.intent.native_automation.alias,
                     first_auto.intent.native_automation.alias,
                 )
+
+    async def test_6_dynamic_addon_panel_path_and_notification_urls(self) -> None:
+        """
+        Verify that notification URLs and clickAction deep-links use the dynamically
+        discovered Home Assistant panel path (e.g. /custom_ha_ai_brain) instead of
+        a hardcoded /ha_ai_brain path.
+        """
+        from ha_ai_brain.adapters.notification_ha import HomeAssistantNotificationAdapter
+        from ha_ai_brain.domain.models import ActionIntent, AdvisoryInsight, PendingApproval
+        from unittest.mock import AsyncMock
+
+        mock_smart_home = AsyncMock()
+        mock_smart_home.get_addon_panel_path = AsyncMock(return_value="/custom_ha_ai_brain")
+        mock_smart_home.call_service = AsyncMock(return_value={"success": True})
+        mock_smart_home.get_available_notify_services = AsyncMock(return_value=["notify.mobile_app_phone"])
+
+        notifier = HomeAssistantNotificationAdapter(
+            smart_home=mock_smart_home,
+            notify_service="notify.mobile_app_phone",
+        )
+
+        # 1. Approval notification
+        intent = ActionIntent(
+            intent_id="intent-test-123",
+            agent_id="energy_sustainability_agent",
+            domain="automation",
+            service="upsert_native_automation",
+            target_entity_ids=["switch.solar_diverter"],
+            cause_category="energy_efficiency",
+            rationale="Save solar energy",
+            payload={"test": "val"},
+        )
+        pending = PendingApproval(
+            approval_id="appr-test-123",
+            intent=intent,
+            signature="sig:energy:solar",
+        )
+        await notifier.send_approval_request(pending)
+
+        self.assertEqual(len(notifier.sent_notifications), 1)
+        appr_payload = notifier.sent_notifications[0]["payload"]["data"]
+        self.assertEqual(appr_payload["url"], f"/custom_ha_ai_brain#approval-{pending.approval_id}")
+        self.assertEqual(appr_payload["clickAction"], f"/custom_ha_ai_brain#approval-{pending.approval_id}")
+
+        # 2. Advisory Insight notification
+        insight = AdvisoryInsight(
+            insight_id="ins-test-456",
+            agent_id="air_quality_health_agent",
+            category="health_risk",
+            title="High CO2 detected",
+            finding_details="Bedroom CO2 sensor reads 1400ppm",
+            recommended_human_action="Open window for 10 minutes",
+        )
+        await notifier.send_advisory_alert(insight)
+
+        self.assertEqual(len(notifier.sent_notifications), 2)
+        ins_payload = notifier.sent_notifications[1]["payload"]["data"]
+        self.assertEqual(ins_payload["url"], f"/custom_ha_ai_brain#insight-{insight.insight_id}")
+        self.assertEqual(ins_payload["clickAction"], f"/custom_ha_ai_brain#insight-{insight.insight_id}")
+
