@@ -47,6 +47,10 @@ class MemoryStorePort(ABC):
         """Return the most recent explicit rejection per blocked signature (newest first)."""
         return []
 
+    async def get_accepted_automations(self) -> list[FeedbackEpisode]:
+        """Return historical native automations accepted and deployed by the homeowner."""
+        return []
+
     async def unblock_rejected_signature(self, signature: str) -> bool:
         """Remove explicit rejections for a signature so the suggestion may be proposed again."""
         return False

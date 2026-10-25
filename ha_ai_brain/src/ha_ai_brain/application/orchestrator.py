@@ -802,6 +802,7 @@ class BrainOrchestrator:
                 human_note=human_note or "Rejected by user via confirmation prompt.",
             )
             await self.memory.save_feedback(episode)
+            self.invalidate_context_caches()
             if human_note.strip():
                 await self.memory.save_user_context_note(
                     UserContextNote(
@@ -852,6 +853,7 @@ class BrainOrchestrator:
             human_note=human_note or f"User decision: {decision}",
         )
         await self.memory.save_feedback(episode)
+        self.invalidate_context_caches()
 
         return {
             "approval_id": approval_id,

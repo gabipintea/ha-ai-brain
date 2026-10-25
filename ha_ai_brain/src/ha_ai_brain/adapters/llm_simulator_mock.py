@@ -287,6 +287,9 @@ class SimulatorMockLLMAdapter(LLMProviderPort):
             attrs = auto_info.get("attributes") or {}
             for t in attrs.get("target_entities", []):
                 already_automated_targets.add(str(t))
+        for dep in hint.get("deployed_or_pending_automations", []):
+            for t in dep.get("targets", []):
+                already_automated_targets.add(str(t))
 
         for sig in signals:
             name = str(sig.get("signal_name", ""))

@@ -19,6 +19,7 @@ from ha_ai_brain.domain.models import (
     ExpectedOutcome,
     FeedbackEpisode,
     NativeAutomationProposal,
+    PendingApproval,
     ResearchFinding,
     UserContextNote,
 )
@@ -46,6 +47,9 @@ class AgentGraphState(TypedDict, total=False):
     proposed_intents: list[ActionIntent]
     advisory_insights: list[AdvisoryInsight]
     rejected_insights: list[AdvisoryInsight]
+    rejected_actions: list[FeedbackEpisode]
+    accepted_automations: list[FeedbackEpisode]
+    pending_approvals: list[PendingApproval]
     available_services: dict[str, list[str]]
     available_notify_services: list[str]
     configured_notify_service: str
@@ -148,6 +152,8 @@ class SpecializedAgentGraph:
         user_notes = await self.memory.get_user_context_notes(active_only=True)
         rejected_insights = await self.memory.get_rejected_insights()
         rejected_actions = await self.memory.get_rejected_suggestions()
+        accepted_automations = await self.memory.get_accepted_automations()
+        pending_approvals = await self.memory.get_pending_approvals()
         ignored_targets = await self.memory.get_ignored_targets()
         if ignored_targets:
             corroborated = {
@@ -168,6 +174,8 @@ class SpecializedAgentGraph:
             "user_context_notes": user_notes,
             "rejected_insights": rejected_insights,
             "rejected_actions": rejected_actions,
+            "accepted_automations": accepted_automations,
+            "pending_approvals": pending_approvals,
         }
 
     @staticmethod
@@ -369,6 +377,12 @@ class SpecializedAgentGraph:
             ep for ep in rejected_actions
             if ep.service_called == "automation.upsert_native_automation"
         ]
+        accepted_automations = state.get("accepted_automations", [])
+        pending_approvals = state.get("pending_approvals", [])
+        pending_automations = [
+            p for p in pending_approvals
+            if p.intent.domain == "automation" or p.intent.native_automation is not None
+        ]
 
         existing_automations = {
             eid: {
@@ -379,6 +393,31 @@ class SpecializedAgentGraph:
             for eid, st in corroborated.items()
             if st.domain == "automation"
         }
+
+        deployed_lines = []
+        for ep in accepted_automations:
+            data = ep.service_data or {}
+            alias = data.get("alias") or ep.cause_category
+            desc = data.get("description", "")
+            targets = ep.target_entity_ids or []
+            deployed_lines.append(f"- Deployed Automation: '{alias}' | Target devices: {targets}" + (f" | Details: '{desc}'" if desc else ""))
+
+        for p in pending_automations:
+            nat = p.intent.native_automation
+            alias = (nat.alias if nat else None) or (p.intent.service_data or {}).get("alias") or p.intent.cause_category
+            desc = nat.description if nat else p.intent.rationale
+            targets = p.intent.target_entity_ids or []
+            deployed_lines.append(f"- Pending Approval Automation (ID: {p.approval_id[:8]}): '{alias}' | Target devices: {targets}" + (f" | Details: '{desc}'" if desc else ""))
+
+        deployed_auto_instruction = ""
+        if deployed_lines:
+            deployed_text = "\n".join(deployed_lines)
+            deployed_auto_instruction = (
+                "\nCRITICAL RULES FOR ALREADY DEPLOYED OR PENDING AUTOMATIONS (DO NOT DUPLICATE):\n"
+                "The following automations are ALREADY DEPLOYED in Home Assistant or are CURRENTLY PENDING homeowner decision:\n"
+                f"{deployed_text}\n"
+                "You MUST NOT propose any native_automation that duplicates these automations, controls the same target devices for similar conditions, or accomplishes the same goal.\n"
+            )
 
         rej_instruction = ""
         if rejected_insights:
@@ -426,10 +465,11 @@ class SpecializedAgentGraph:
                 "Sub-Agent's derived signals, and the `existing_automations` already configured in Home Assistant.\n"
                 f"{rej_instruction}"
                 f"{rej_auto_instruction}"
+                f"{deployed_auto_instruction}"
                 "CRITICAL RULES FOR EXISTING AUTOMATIONS & USER CONTEXT NOTES:\n"
                 "- Strictly obey `user_context_notes` (e.g., mechanically broken features, devices used only in specific modes, or user directives). Never suggest actions or insights that contradict `user_context_notes`.\n"
                 "- Do NOT mistake repetitive device state changes driven by `existing_automations` for un-automated manual human habits.\n"
-                "- Do NOT propose a `native_automation` that duplicates an automation already listed in `existing_automations`.\n"
+                "- Do NOT propose a `native_automation` that duplicates an automation already listed in `existing_automations` or `deployed_or_pending_automations`.\n"
                 "- If an existing automation can be improved based on physical telemetry, emit an `advisory_insight` explaining how.\n"
                 "CRITICAL RULES FOR NATIVE AUTOMATIONS (Triggers, Conditions & Actions):\n"
                 "- ONLY use entity IDs that exist in the provided `entities` dictionary. Never hallucinate or assume non-existent entities.\n"
@@ -463,6 +503,21 @@ class SpecializedAgentGraph:
                         }
                         for ep in rejected_automations
                     ],
+                    "deployed_or_pending_automations": [
+                        {
+                            "alias": (ep.service_data or {}).get("alias") or ep.cause_category,
+                            "targets": ep.target_entity_ids,
+                            "status": "deployed",
+                        }
+                        for ep in accepted_automations
+                    ] + [
+                        {
+                            "alias": (p.intent.native_automation.alias if p.intent.native_automation else (p.intent.service_data or {}).get("alias") or p.intent.cause_category),
+                            "targets": p.intent.target_entity_ids,
+                            "status": "pending_approval",
+                        }
+                        for p in pending_automations
+                    ],
                     "existing_automations": existing_automations,
                     "available_ha_services": relevant_services,
                     "available_notification_services": available_notify,
@@ -482,6 +537,21 @@ class SpecializedAgentGraph:
                 "agent_id": agent_spec.agent_id,
                 "corroborated": {eid: s.model_dump(mode="json") for eid, s in corroborated.items()},
                 "existing_automations": existing_automations,
+                "deployed_or_pending_automations": [
+                    {
+                        "alias": (ep.service_data or {}).get("alias") or ep.cause_category,
+                        "targets": ep.target_entity_ids,
+                        "status": "deployed",
+                    }
+                    for ep in accepted_automations
+                ] + [
+                    {
+                        "alias": (p.intent.native_automation.alias if p.intent.native_automation else (p.intent.service_data or {}).get("alias") or p.intent.cause_category),
+                        "targets": p.intent.target_entity_ids,
+                        "status": "pending_approval",
+                    }
+                    for p in pending_automations
+                ],
                 "derived_signals": [d.model_dump(exclude={"python_code_executed"}) for d in derived_signals],
                 "research_findings": [f.model_dump() for f in research_findings],
                 "rejected_insights": [r.model_dump(mode="json") for r in rejected_insights],
@@ -551,6 +621,48 @@ class SpecializedAgentGraph:
                     return True
             return False
 
+        def _normalize_words(text: str) -> set[str]:
+            stopwords = {"the", "a", "an", "and", "or", "to", "for", "in", "on", "of", "with", "at", "by", "from", "ai", "brain", "native", "automation"}
+            words = set(re.findall(r"[a-z0-9]{3,}", text.lower()))
+            return words - stopwords
+
+        def _is_duplicate_automation(cand_alias: str, cand_targets: list[str]) -> bool:
+            c_words = _normalize_words(cand_alias)
+            c_targets_set = set(cand_targets)
+
+            # 1. Existing automations in Home Assistant
+            for eid, auto_info in existing_automations.items():
+                fname = auto_info.get("friendly_name", "")
+                ex_words = _normalize_words(fname)
+                if ex_words and len(ex_words & c_words) >= max(2, min(len(ex_words), len(c_words)) // 2 + 1):
+                    return True
+
+            # 2. Deployed / accepted automations
+            for ep in accepted_automations:
+                data = ep.service_data or {}
+                a_alias = data.get("alias") or ep.cause_category
+                a_words = _normalize_words(a_alias)
+                if a_words and len(a_words & c_words) >= max(2, min(len(a_words), len(c_words)) // 2 + 1):
+                    return True
+                ep_targets = set(ep.target_entity_ids or [])
+                if c_targets_set and ep_targets.intersection(c_targets_set):
+                    if a_words and len(a_words & c_words) >= 1:
+                        return True
+
+            # 3. Pending automations awaiting approval
+            for p in pending_automations:
+                nat = p.intent.native_automation
+                p_alias = (nat.alias if nat else None) or (p.intent.service_data or {}).get("alias") or p.intent.cause_category
+                p_words = _normalize_words(p_alias)
+                if p_words and len(p_words & c_words) >= max(2, min(len(p_words), len(c_words)) // 2 + 1):
+                    return True
+                p_targets = set(p.intent.target_entity_ids or [])
+                if c_targets_set and p_targets.intersection(c_targets_set):
+                    if p_words and len(p_words & c_words) >= 1:
+                        return True
+
+            return False
+
         intents: list[ActionIntent] = []
         raw_autos = llm_response.get("native_automations", [])
         if isinstance(raw_autos, dict):
@@ -579,13 +691,17 @@ class SpecializedAgentGraph:
                     preferred_notify_service=configured_notify,
                     known_entity_ids=set(corroborated.keys()),
                 )
+                cand_targets = proposal.extract_target_entities()
+                if _is_duplicate_automation(cand_alias, cand_targets):
+                    continue
+                all_targets = [f"automation.{proposal.automation_id}"] + cand_targets
                 intents.append(
                     ActionIntent(
                         agent_id=agent_spec.agent_id,
                         area_id=state.get("area_id"),
                         domain="automation",
                         service="upsert_native_automation",
-                        target_entity_ids=[f"automation.{proposal.automation_id}"],
+                        target_entity_ids=all_targets,
                         service_data=proposal.model_dump(),
                         cause_category=str(auto.get("cause_category", "crystallized_native_automation")),
                         rationale=proposal.discovered_pattern_rationale or proposal.description,

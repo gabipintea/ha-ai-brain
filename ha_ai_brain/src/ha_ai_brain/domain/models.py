@@ -161,6 +161,39 @@ class NativeAutomationProposal(BaseModel):
     action: list[dict[str, Any]]
     discovered_pattern_rationale: str = ""
 
+    def extract_target_entities(self) -> list[str]:
+        """Extract all physical entity IDs targeted by this automation's actions."""
+        targets: list[str] = []
+        for act in self.action:
+            if not isinstance(act, dict):
+                continue
+            tgt = act.get("target")
+            if isinstance(tgt, dict):
+                eids = tgt.get("entity_id", [])
+                if isinstance(eids, str) and eids:
+                    targets.append(eids)
+                elif isinstance(eids, list):
+                    targets.extend(str(e) for e in eids if e)
+            direct_eid = act.get("entity_id")
+            if isinstance(direct_eid, str) and direct_eid:
+                targets.append(direct_eid)
+            elif isinstance(direct_eid, list):
+                targets.extend(str(e) for e in direct_eid if e)
+            data = act.get("data")
+            if isinstance(data, dict):
+                data_eid = data.get("entity_id")
+                if isinstance(data_eid, str) and data_eid:
+                    targets.append(data_eid)
+                elif isinstance(data_eid, list):
+                    targets.extend(str(e) for e in data_eid if e)
+        seen: set[str] = set()
+        res: list[str] = []
+        for t in targets:
+            if t not in seen:
+                seen.add(t)
+                res.append(t)
+        return res
+
 
 class AdvisoryInsight(BaseModel):
     """Architectural, hardware, insulation, or parameter recommendation discovered during analysis."""

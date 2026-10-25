@@ -325,6 +325,17 @@ class SmartHomeSimulatorAdapter(SmartHomePort):
 
     async def upsert_automation(self, proposal: NativeAutomationProposal) -> dict[str, Any]:
         self._created_automations[proposal.automation_id] = proposal
+        auto_eid = f"automation.{proposal.automation_id}"
+        self._states[auto_eid] = EntityState(
+            entity_id=auto_eid,
+            state="on",
+            attributes={
+                "friendly_name": f"[AI Brain] {proposal.alias}",
+                "last_triggered": None,
+                "mode": proposal.mode,
+            },
+            area_id=None,
+        )
         return {
             "status": "automation_upserted",
             "automation_id": proposal.automation_id,

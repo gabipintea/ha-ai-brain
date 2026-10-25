@@ -2,6 +2,17 @@
 
 All notable changes to **HA AI Brain** are documented in this file.
 
+## 0.1.20 - 2026-10-25
+
+### Fixed & Improved
+- **Immediate Home Assistant Automation Reload & Multi-Layered Deduplication**:
+  - Fixed Home Assistant not registering newly accepted automations into `/api/states` by automatically calling service `automation.reload` immediately following `POST /api/config/automation/config/{id}`.
+  - Implemented `get_accepted_automations()` in `MemoryStorePort` and `SQLiteMemoryAdapter` to track historical automations approved and deployed by the homeowner.
+  - Injected all deployed and pending approval automations (with aliases, descriptions, and targeted physical devices) into the periodic batch LLM prompt (`CRITICAL RULES FOR ALREADY DEPLOYED OR PENDING AUTOMATIONS`).
+  - Added programmatic deduplication filter in `_synthesize_batch_node` (`_is_duplicate_automation`) checking candidate automations against existing HA automations, previously deployed automations, and in-flight pending approvals across both title similarity and physical target devices.
+  - Added `NativeAutomationProposal.extract_target_entities()` to populate `ActionIntent.target_entity_ids` with the underlying physical devices (e.g. `cover.living_room_blind`), enabling the Orchestrator's Conflict Arbiter to suppress duplicate in-flight proposals targeting the same devices even when titles differ.
+  - Added test case `test_5_accepted_and_pending_automations_prevent_duplicates` verifying reload and multi-layered deduplication.
+
 ## 0.1.19 - 2026-10-25
 
 ### Added & Improved

@@ -232,6 +232,28 @@ class SQLiteMemoryAdapter(MemoryStorePort):
             latest.append(ep)
         return latest
 
+    async def get_accepted_automations(self) -> list[FeedbackEpisode]:
+        rows = self._conn.execute(
+            """
+            SELECT payload_json FROM feedback_episodes
+            WHERE polarity IN (?, ?)
+              AND action_signature LIKE '%automation.upsert_native_automation%'
+            ORDER BY created_at DESC
+            """,
+            (FeedbackPolarity.ENDORSED_ONCE.value, FeedbackPolarity.ENDORSED_REPEATABLE.value),
+        ).fetchall()
+        seen: set[str] = set()
+        latest: list[FeedbackEpisode] = []
+        for r in rows:
+            ep = FeedbackEpisode.model_validate_json(r["payload_json"])
+            if ep.service_called != "automation.upsert_native_automation":
+                continue
+            if ep.action_signature in seen:
+                continue
+            seen.add(ep.action_signature)
+            latest.append(ep)
+        return latest
+
     async def unblock_rejected_signature(self, signature: str) -> bool:
         cur = self._conn.execute(
             "DELETE FROM feedback_episodes WHERE action_signature = ? AND polarity = ?",

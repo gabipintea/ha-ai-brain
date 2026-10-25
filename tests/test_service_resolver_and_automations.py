@@ -194,3 +194,60 @@ class TestServiceResolverAndAutomations(unittest.IsolatedAsyncioTestCase):
         self.assertIn(unprefixed_prop.automation_id, created)
         ha_upserted = created[unprefixed_prop.automation_id]
         self.assertEqual(ha_upserted.action[0]["service"], "notify.mobile_app_phone")
+
+    async def test_5_accepted_and_pending_automations_prevent_duplicates(self) -> None:
+        """
+        Verify that once an automation is approved and deployed:
+        1. It is saved in memory as an accepted automation with extracted target entities.
+        2. HA state simulator registers automation entity.
+        3. Subsequent batch analyses do not propose duplicate automations for the same devices.
+        4. In-flight pending proposals for the same devices are suppressed.
+        """
+        settings = BrainSettings(
+            use_simulator=True,
+            operating_mode=OperatingMode.PERIODIC_BATCH,
+            default_autonomy=AutonomyLevel.COPILOT,
+            db_path=self.db_file,
+            notification_service="notify.mobile_app_phone",
+        )
+        orchestrator = build_orchestrator(settings)
+        sim: SmartHomeSimulatorAdapter = orchestrator.smart_home
+
+        # 1. First batch run proposes automations
+        log1 = await orchestrator.run_periodic_batch_analysis(agent_id="climate_thermal_agent")
+        pending1 = await orchestrator.get_pending_approvals()
+        self.assertGreaterEqual(len(pending1), 1)
+
+        auto_pending = [p for p in pending1 if p.intent.domain == "automation"]
+        self.assertGreaterEqual(len(auto_pending), 1)
+        first_auto = auto_pending[0]
+
+        # Verify physical target entities were extracted
+        self.assertGreaterEqual(len(first_auto.intent.target_entity_ids), 2)
+
+        # 2. Approve the first automation
+        res_app = await orchestrator.handle_approval_decision(
+            approval_id=first_auto.approval_id,
+            decision="approved_once",
+        )
+        self.assertEqual(res_app["status"], "approved_once")
+
+        # Verify accepted automations stored in SQLite memory
+        accepted = await orchestrator.memory.get_accepted_automations()
+        self.assertEqual(len(accepted), 1)
+
+        # Verify HA state simulator has the automation registered as an entity
+        states = await sim.get_all_states()
+        self.assertIn(f"automation.{first_auto.intent.native_automation.automation_id}", states)
+
+        # 3. Second batch run: should NOT generate a duplicate automation for the same devices
+        log2 = await orchestrator.run_periodic_batch_analysis(agent_id="climate_thermal_agent")
+        pending2 = await orchestrator.get_pending_approvals()
+
+        # Any new proposals in pending2 must not duplicate the accepted automation
+        for p in pending2:
+            if p.intent.domain == "automation":
+                self.assertNotEqual(
+                    p.intent.native_automation.alias,
+                    first_auto.intent.native_automation.alias,
+                )

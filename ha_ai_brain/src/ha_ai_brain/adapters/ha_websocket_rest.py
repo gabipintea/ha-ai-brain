@@ -317,6 +317,17 @@ class HomeAssistantAdapter(SmartHomePort):
                 json=payload,
             )
             resp.raise_for_status()
+            # Immediately trigger automation.reload service so Home Assistant updates runtime entity registry
+            try:
+                reload_resp = await client.post(
+                    f"{self.base_url}/api/services/automation/reload",
+                    headers=self._headers(),
+                    json={},
+                )
+                if reload_resp.status_code < 400:
+                    logger.info("Triggered automation.reload successfully after upserting %s", proposal.automation_id)
+            except Exception as reload_err:
+                logger.warning("Could not trigger automation.reload after upserting %s: %s", proposal.automation_id, reload_err)
             return {"status": "automation_created", "automation_id": proposal.automation_id, "alias": payload["alias"]}
 
     async def get_system_logs(self, limit: int = 50) -> list[dict[str, Any]]:
