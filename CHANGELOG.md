@@ -2,6 +2,15 @@
 
 All notable changes to **HA AI Brain** are documented in this file.
 
+## 0.1.24 - 2026-10-25
+
+### Fixed & Improved
+- **Automatic Removal of Resolved Automations from Insights & Recommendations**:
+  - Filtered proposed automations in the "Insights and recommendations" column so only actively pending proposals awaiting homeowner decision are displayed.
+  - Automatically clears automations from the recommendations feed as soon as they are approved, rejected, or dismissed, eliminating ghost items that could not be cleared with `Dismiss all` or `Clear all`.
+  - Added direct quick-action buttons (`⚡ Review in Approvals`, `✕ Reject`, `Dismiss`) on pending automation cards in the Insights view.
+  - Updated activity tab and card badge counters to accurately reflect total active unread items (active advisory insights + pending automation proposals).
+
 ## 0.1.23 - 2026-10-25
 
 ### Added & Improved

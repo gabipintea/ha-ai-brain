@@ -1101,16 +1101,31 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     $('logsCountBadge').textContent = totalServerLogs;
     if ($('clearLogsBtn')) $('clearLogsBtn').style.display = totalServerLogs > 0 ? 'inline-block' : 'none';
 
+    const proposals = [];
+    (data.recent_logs || []).forEach(l => (l.proposed_intents || []).forEach((i, idx) => {
+      if (i.domain === 'automation' || i.native_automation) {
+        const ex = (l.execution_results || [])[idx] || {};
+        const approvalId = i.approval_id || ex.approval_id;
+        const st = (latestApprovalStatuses && latestApprovalStatuses[approvalId]) || (activePendingApprovalIds.has(approvalId) ? 'pending' : '');
+        // An automation proposal belongs in "Insights & recommendations" ONLY if it is still awaiting user action!
+        // Once approved, rejected, or dismissed, it is resolved and lives in Agent Activity and Memory & Rules.
+        if (approvalId && (activePendingApprovalIds.has(approvalId) || (!st || st === 'pending'))) {
+          proposals.push({agent: l.agent_id, intent: i, run_id: l.run_id, approvalId});
+        }
+      }
+    }));
+
     const unreadInsights = data.active_insights_count !== undefined ? data.active_insights_count : (data.advisory_insights || []).length;
+    const totalActiveItems = unreadInsights + proposals.length;
     const tabActBadge = $('tabBadge-activity');
     if (tabActBadge) {
-      tabActBadge.style.display = unreadInsights > 0 ? 'inline-block' : 'none';
-      tabActBadge.textContent = unreadInsights;
+      tabActBadge.style.display = totalActiveItems > 0 ? 'inline-block' : 'none';
+      tabActBadge.textContent = totalActiveItems;
     }
     const insBadge = $('activeInsightsCountBadge');
     if (insBadge) {
-      insBadge.style.display = unreadInsights > 0 ? 'inline-block' : 'none';
-      insBadge.textContent = unreadInsights;
+      insBadge.style.display = totalActiveItems > 0 ? 'inline-block' : 'none';
+      insBadge.textContent = totalActiveItems;
     }
     if ($('dismissAllInsightsBtn')) $('dismissAllInsightsBtn').style.display = unreadInsights > 0 ? 'inline-block' : 'none';
     if ($('clearAllInsightsBtn')) $('clearAllInsightsBtn').style.display = (data.advisory_insights || []).length > 0 ? 'inline-block' : 'none';
@@ -1134,10 +1149,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     more.style.display = allLoadedLogs.length < totalServerLogs ? 'block' : 'none';
     $('loadMoreLogsBtn').textContent = `Load older activity (${allLoadedLogs.length} of ${totalServerLogs})`;
 
-    const proposals = [];
-    (data.recent_logs || []).forEach(l => (l.proposed_intents || []).forEach(i => {
-      if (i.domain === 'automation' || i.native_automation) proposals.push({agent: l.agent_id, intent: i, run_id: l.run_id});
-    }));
     let html = (data.advisory_insights || []).map(ins => {
       const viewRunBtn = ins.run_id
         ? `<button class="icon" type="button" style="font-size:11px; padding:3px 8px; color:var(--accent); border-color:rgba(79,156,249,0.4);" onclick="jumpToElement('activity', 'log-${esc(ins.run_id)}')">🔍 View <span class="hide-mobile">agent </span>reasoning</button>`
@@ -1172,28 +1183,37 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         </div>
       </div>`;
     }).join('');
-    html += proposals.map(({agent, intent, run_id}) => {
-      const approvalId = intent.approval_id;
-      const jumpApprovalBtn = approvalId
-        ? renderApprovalStatusBadge(approvalId, true)
-        : '';
+    html += proposals.map(({agent, intent, run_id, approvalId}) => {
       const viewRunBtn = run_id
         ? `<button class="icon" type="button" style="font-size:11px; padding:3px 8px; color:var(--accent); border-color:rgba(79,156,249,0.4);" onclick="jumpToElement('activity', 'log-${esc(run_id)}')">🔍 View <span class="hide-mobile">agent </span>reasoning</button>`
         : '';
+      const actions = approvalId ? `
+        <div class="insight-actions">
+          <button class="icon primary" style="font-size:11px; padding:4px 9px;" onclick="jumpToElement('approvals', 'approval-${esc(approvalId)}')">
+            ⚡ Review in Approvals
+          </button>
+          <button class="icon" style="font-size:11px; padding:4px 9px; color:#e74c3c; border-color:rgba(231,76,60,0.35);" onclick="decideApproval('${esc(approvalId)}', 'rejected')" title="Reject this proposed automation">
+            ✕ Reject
+          </button>
+          <button class="icon" style="font-size:11px; padding:4px 8px; color:var(--muted);" onclick="decideApproval('${esc(approvalId)}', 'dismissed')" title="Dismiss without action">
+            Dismiss
+          </button>
+        </div>` : '';
       return `
-      <div class="item">
+      <div class="item" id="prop-${esc(approvalId || run_id)}">
         <div class="insight-head">
           <div class="insight-title-group">
             <strong class="insight-title">⚡ Proposed automation</strong>
             <span class="muted" style="font-size:12px;">${esc(agent)}</span>
           </div>
-          <div class="insight-meta">${jumpApprovalBtn}${viewRunBtn}</div>
+          <div class="insight-meta">${viewRunBtn}</div>
         </div>
         <div class="muted" style="margin:6px 0; font-size:13px; line-height:1.4; word-break: break-word; overflow-wrap: anywhere;">${esc(intent.rationale)}</div>
         <pre>${esc(JSON.stringify(intent.native_automation || intent.service_data, null, 2))}</pre>
+        ${actions}
       </div>`;
     }).join('');
-    $('insightsList').innerHTML = html || '<div class="empty">No insights yet. Run an analysis to generate some.</div>';
+    $('insightsList').innerHTML = html || '<div class="empty">No active insights or recommendations. Run an analysis to generate some.</div>';
 
     if (pendingHashTarget) {
       let el = document.getElementById(pendingHashTarget)
