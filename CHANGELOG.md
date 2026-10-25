@@ -2,6 +2,19 @@
 
 All notable changes to **HA AI Brain** are documented in this file.
 
+## 0.1.17 - 2026-10-25
+
+### Added & Improved
+- **Responsive Mobile Layout & Button Optimization for Insights & Recommendations**:
+  - Fixed category pills collapsing vertically character-by-character on narrow mobile screens by adding `white-space: nowrap; flex-shrink: 0;` to `.pill`.
+  - Re-architected `.insight-head` with responsive flex-wrapping so insight titles span full width naturally on mobile while pills and reasoning buttons wrap cleanly underneath.
+  - Added responsive `.hide-mobile` utility to compact action buttons on smaller screens:
+    - `✕ Reject & Never suggest` $\rightarrow$ `✕ Reject` (maintaining full tooltip explanation).
+    - `🗑 Delete` $\rightarrow$ `🗑` icon button.
+    - `🔍 View agent reasoning` $\rightarrow$ `🔍 View reasoning`.
+  - Optimized `.insight-actions` with touch-friendly tap targets and equal button distribution across mobile screens.
+  - Compacted header action buttons (`Dismiss all`, `Clear all`) to avoid wrapping and title crushing in narrow card headers.
+
 ## 0.1.16 - 2026-10-25
 
 ### Added & Improved

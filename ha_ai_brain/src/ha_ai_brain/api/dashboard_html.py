@@ -44,6 +44,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px;
       font-size: 0.74rem; font-weight: 600; letter-spacing: 0.02em; text-transform: uppercase;
       background: rgba(79,156,249,0.14); color: var(--accent); border: 1px solid rgba(79,156,249,0.3);
+      white-space: nowrap; flex-shrink: 0;
     }
     .pill.ok { background: rgba(52,211,153,0.12); color: var(--ok); border-color: rgba(52,211,153,0.3); }
     .pill.warn { background: rgba(251,191,36,0.12); color: var(--warn); border-color: rgba(251,191,36,0.3); }
@@ -222,8 +223,44 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       animation: highlightPulse 3.5s cubic-bezier(0.25, 1, 0.5, 1) forwards !important;
       border-color: var(--accent) !important;
     }
+    .insight-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 8px 12px;
+      flex-wrap: wrap;
+      margin-bottom: 6px;
+    }
+    .insight-title-group {
+      min-width: 0;
+      flex: 1 1 200px;
+    }
+    .insight-title {
+      font-size: 0.96rem;
+      font-weight: 650;
+      line-height: 1.35;
+      color: var(--text);
+      display: block;
+    }
+    .insight-meta {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: wrap;
+      flex-shrink: 0;
+    }
+    .insight-actions {
+      display: flex;
+      gap: 6px 8px;
+      justify-content: flex-end;
+      align-items: center;
+      flex-wrap: wrap;
+      margin-top: 10px;
+    }
     @media (max-width: 600px) {
       body { padding-top: 14px; }
+      .card { padding: 14px; }
+      .card-head { gap: 6px; margin-bottom: 10px; flex-wrap: wrap; }
       .btn-row button { flex: 1 1 100%; }
       header { flex-direction: column; align-items: flex-start; }
       .nav-tabs { gap: 6px; }
@@ -233,6 +270,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       .inline-form button { width: 100%; }
       .row { gap: 10px; }
       .row > button { padding: 6px 12px; font-size: 0.82rem; }
+      .hide-mobile { display: none !important; }
+      .insight-actions { justify-content: stretch; gap: 6px; }
+      .insight-actions button { flex: 1 1 auto; text-align: center; justify-content: center; padding: 6px 8px; font-size: 11px; }
     }
   </style>
 </head>
@@ -301,8 +341,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       <div class="card">
         <div class="card-head">
           <h2>Agent activity</h2>
-          <div style="display:flex; align-items:center; gap:8px;">
-            <button id="clearLogsBtn" class="icon" style="display:none; font-size:12px; padding:4px 8px;" onclick="clearActivityLogs()">Clear logs</button>
+          <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
+            <button id="clearLogsBtn" class="icon" style="display:none; font-size:11px; padding:3px 8px;" onclick="clearActivityLogs()">Clear logs</button>
             <span class="pill" id="logsCountBadge">0</span>
           </div>
         </div>
@@ -318,9 +358,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       <div class="card">
         <div class="card-head">
           <h2>Insights and recommendations</h2>
-          <div style="display:flex; align-items:center; gap:8px;">
-            <button id="dismissAllInsightsBtn" class="icon" style="display:none; font-size:12px; padding:4px 8px;" onclick="dismissAllInsights()">Dismiss all</button>
-            <button id="clearAllInsightsBtn" class="icon" style="display:none; font-size:12px; padding:4px 8px;" onclick="clearAllInsights()">Clear all</button>
+          <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
+            <button id="dismissAllInsightsBtn" class="icon" style="display:none; font-size:11px; padding:3px 8px;" onclick="dismissAllInsights()">Dismiss all</button>
+            <button id="clearAllInsightsBtn" class="icon" style="display:none; font-size:11px; padding:3px 8px;" onclick="clearAllInsights()">Clear all</button>
             <span class="pill info" id="activeInsightsCountBadge" style="display:none;">0</span>
           </div>
         </div>
@@ -1028,34 +1068,34 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }));
     let html = (data.advisory_insights || []).map(ins => {
       const viewRunBtn = ins.run_id
-        ? `<button class="icon" type="button" style="font-size:11px; padding:3px 8px; color:var(--accent); border-color:rgba(79,156,249,0.4);" onclick="jumpToElement('activity', 'log-${esc(ins.run_id)}')">🔍 View agent reasoning</button>`
+        ? `<button class="icon" type="button" style="font-size:11px; padding:3px 8px; color:var(--accent); border-color:rgba(79,156,249,0.4);" onclick="jumpToElement('activity', 'log-${esc(ins.run_id)}')">🔍 View <span class="hide-mobile">agent </span>reasoning</button>`
         : '';
       return `
       <div class="item" id="ins-${esc(ins.insight_id)}" data-insight-id="${esc(ins.insight_id)}">
-        <div class="row">
-          <div>
-            <strong>${esc(ins.title)}</strong>
+        <div class="insight-head">
+          <div class="insight-title-group">
+            <strong class="insight-title">${esc(ins.title)}</strong>
             ${ins.created_at ? `<div class="muted" style="font-size:11px; margin-top:2px;">${esc(new Date(ins.created_at).toLocaleString())}</div>` : ''}
           </div>
-          <div style="display:flex; align-items:center; gap:6px;">
+          <div class="insight-meta">
             <span class="pill">${esc((ins.category || 'advisory').replace(/_/g, ' '))}</span>
             ${viewRunBtn}
           </div>
         </div>
-        <div class="muted" style="margin:8px 0; white-space: pre-wrap; line-height: 1.45;">${esc(ins.finding_details)}</div>
-        <div style="margin-top:6px; padding:6px 10px; background:rgba(46, 204, 113, 0.12); border-left:3px solid #2ecc71; border-radius:4px; font-size:13px;">
+        <div class="muted" style="margin:8px 0; white-space: pre-wrap; line-height: 1.45; word-break: break-word; overflow-wrap: anywhere;">${esc(ins.finding_details)}</div>
+        <div style="margin-top:6px; padding:6px 10px; background:rgba(46, 204, 113, 0.12); border-left:3px solid #2ecc71; border-radius:4px; font-size:13px; line-height:1.4; word-break: break-word; overflow-wrap: anywhere;">
           <strong>Recommended:</strong> ${esc(ins.recommended_human_action)}
         </div>
-        ${ins.estimated_impact ? `<div class="muted" style="margin-top:6px; font-size:12px;"><strong>Impact:</strong> ${esc(ins.estimated_impact)}</div>` : ''}
-        <div class="row" style="margin-top:10px; gap:8px; justify-content: flex-end; align-items:center;">
-          <button class="icon" style="font-size:12px; padding:4px 10px;" onclick="dismissInsight('${esc(ins.insight_id)}')" title="Mark as read / dismiss from active list">
+        ${ins.estimated_impact ? `<div class="muted" style="margin-top:6px; font-size:12px; line-height:1.35; word-break: break-word; overflow-wrap: anywhere;"><strong>Impact:</strong> ${esc(ins.estimated_impact)}</div>` : ''}
+        <div class="insight-actions">
+          <button class="icon" style="font-size:11px; padding:4px 9px;" onclick="dismissInsight('${esc(ins.insight_id)}')" title="Mark as read / dismiss from active list">
             ✓ Mark read
           </button>
-          <button class="icon" style="font-size:12px; padding:4px 10px; color:#e74c3c;" onclick="rejectInsightPrompt('${esc(ins.insight_id)}')" title="Reject this advice so agents never suggest it again">
-            ✕ Reject &amp; Never suggest
+          <button class="icon" style="font-size:11px; padding:4px 9px; color:#e74c3c; border-color:rgba(231,76,60,0.35);" onclick="rejectInsightPrompt('${esc(ins.insight_id)}')" title="Reject this advice so agents never suggest it again">
+            ✕ Reject<span class="hide-mobile"> &amp; Never suggest</span>
           </button>
-          <button class="icon" style="font-size:12px; padding:4px 8px; color:var(--muted);" onclick="deleteInsight('${esc(ins.insight_id)}')" title="Delete insight permanently">
-            &times;
+          <button class="icon" style="font-size:11px; padding:4px 8px; color:var(--muted);" onclick="deleteInsight('${esc(ins.insight_id)}')" title="Delete insight permanently">
+            🗑<span class="hide-mobile"> Delete</span>
           </button>
         </div>
       </div>`;
@@ -1066,15 +1106,18 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         ? `<button class="icon primary" type="button" style="font-size:11px; padding:3px 8px;" onclick="jumpToElement('approvals', 'approval-${esc(approvalId)}')">⚡ View Pending Approval</button>`
         : '';
       const viewRunBtn = run_id
-        ? `<button class="icon" type="button" style="font-size:11px; padding:3px 8px; color:var(--accent); border-color:rgba(79,156,249,0.4);" onclick="jumpToElement('activity', 'log-${esc(run_id)}')">🔍 View agent reasoning</button>`
+        ? `<button class="icon" type="button" style="font-size:11px; padding:3px 8px; color:var(--accent); border-color:rgba(79,156,249,0.4);" onclick="jumpToElement('activity', 'log-${esc(run_id)}')">🔍 View <span class="hide-mobile">agent </span>reasoning</button>`
         : '';
       return `
       <div class="item">
-        <div class="row">
-          <div><strong>Proposed automation</strong> <span class="muted">${esc(agent)}</span></div>
-          <div style="display:flex; align-items:center; gap:6px;">${jumpApprovalBtn}${viewRunBtn}</div>
+        <div class="insight-head">
+          <div class="insight-title-group">
+            <strong class="insight-title">⚡ Proposed automation</strong>
+            <span class="muted" style="font-size:12px;">${esc(agent)}</span>
+          </div>
+          <div class="insight-meta">${jumpApprovalBtn}${viewRunBtn}</div>
         </div>
-        <div class="muted" style="margin:6px 0;">${esc(intent.rationale)}</div>
+        <div class="muted" style="margin:6px 0; font-size:13px; line-height:1.4; word-break: break-word; overflow-wrap: anywhere;">${esc(intent.rationale)}</div>
         <pre>${esc(JSON.stringify(intent.native_automation || intent.service_data, null, 2))}</pre>
       </div>`;
     }).join('');
