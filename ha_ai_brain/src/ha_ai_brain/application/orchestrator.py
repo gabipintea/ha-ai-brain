@@ -25,6 +25,7 @@ from ha_ai_brain.domain.models import (
     StateChangedEvent,
     UserContextNote,
 )
+from ha_ai_brain.domain.service_resolver import normalize_automation_proposal
 from ha_ai_brain.domain.triage import EdgeSignalTriage, matches_device_class_or_heuristics
 from ha_ai_brain.ports.billing import LicensePort
 from ha_ai_brain.ports.llm import LLMProviderPort
@@ -308,6 +309,9 @@ class BrainOrchestrator:
             )
             return None
 
+        available_services = await self.smart_home.get_available_services()
+        available_notify = await self.smart_home.get_available_notify_services()
+
         initial_state: AgentGraphState = {
             "agent_spec": agent_spec,
             "site_context": self.settings.site_context,
@@ -315,6 +319,9 @@ class BrainOrchestrator:
             "area_id": frame.area_id,
             "trigger_summary": frame.significance_reason,
             "corroborated_states": frame.corroborated_states,
+            "available_services": available_services,
+            "available_notify_services": available_notify,
+            "configured_notify_service": self.settings.notification_service,
         }
 
         final_state = await self.agent_graph.ainvoke(initial_state)
@@ -420,6 +427,9 @@ class BrainOrchestrator:
             now.strftime("%Y-%m-%d %H:%M:%S UTC"),
         )
 
+        available_services = await self.smart_home.get_available_services()
+        available_notify = await self.smart_home.get_available_notify_services()
+
         initial_state: AgentGraphState = {
             "agent_spec": agent_spec,
             "site_context": self.settings.site_context,
@@ -428,6 +438,9 @@ class BrainOrchestrator:
             "area_id": area_id,
             "trigger_summary": f"Periodic/Manual Batch Analysis for {agent_spec.name} ({effective_lookback}h lookback)",
             "corroborated_states": filtered_states,
+            "available_services": available_services,
+            "available_notify_services": available_notify,
+            "configured_notify_service": self.settings.notification_service,
         }
 
         final_state = await self.agent_graph.ainvoke(initial_state)
@@ -668,6 +681,15 @@ class BrainOrchestrator:
 
         try:
             if intent.domain == "automation" and intent.native_automation is not None:
+                available_services = await self.smart_home.get_available_services()
+                available_notify = await self.smart_home.get_available_notify_services()
+                intent.native_automation = normalize_automation_proposal(
+                    proposal=intent.native_automation,
+                    available_services=available_services,
+                    available_notify_services=available_notify,
+                    preferred_notify_service=self.settings.notification_service,
+                    known_entity_ids=set(self._cached_states.keys()),
+                )
                 res = await self.smart_home.upsert_automation(intent.native_automation)
             elif intent.domain == "notify":
                 # Strictly use the single notification service chosen by the user in Settings / UI
@@ -833,6 +855,29 @@ class BrainOrchestrator:
             "repeatable_rule_saved": decision == "approved_repeatable",
             "service_output": exec_res,
         }
+
+    async def get_pending_approvals(self) -> list[PendingApproval]:
+        """Fetch active pending approvals and ensure native automation actions are normalized against discovered services."""
+        pending = await self.memory.get_pending_approvals()
+        if not pending:
+            return []
+        try:
+            available_services = await self.smart_home.get_available_services()
+            available_notify = await self.smart_home.get_available_notify_services()
+            pref_notify = self.settings.notification_service
+            for p in pending:
+                if p.intent and p.intent.domain == "automation" and p.intent.native_automation:
+                    p.intent.native_automation = normalize_automation_proposal(
+                        proposal=p.intent.native_automation,
+                        available_services=available_services,
+                        available_notify_services=available_notify,
+                        preferred_notify_service=pref_notify,
+                        known_entity_ids=set(self._cached_states.keys()),
+                    )
+                    p.intent.service_data = p.intent.native_automation.model_dump()
+        except Exception as exc:
+            logger.warning("Could not normalize pending approval automation actions: %s", exc)
+        return pending
 
     async def dismiss_all_pending(self) -> int:
         pending = await self.memory.get_pending_approvals()

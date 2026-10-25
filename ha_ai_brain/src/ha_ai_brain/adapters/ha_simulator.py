@@ -341,6 +341,19 @@ class SmartHomeSimulatorAdapter(SmartHomePort):
             }
         ][:limit]
 
+    async def get_available_services(self) -> dict[str, list[str]]:
+        return {
+            "notify": ["notify", "mobile_app_phone", "persistent_notification"],
+            "light": ["turn_on", "turn_off", "toggle"],
+            "switch": ["turn_on", "turn_off", "toggle"],
+            "cover": ["open_cover", "close_cover", "set_cover_position", "stop_cover"],
+            "climate": ["set_temperature", "set_hvac_mode", "set_preset_mode"],
+            "fan": ["turn_on", "turn_off", "set_percentage"],
+            "lock": ["lock", "unlock"],
+            "automation": ["trigger", "reload", "turn_on", "turn_off"],
+            "homeassistant": ["turn_on", "turn_off", "toggle", "reload_core_config"],
+        }
+
     async def get_available_notify_services(self) -> list[str]:
         return list(self._available_notify_services)
 

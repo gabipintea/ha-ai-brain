@@ -22,6 +22,7 @@ from ha_ai_brain.domain.models import (
     ResearchFinding,
     UserContextNote,
 )
+from ha_ai_brain.domain.service_resolver import normalize_automation_proposal, resolve_notification_service
 from ha_ai_brain.ports.llm import LLMProviderPort
 from ha_ai_brain.ports.memory import MemoryStorePort
 from ha_ai_brain.ports.smart_home import SmartHomePort
@@ -45,6 +46,9 @@ class AgentGraphState(TypedDict, total=False):
     proposed_intents: list[ActionIntent]
     advisory_insights: list[AdvisoryInsight]
     rejected_insights: list[AdvisoryInsight]
+    available_services: dict[str, list[str]]
+    available_notify_services: list[str]
+    configured_notify_service: str
 
 
 # Backward compatibility alias
@@ -262,6 +266,15 @@ class SpecializedAgentGraph:
                     "attributes": compact_attrs(s.attributes),
                 }
 
+        available_services = state.get("available_services", {})
+        available_notify = state.get("available_notify_services", [])
+        configured_notify = state.get("configured_notify_service", "notify.notify")
+        relevant_services = {
+            dom: svcs
+            for dom, svcs in available_services.items()
+            if dom in agent_spec.controllable_domains or dom in ("notify", "homeassistant")
+        }
+
         llm_response = await self.llm.generate_json(
             system_prompt=(
                 f"You are the {agent_spec.name} ({agent_spec.specialty}). "
@@ -295,6 +308,9 @@ class SpecializedAgentGraph:
                     "trigger_summary": trigger_summary,
                     "sensor_states": relevant_sensors,
                     "available_actuators": actuators,
+                    "available_ha_services": relevant_services,
+                    "available_notification_services": available_notify,
+                    "preferred_notification_service": configured_notify,
                     "research_findings": [f.model_dump() for f in research_findings],
                     "derived_signals": [d.model_dump(exclude={"python_code_executed"}) for d in derived_signals],
                     "past_feedback": [
@@ -325,6 +341,8 @@ class SpecializedAgentGraph:
             raw_actions=llm_response.get("actions", []),
             agent_id=agent_spec.agent_id,
             default_area_id=state.get("area_id"),
+            available_notify_services=available_notify,
+            preferred_notify_service=configured_notify,
         )
         return {"proposed_intents": intents, "advisory_insights": []}
 
@@ -385,6 +403,15 @@ class SpecializedAgentGraph:
                 f"{auto_lines}\n"
             )
 
+        available_services = state.get("available_services", {})
+        available_notify = state.get("available_notify_services", [])
+        configured_notify = state.get("configured_notify_service", "notify.notify")
+        relevant_services = {
+            dom: svcs
+            for dom, svcs in available_services.items()
+            if dom in agent_spec.controllable_domains or dom in ("notify", "homeassistant")
+        }
+
         llm_response = await self.llm.generate_json(
             system_prompt=(
                 f"You are the {agent_spec.name} ({agent_spec.specialty}) running in Periodic Deep Batch Analysis Mode. "
@@ -398,6 +425,12 @@ class SpecializedAgentGraph:
                 "- Do NOT mistake repetitive device state changes driven by `existing_automations` for un-automated manual human habits.\n"
                 "- Do NOT propose a `native_automation` that duplicates an automation already listed in `existing_automations`.\n"
                 "- If an existing automation can be improved based on physical telemetry, emit an `advisory_insight` explaining how.\n"
+                "CRITICAL RULES FOR NATIVE AUTOMATIONS (Triggers, Conditions & Actions):\n"
+                "- ONLY use entity IDs that exist in the provided `entities` dictionary. Never hallucinate or assume non-existent entities.\n"
+                "- ONLY use valid Home Assistant services that exist in the provided `available_ha_services`.\n"
+                f"- When an automation action sends a notification (e.g. alerting the homeowner), you MUST use a valid service from `available_notification_services` (preferred: '{configured_notify}').\n"
+                f"- NEVER invent non-existent notification services or guess device names (e.g. never invent unverified device names). If notifying the homeowner, use '{configured_notify}'.\n"
+                "- Actions must use standard Home Assistant action schema: `{'service': 'domain.service', 'target': {'entity_id': '...'}, 'data': {...}}`.\n"
                 "Return JSON with:\n"
                 "1) `advisory_insights`: list of objects (`category`, `title` (concise 4-8 words), `finding_details` (deep technical analysis with sensor readings and psychrometric context), `evidence_metrics`, "
                 "`recommended_human_action` (direct actionable step for homeowner), `estimated_impact`).\n"
@@ -425,6 +458,9 @@ class SpecializedAgentGraph:
                         for ep in rejected_automations
                     ],
                     "existing_automations": existing_automations,
+                    "available_ha_services": relevant_services,
+                    "available_notification_services": available_notify,
+                    "preferred_notification_service": configured_notify,
                     "derived_signals": [d.model_dump(exclude={"python_code_executed"}) for d in derived_signals],
                     "research_findings": [f.model_dump() for f in research_findings],
                     "entities": {
@@ -530,6 +566,13 @@ class SpecializedAgentGraph:
                     action=raw_act if isinstance(raw_act, list) else [raw_act] if isinstance(raw_act, dict) else [],
                     discovered_pattern_rationale=str(auto.get("discovered_pattern_rationale", "")),
                 )
+                proposal = normalize_automation_proposal(
+                    proposal=proposal,
+                    available_services=available_services,
+                    available_notify_services=available_notify,
+                    preferred_notify_service=configured_notify,
+                    known_entity_ids=set(corroborated.keys()),
+                )
                 intents.append(
                     ActionIntent(
                         agent_id=agent_spec.agent_id,
@@ -553,6 +596,8 @@ class SpecializedAgentGraph:
                 raw_actions=llm_response.get("actions", []),
                 agent_id=agent_spec.agent_id,
                 default_area_id=state.get("area_id"),
+                available_notify_services=available_notify,
+                preferred_notify_service=configured_notify,
             )
         )
 
@@ -563,6 +608,8 @@ class SpecializedAgentGraph:
         raw_actions: list[Any],
         agent_id: str,
         default_area_id: str | None,
+        available_notify_services: list[str] | None = None,
+        preferred_notify_service: str = "notify.notify",
     ) -> list[ActionIntent]:
         intents: list[ActionIntent] = []
         for item in raw_actions:
@@ -587,11 +634,23 @@ class SpecializedAgentGraph:
             if isinstance(raw_ds, str):
                 raw_ds = [raw_ds]
 
+            domain_val = str(item["domain"]).strip().lower()
+            service_val = str(item["service"]).strip().lower()
+
+            # Resolve notification services dynamically
+            if domain_val == "notify" and available_notify_services:
+                resolved = resolve_notification_service(
+                    target_service=f"notify.{service_val}",
+                    available_notify_services=available_notify_services,
+                    preferred_service=preferred_notify_service,
+                )
+                domain_val, _, service_val = resolved.partition(".")
+
             intent = ActionIntent(
                 agent_id=agent_id,
                 area_id=item.get("area_id", default_area_id),
-                domain=str(item["domain"]),
-                service=str(item["service"]),
+                domain=domain_val,
+                service=service_val,
                 target_entity_ids=[str(t) for t in raw_targets] if isinstance(raw_targets, list) else [],
                 service_data=sd_dict,
                 cause_category=str(item.get("cause_category", "autonomous_reaction")),

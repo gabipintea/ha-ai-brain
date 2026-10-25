@@ -7,6 +7,7 @@ import re
 from typing import Any
 
 from ha_ai_brain.domain.models import ActionIntent, AdvisoryInsight, PendingApproval
+from ha_ai_brain.domain.service_resolver import resolve_notification_service
 from ha_ai_brain.ports.notification import NotificationPort
 from ha_ai_brain.ports.smart_home import SmartHomePort
 
@@ -35,37 +36,17 @@ class HomeAssistantNotificationAdapter(NotificationPort):
         - User configured invalid/missing service -> falls back to 'notify.notify'
         """
         raw = (self.notify_service or "notify.notify").strip()
-        domain, _, service = raw.partition(".")
-        if not service:
-            service = domain
-            domain = "notify"
-        domain = domain or "notify"
-
+        available = []
         if hasattr(self.smart_home, "get_available_notify_services"):
             available = await self.smart_home.get_available_notify_services()
-            full = f"{domain}.{service}"
-            if full in available:
-                return domain, service
 
-            # Try prefixing with mobile_app_
-            mobile_candidate = f"notify.mobile_app_{service}"
-            if mobile_candidate in available:
-                return "notify", f"mobile_app_{service}"
-
-            # Try matching substring (e.g. 'your_phone' in 'notify.mobile_app_your_phone')
-            for avail in available:
-                if service in avail or avail.endswith(f"_{service}"):
-                    d, _, s = avail.partition(".")
-                    return d or "notify", s
-
-            # Fallback to notify.notify if available, else first available
-            if "notify.notify" in available:
-                return "notify", "notify"
-            if available:
-                d, _, s = available[0].partition(".")
-                return d or "notify", s
-
-        return domain, service
+        resolved = resolve_notification_service(
+            target_service=raw,
+            available_notify_services=available,
+            preferred_service=raw,
+        )
+        domain, _, service = resolved.partition(".")
+        return domain or "notify", service or "notify"
 
     @staticmethod
     def _compact_title(raw_title: str, prefix: str = "🧠 AI Brain", max_chars: int = 44) -> str:

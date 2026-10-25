@@ -49,6 +49,10 @@ class SmartHomePort(ABC):
     def subscribe_state_changes(self) -> AsyncIterator[StateChangedEvent]:
         """Yield live state_changed events streamed from Home Assistant."""
 
+    async def get_available_services(self) -> dict[str, list[str]]:
+        """Return all available registered services in Home Assistant grouped by domain (e.g. {'switch': ['turn_on', 'turn_off', 'toggle'], ...})."""
+        return {}
+
     async def get_available_notify_services(self) -> list[str]:
         """Return all available `notify.*` service targets discovered in Home Assistant."""
         return ["notify.notify"]

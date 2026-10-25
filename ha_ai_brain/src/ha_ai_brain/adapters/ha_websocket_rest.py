@@ -40,6 +40,8 @@ class HomeAssistantAdapter(SmartHomePort):
         self._area_names: dict[str, str] = {}
         self._registry_last_fetched: datetime | None = None
         self._available_notify_services: list[str] = []
+        self._available_services_cache: dict[str, list[str]] = {}
+        self._services_last_fetched: datetime | None = None
         # context_id -> automation_entity_id from `automation_triggered` events
         self._automation_context_map: dict[str, str] = {}
         self._notification_action_handler: Callable[[str, str], Coroutine[Any, Any, None]] | None = None
@@ -326,9 +328,16 @@ class HomeAssistantAdapter(SmartHomePort):
             lines = resp.text.splitlines()[-limit:]
             return [{"line": line} for line in lines]
 
-    async def get_available_notify_services(self) -> list[str]:
-        if self._available_notify_services:
-            return self._available_notify_services
+    async def get_available_services(self) -> dict[str, list[str]]:
+        """Fetch and return all registered Home Assistant services grouped by domain."""
+        now = datetime.now(timezone.utc)
+        if (
+            self._available_services_cache
+            and self._services_last_fetched
+            and (now - self._services_last_fetched).total_seconds() < 300
+        ):
+            return self._available_services_cache
+
         import httpx
 
         try:
@@ -336,20 +345,31 @@ class HomeAssistantAdapter(SmartHomePort):
                 resp = await client.get(f"{self.base_url}/api/services", headers=self._headers())
                 if resp.status_code == 200:
                     data = resp.json()
+                    services_map: dict[str, list[str]] = {}
                     for domain_entry in data:
-                        if isinstance(domain_entry, dict) and domain_entry.get("domain") == "notify":
-                            services_dict = domain_entry.get("services") or {}
-                            found = [
+                        if isinstance(domain_entry, dict) and "domain" in domain_entry:
+                            dom = str(domain_entry["domain"])
+                            svc_dict = domain_entry.get("services") or {}
+                            if isinstance(svc_dict, dict):
+                                services_map[dom] = sorted(svc_dict.keys())
+                    if services_map:
+                        self._available_services_cache = services_map
+                        self._services_last_fetched = now
+                        if "notify" in services_map:
+                            self._available_notify_services = [
                                 f"notify.{svc}"
-                                for svc in sorted(services_dict.keys())
+                                for svc in services_map["notify"]
                                 if svc != "send_message"
                             ]
-                            if found:
-                                self._available_notify_services = found
-                                return found
+                        return services_map
         except Exception as exc:
-            logger.warning("Could not fetch HA notify services: %s", exc)
-        return ["notify.notify"]
+            logger.warning("Could not fetch HA services: %s", exc)
+        return self._available_services_cache or {}
+
+    async def get_available_notify_services(self) -> list[str]:
+        if not self._available_notify_services:
+            await self.get_available_services()
+        return self._available_notify_services or ["notify.notify"]
 
     async def subscribe_state_changes(self) -> AsyncIterator[StateChangedEvent]:
         import websockets

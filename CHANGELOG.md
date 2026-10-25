@@ -2,6 +2,22 @@
 
 All notable changes to **HA AI Brain** are documented in this file.
 
+## 0.1.15 - 2026-10-25
+
+### Added & Improved
+- **Dynamic Home Assistant Service Discovery & Intelligent Action Normalization**:
+  - Dynamically queries all registered services in Home Assistant via `GET /api/services` and injects available services (`available_ha_services`, `available_notification_services`, `preferred_notification_service`) into agent prompts for both periodic batch analysis and real-time reaction.
+  - Added strict system prompt constraints forbidding agents from inventing or hallucinating device names, unverified notify services, or nonexistent entities.
+  - Introduced `service_resolver` engine that automatically resolves and normalizes automation actions:
+    - Resolves mobile notification services lacking the `mobile_app_` prefix (e.g. `notify.<device>` $\rightarrow$ `notify.mobile_app_<device>`) or matching discovered Companion App targets.
+    - Resolves common service aliases (e.g. `switch.on` $\rightarrow$ `switch.turn_on`, `cover.close` $\rightarrow$ `cover.close_cover`).
+    - Recursively traverses nested automation action blocks (`choose`, `then`, `else`, `repeat`).
+- **Dynamic Repair of Pending Approvals**:
+  - Automatically sanitizes and normalizes pending automation approvals in-memory when loaded via `get_pending_approvals()`, ensuring cards rendered in the Web UI show valid, resolved services.
+  - Normalizes actions again right before execution in `_execute_intent`, ensuring native automations upserted into Home Assistant always use valid registered services.
+- **Strict Zero-Leakage Integrity**:
+  - Enforced zero hardcoded personal devices, names, or entities across all application modules, ensuring full portability across any Home Assistant installation.
+
 ## 0.1.14 - 2026-10-25
 
 ### Added & Improved

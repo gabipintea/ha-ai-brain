@@ -176,7 +176,7 @@ def create_app(settings: BrainSettings | None = None) -> Any:
             states = await orchestrator.smart_home.get_all_states()
             orchestrator._cached_states = states
             entity_count = len(states)
-        pending = await orchestrator.memory.get_pending_approvals()
+        pending = await orchestrator.get_pending_approvals()
         rules = await orchestrator.memory.get_endorsed_rules()
         rejected = await orchestrator.memory.get_rejected_suggestions()
         logs = await orchestrator.memory.get_recent_run_logs(limit=10)
