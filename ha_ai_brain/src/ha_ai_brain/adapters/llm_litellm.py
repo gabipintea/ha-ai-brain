@@ -347,8 +347,11 @@ class LiteLLMAdapter(LLMProviderPort):
                         if resp.status_code == 503 and attempt == 0:
                             await asyncio.sleep(3.5)
                             continue
+                        if resp.status_code == 400 and "thinkingConfig" in resp.text and attempt == 0:
+                            payload["generationConfig"].pop("thinkingConfig", None)
+                            continue
                         break
-                    if resp is not None and resp.status_code not in (404, 429, 503):
+                    if resp is not None and resp.status_code in (401, 403):
                         break
 
         logger.error("Gemini API call failed on all endpoints for %s: %s", model_id, last_err)

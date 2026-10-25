@@ -1,4 +1,4 @@
-"""End-to-End Verification Suite for the Hexagonal HA AI Brain & Climate Agent Prototype."""
+"""End-to-End Verification Suite for the Hexagonal HA AI Brain Multi-Agent Cognitive Engine."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from ha_ai_brain.domain.guardrails import GuardrailDecisionType
 from ha_ai_brain.domain.models import ActionIntent, ActionRiskLevel, EntityState, FeedbackPolarity
 
 
-class TestClimateAgentPrototype(unittest.IsolatedAsyncioTestCase):
+class TestMultiAgentCognitiveEngine(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         self._tmp_dir = tempfile.TemporaryDirectory()
         db_file = str(Path(self._tmp_dir.name) / "test_brain.db")

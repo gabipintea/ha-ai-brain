@@ -9,7 +9,7 @@ from typing import Any
 import uuid
 
 from ha_ai_brain.application.agent_registry import AgentRegistry
-from ha_ai_brain.application.graphs.climate_agent import ClimateAgentGraph, ClimateGraphState
+from ha_ai_brain.application.graphs.specialized_agent import AgentGraphState, SpecializedAgentGraph
 from ha_ai_brain.application.graphs.subagents import ComputationSubAgent, ResearchSubAgent
 from ha_ai_brain.config import BrainSettings, OperatingMode
 from ha_ai_brain.domain.arbiter import ConflictArbiter
@@ -74,7 +74,7 @@ class BrainOrchestrator:
 
         self.research_subagent = ResearchSubAgent(llm=llm, research_port=research)
         self.computation_subagent = ComputationSubAgent(llm=llm, sandbox=sandbox)
-        self.agent_graph = ClimateAgentGraph(
+        self.agent_graph = SpecializedAgentGraph(
             smart_home=smart_home,
             llm=llm,
             memory=memory,
@@ -308,7 +308,7 @@ class BrainOrchestrator:
             )
             return None
 
-        initial_state: ClimateGraphState = {
+        initial_state: AgentGraphState = {
             "agent_spec": agent_spec,
             "site_context": self.settings.site_context,
             "mode": "realtime_stream",
@@ -412,7 +412,7 @@ class BrainOrchestrator:
             now.strftime("%Y-%m-%d %H:%M:%S UTC"),
         )
 
-        initial_state: ClimateGraphState = {
+        initial_state: AgentGraphState = {
             "agent_spec": agent_spec,
             "site_context": self.settings.site_context,
             "mode": "periodic_batch",

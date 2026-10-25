@@ -104,6 +104,12 @@ class SQLiteMemoryAdapter(MemoryStorePort):
                 pref_key TEXT PRIMARY KEY,
                 pref_value TEXT NOT NULL
             );
+
+            CREATE INDEX IF NOT EXISTS idx_pending_approvals_status ON pending_approvals(status);
+            CREATE INDEX IF NOT EXISTS idx_run_logs_created ON run_logs(created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_advisory_insights_created ON advisory_insights(created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_feedback_episodes_agent ON feedback_episodes(agent_id, created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_user_context_notes_active ON user_context_notes(active, created_at DESC);
             """
         )
         self._conn.commit()

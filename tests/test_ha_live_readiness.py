@@ -95,6 +95,9 @@ class TestLiveHomeAssistantReadiness(unittest.IsolatedAsyncioTestCase):
         # 2. Fallback naming inference when entity is not assigned to an HA area yet
         self.assertEqual(ha._resolve_area_id("sensor.guest_bathroom_humidity", {}), "guest_bathroom")
         self.assertEqual(ha._resolve_area_id("sensor.outdoor_balcony_temperature", {}), "outdoor")
+        self.assertEqual(ha._resolve_area_id("binary_sensor.front_door_contact", {}), "front_door")
+        self.assertEqual(ha._resolve_area_id("lock.main_entrance_lock", {}), "main_entrance")
+        self.assertEqual(ha._resolve_area_id("sensor.kitchen_fridge_power", {}), "kitchen_fridge")
 
     async def test_4_subprocess_sandbox_blocks_imports_and_dunders(self) -> None:
         """Verify that PythonSandboxAdapter runs in an isolated subprocess and blocks unsafe AST nodes."""
@@ -120,6 +123,14 @@ class TestLiveHomeAssistantReadiness(unittest.IsolatedAsyncioTestCase):
             input_variables={},
         )
         self.assertIn("dunder", bad_dunder.get("error", ""))
+
+        # Subprocess timeout is killed cleanly without hanging
+        timeout_res = await sandbox.execute_python(
+            code="x = 0\nwhile True:\n    x += 1\n",
+            input_variables={},
+            timeout_seconds=0.3,
+        )
+        self.assertIn("timed out", timeout_res.get("error", ""))
 
     async def test_5_native_ha_automation_actions_are_not_mistaken_for_human_habits_or_overrides(self) -> None:
         """
@@ -272,7 +283,7 @@ class TestLiveHomeAssistantReadiness(unittest.IsolatedAsyncioTestCase):
         Verify that user-provided context notes (e.g. broken humidifier on Philips Air Purifier)
         are persisted in SQLite and injected into the LangGraph state and effective site context.
         """
-        from ha_ai_brain.application.graphs.climate_agent import ClimateAgentGraph
+        from ha_ai_brain.application.graphs.specialized_agent import ClimateAgentGraph, SpecializedAgentGraph
         from ha_ai_brain.domain.models import UserContextNote
 
         settings = BrainSettings(

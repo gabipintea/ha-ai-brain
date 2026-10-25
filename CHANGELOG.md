@@ -2,6 +2,26 @@
 
 All notable changes to **HA AI Brain** are documented in this file.
 
+## 0.1.9 - 2026-10-25
+
+### Refactored & Hardened
+- **Multi-Agent Cognitive Engine Architecture Standardization**:
+  - Promoted `SpecializedAgentGraph` and `AgentGraphState` to the primary canonical implementation in `ha_ai_brain.application.graphs.specialized_agent`, establishing `climate_agent.py` as a clean backward-compatibility shim.
+  - Refactored `BrainOrchestrator` to directly type and instantiate `SpecializedAgentGraph` and `AgentGraphState`.
+  - Renamed test suite from `test_climate_agent_prototype.py` to `test_multi_agent_cognitive_engine.py` (and test class `TestMultiAgentCognitiveEngine`), accurately reflecting comprehensive multi-agent cognitive testing.
+
+- **Expanded Area Resolution Heuristics**:
+  - Added full spectrum of device and sensor naming suffixes across all domains (`_temp`, `_hum`, `_contact`, `_door`, `_lock`, `_power`, `_energy`, `_plug`, `_switch`, `_heater`, `_radiator`, `_ac`, `_curtain`, `_shutter`, `_presence`) in `ha_websocket_rest.py`. This ensures accurate area mapping out-of-the-box even before users manually assign areas in Home Assistant.
+
+- **Subprocess Sandbox Process Leak Defense**:
+  - Hardened `PythonSandboxAdapter`: now explicitly catches `asyncio.TimeoutError` and enforces `proc.kill()` and `await proc.wait()`, preventing runaway or infinite loop processes from leaking CPU resources in the background. Added timeout termination test.
+
+- **SQLite Database Index Optimization**:
+  - Added indexes on `pending_approvals(status)`, `run_logs(created_at DESC)`, `advisory_insights(created_at DESC)`, `feedback_episodes(agent_id, created_at DESC)`, and `user_context_notes(active, created_at DESC)` in `memory_sqlite.py`, accelerating dashboard queries and periodic batch audits as historical data grows.
+
+- **LLM Error Handling Resilience**:
+  - Hardened Google Gemini adapter against model-specific parameter incompatibilities (auto-recovering on `thinkingConfig` 400 errors and attempting alternative candidate models rather than terminating).
+
 ## 0.1.8 - 2026-10-25
 
 ### Fixed & Generalized

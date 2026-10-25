@@ -71,6 +71,7 @@ class PythonSandboxAdapter(ComputationSandboxPort):
         timeout_seconds: float = 5.0,
     ) -> dict[str, Any]:
         """Validate AST and run the Python snippet in an isolated subprocess with `inputs`."""
+        proc = None
         try:
             sanitized_code = self._validate_ast(code)
             proc = await asyncio.create_subprocess_exec(
@@ -90,5 +91,13 @@ class PythonSandboxAdapter(ComputationSandboxPort):
             if proc.returncode != 0:
                 return {"signals": [], "error": stderr_bytes.decode("utf-8", errors="replace").strip()}
             return json.loads(stdout_bytes.decode("utf-8"))
+        except asyncio.TimeoutError:
+            if proc is not None:
+                try:
+                    proc.kill()
+                    await proc.wait()
+                except Exception:
+                    pass
+            return {"signals": [], "error": f"Computation timed out after {timeout_seconds}s"}
         except Exception as exc:
             return {"signals": [], "error": str(exc)}
