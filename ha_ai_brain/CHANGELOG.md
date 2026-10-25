@@ -2,6 +2,14 @@
 
 All notable changes to **HA AI Brain** are documented in this file.
 
+## 0.1.11 - 2026-10-25
+
+### Fixed
+- **SQLite Database Startup Migration Fix**:
+  - Resolved `sqlite3.OperationalError: no such column: status` on addon startup when upgrading existing databases from `< v0.1.10`.
+  - Enforced schema migration order: checks existing columns and executes `ALTER TABLE advisory_insights ADD COLUMN status TEXT` *before* attempting to create the `idx_advisory_insights_status` index.
+  - Added regression test `test_14_sqlite_migration_from_v019_without_status_column` ensuring seamless database upgrade paths across versions.
+
 ## 0.1.10 - 2026-10-25
 
 ### Added & Improved

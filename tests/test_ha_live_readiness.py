@@ -635,6 +635,39 @@ class TestLiveHomeAssistantReadiness(unittest.IsolatedAsyncioTestCase):
                             f"Forbidden personal token '{token}' found in {full_p.name}",
                         )
 
+    def test_14_sqlite_migration_from_v019_without_status_column(self) -> None:
+        """
+        Verify that booting SQLiteMemoryAdapter on an existing SQLite database from v0.1.9
+        (where advisory_insights lacks the 'status' column) seamlessly migrates without OperationalError.
+        """
+        import sqlite3
+        from pathlib import Path
+        import tempfile
+        from ha_ai_brain.adapters.memory_sqlite import SQLiteMemoryAdapter
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            db_p = str(Path(tmp_dir) / "legacy_v019.db")
+            # Create old schema table without status column
+            conn = sqlite3.connect(db_p)
+            conn.execute(
+                """
+                CREATE TABLE advisory_insights (
+                    insight_id TEXT PRIMARY KEY,
+                    agent_id TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    payload_json TEXT NOT NULL
+                )
+                """
+            )
+            conn.commit()
+            conn.close()
+
+            # Now instantiate SQLiteMemoryAdapter - must migrate cleanly without OperationalError
+            adapter = SQLiteMemoryAdapter(db_path=db_p)
+            cur = adapter._conn.cursor()
+            cols = {col[1] for col in cur.execute("PRAGMA table_info(advisory_insights)").fetchall()}
+            self.assertIn("status", cols)
+
 
 if __name__ == "__main__":
     unittest.main()

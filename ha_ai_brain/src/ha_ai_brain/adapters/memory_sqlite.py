@@ -105,7 +105,21 @@ class SQLiteMemoryAdapter(MemoryStorePort):
                 pref_key TEXT PRIMARY KEY,
                 pref_value TEXT NOT NULL
             );
+            """
+        )
 
+        # Migration: Add status column to existing advisory_insights table if upgrading from < v0.1.10
+        try:
+            columns_info = cur.execute("PRAGMA table_info(advisory_insights)").fetchall()
+            existing_cols = {col[1] for col in columns_info}
+            if "status" not in existing_cols:
+                cur.execute("ALTER TABLE advisory_insights ADD COLUMN status TEXT NOT NULL DEFAULT 'active'")
+        except Exception:
+            pass
+
+        # Create indexes only after all tables and columns are guaranteed to exist
+        cur.executescript(
+            """
             CREATE INDEX IF NOT EXISTS idx_pending_approvals_status ON pending_approvals(status);
             CREATE INDEX IF NOT EXISTS idx_run_logs_created ON run_logs(created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_advisory_insights_created ON advisory_insights(created_at DESC);
@@ -114,10 +128,6 @@ class SQLiteMemoryAdapter(MemoryStorePort):
             CREATE INDEX IF NOT EXISTS idx_user_context_notes_active ON user_context_notes(active, created_at DESC);
             """
         )
-        try:
-            cur.execute("ALTER TABLE advisory_insights ADD COLUMN status TEXT NOT NULL DEFAULT 'active'")
-        except sqlite3.OperationalError:
-            pass
         self._conn.commit()
 
     async def save_feedback(self, episode: FeedbackEpisode) -> None:
