@@ -2,6 +2,14 @@
 
 All notable changes to **HA AI Brain** are documented in this file.
 
+## 0.1.18 - 2026-10-25
+
+### Added & Improved
+- **Relocated Ignored Entities & Devices to Memory & Rules**:
+  - Moved the "Ignored entities & devices" management card from the Settings tab to the **Memory & Rules** tab, unifying all cognitive boundaries (always-allowed rules, rejected action suggestions, rejected insights, custom user context notes, and ignored entities) into a single cohesive control center.
+  - Added `.scroll` container support to `#ignoredTargetsList` with max height (520px) and clean custom scrollbars, keeping the page compact when ignore lists grow.
+  - Added real-time count badge (`#ignoredCountBadge`) to the card header that dynamically displays total active ignored target patterns.
+
 ## 0.1.17 - 2026-10-25
 
 ### Added & Improved

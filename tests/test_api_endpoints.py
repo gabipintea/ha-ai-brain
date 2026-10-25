@@ -251,10 +251,18 @@ class TestControlPlaneAPI(unittest.IsolatedAsyncioTestCase):
             self.assertIn('id="rejectedList" class="scroll"', dash_html)
             self.assertIn('id="rejectedInsightsList" class="scroll"', dash_html)
             self.assertIn('id="contextNotesList" class="scroll"', dash_html)
+            self.assertIn('id="ignoredTargetsList" class="scroll"', dash_html)
             self.assertIn('id="rulesCountBadge"', dash_html)
             self.assertIn('id="rejectedCountBadge"', dash_html)
             self.assertIn('id="rejectedInsightsCountBadge"', dash_html)
             self.assertIn('id="contextNotesCountBadge"', dash_html)
+            self.assertIn('id="ignoredCountBadge"', dash_html)
+
+            # Verify ignored list is located in pane-memory and not in pane-settings
+            pane_memory = dash_html.split('id="pane-memory"')[1].split('id="pane-settings"')[0]
+            self.assertIn('id="ignoredTargetsList"', pane_memory)
+            pane_settings = dash_html.split('id="pane-settings"')[1].split('</div>\n\n  <script>')[0] if '</div>\n\n  <script>' in dash_html else dash_html.split('id="pane-settings"')[1]
+            self.assertNotIn('id="ignoredTargetsList"', pane_settings)
 
 
 if __name__ == "__main__":

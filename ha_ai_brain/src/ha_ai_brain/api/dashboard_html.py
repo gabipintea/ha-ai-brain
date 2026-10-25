@@ -418,6 +418,22 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         <div id="contextNotesList" class="scroll" style="margin-top:14px;"></div>
       </div>
     </div>
+
+    <div class="grid" style="margin-top:16px;">
+      <div class="card">
+        <div class="card-head">
+          <h2>Ignored entities &amp; devices</h2>
+          <span class="pill" id="ignoredCountBadge" style="display:none;">0</span>
+        </div>
+        <div class="hint">Matching entities are dropped before triage and never reach the AI. Supports <code>*</code> wildcards.</div>
+        <div class="inline-form">
+          <input type="text" id="ignorePatternInput" placeholder="e.g. sensor.vendor_* or *device_name*" />
+          <input type="text" id="ignoreReasonInput" placeholder="Reason (optional)" />
+          <button class="primary" onclick="addIgnoredTarget()">Add to ignore list</button>
+        </div>
+        <div id="ignoredTargetsList" class="scroll" style="margin-top:14px;"></div>
+      </div>
+    </div>
   </div>
 
   <!-- TAB 4: Settings -->
@@ -501,19 +517,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
             <span id="saveAiMsg" class="muted" style="margin-left:12px;"></span>
           </div>
         </div>
-      </div>
-    </div>
-
-    <div class="grid">
-      <div class="card">
-        <div class="card-head"><h2>Ignore list</h2></div>
-        <div class="hint">Matching entities are dropped before triage and never reach the AI. Supports <code>*</code> wildcards.</div>
-        <div class="inline-form">
-          <input type="text" id="ignorePatternInput" placeholder="e.g. sensor.vendor_* or *device_name*" />
-          <input type="text" id="ignoreReasonInput" placeholder="Reason (optional)" />
-          <button class="primary" onclick="addIgnoredTarget()">Add to ignore list</button>
-        </div>
-        <div id="ignoredTargetsList" style="margin-top:14px;"></div>
       </div>
     </div>
 
@@ -999,6 +1002,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       : '<div class="empty">No notes yet.</div>';
 
     const ignored = data.ignored_targets || [];
+    const ignBadge = $('ignoredCountBadge');
+    if (ignBadge) {
+      ignBadge.style.display = ignored.length ? 'inline-block' : 'none';
+      ignBadge.textContent = ignored.length;
+    }
     $('ignoredTargetsList').innerHTML = ignored.length ? ignored.map(t => `
       <div class="item row"><div><code>${esc(t.pattern)}</code>${t.reason ? ` <span class="muted">${esc(t.reason)}</span>` : ''}</div>
         <button class="danger icon" title="Remove" onclick="deleteIgnoredTarget('${esc(t.ignore_id)}')">Remove</button></div>`).join('')
