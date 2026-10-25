@@ -30,10 +30,21 @@ class TestControlPlaneAPI(unittest.IsolatedAsyncioTestCase):
     async def test_api_status_simulate_approve_and_batch(self) -> None:
         transport = httpx.ASGITransport(app=self.app)
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-            # 1. Dashboard HTML loads
+            # 1. Dashboard HTML loads & JavaScript syntax is valid
             res_html = await client.get("/")
             self.assertEqual(res_html.status_code, 200)
             self.assertIn("HA AI Brain", res_html.text)
+
+            import re, shutil, subprocess
+            script_match = re.search(r"<script>(.*?)</script>", res_html.text, re.DOTALL)
+            self.assertIsNotNone(script_match)
+            if shutil.which("node"):
+                node_check = subprocess.run(
+                    ["node", "--check"],
+                    input=script_match.group(1).encode("utf-8"),
+                    capture_output=True,
+                )
+                self.assertEqual(node_check.returncode, 0, f"JS Syntax Error: {node_check.stderr.decode('utf-8', errors='replace')}")
 
             # 2. Simulate Condensation Risk event
             res_sim = await client.post("/api/events/simulate", json={"scenario": "condensation_risk"})

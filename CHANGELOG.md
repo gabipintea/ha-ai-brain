@@ -2,6 +2,14 @@
 
 All notable changes to **HA AI Brain** are documented in this file.
 
+## 0.1.12 - 2026-10-25
+
+### Fixed
+- **Dashboard UI Unresponsive / Freezing Fix**:
+  - Fixed a JavaScript SyntaxError in `dashboard_html.py` caused by unescaped newline characters in the prompt dialog string literal inside the Python template string.
+  - Simplified the `rejectInsightPrompt(insightId)` call signature to avoid any potential HTML attribute quote-escaping collisions.
+  - Added an automated JavaScript syntax verification step (`node --check`) into the test suite to guarantee that dashboard scripts parse without syntax errors.
+
 ## 0.1.11 - 2026-10-25
 
 ### Fixed

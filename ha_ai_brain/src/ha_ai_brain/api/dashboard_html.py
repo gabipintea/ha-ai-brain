@@ -765,7 +765,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           <button class="icon" style="font-size:12px; padding:4px 10px;" onclick="dismissInsight('${esc(ins.insight_id)}')" title="Mark as read / dismiss from active list">
             ✓ Mark read
           </button>
-          <button class="icon" style="font-size:12px; padding:4px 10px; color:#e74c3c;" onclick="rejectInsightPrompt('${esc(ins.insight_id)}', '${esc(ins.title).replace(/'/g, "\\'")}')" title="Reject this advice so agents never suggest it again">
+          <button class="icon" style="font-size:12px; padding:4px 10px; color:#e74c3c;" onclick="rejectInsightPrompt('${esc(ins.insight_id)}')" title="Reject this advice so agents never suggest it again">
             ✕ Reject &amp; Never suggest
           </button>
           <button class="icon" style="font-size:12px; padding:4px 8px; color:var(--muted);" onclick="deleteInsight('${esc(ins.insight_id)}')" title="Delete insight permanently">
@@ -897,8 +897,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     await refreshAll();
   }
 
-  async function rejectInsightPrompt(insightId, title) {
-    const reason = prompt('Why do you want to reject this recommendation?\n\n(Optional context/note so agents understand your preference and never suggest it again):', '');
+  async function rejectInsightPrompt(insightId) {
+    const reason = prompt('Why do you want to reject this recommendation? (Optional note so agents never suggest it again):', '');
     if (reason === null) return;
     await post('./api/insights/' + encodeURIComponent(insightId) + '/reject', {reason: reason});
     await refreshAll();
