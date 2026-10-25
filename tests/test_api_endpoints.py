@@ -67,6 +67,11 @@ class TestControlPlaneAPI(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(res_decide.status_code, 200)
             self.assertTrue(res_decide.json()["repeatable_rule_saved"])
 
+            # Verify approval status is tracked and returned in /api/status
+            status_after_decide = (await client.get("/api/status")).json()
+            self.assertIn("approval_statuses", status_after_decide)
+            self.assertEqual(status_after_decide["approval_statuses"].get(first_approval_id), "approved_repeatable")
+
             # 4b. Revoke the endorsed rule; it must disappear and a second revoke must 404
             rules = (await client.get("/api/status")).json()["endorsed_rules"]
             self.assertGreaterEqual(len(rules), 1)

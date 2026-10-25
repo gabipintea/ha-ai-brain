@@ -2,6 +2,19 @@
 
 All notable changes to **HA AI Brain** are documented in this file.
 
+## 0.1.23 - 2026-10-25
+
+### Added & Improved
+- **Dynamic Approval Status Badges Across Agent Activity & Insights**:
+  - Replaced stale `⚡ View Pending Approval` buttons on resolved proposals with dynamic status badges reflecting the exact decision taken by the homeowner:
+    - `✓ Approved once`: Action was approved and executed.
+    - `✓ Always allowed rule`: Approved repeatable rule created (clicking navigates directly to Memory & Rules).
+    - `✕ Rejected`: Action rejected by user (clicking navigates directly to Memory & Rules).
+    - `Dismissed`: Action was dismissed without execution.
+    - `⚡ View Pending Approval`: Action is still awaiting homeowner decision.
+  - Added `get_approval_statuses()` to `MemoryStorePort` and `SQLiteMemoryAdapter` exposing resolved approval states via `/api/status`.
+  - Added optimistic status updates on user decisions so buttons update in real time with zero latency.
+
 ## 0.1.22 - 2026-10-25
 
 ### Improved

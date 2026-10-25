@@ -537,6 +537,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   let loadedLogIds = new Set();
   let totalServerLogs = 0;
   let isLoadingMoreLogs = false;
+  let latestApprovalStatuses = {};
+  let activePendingApprovalIds = new Set();
 
   function esc(v) {
     return String(v === null || v === undefined ? '' : v)
@@ -669,6 +671,49 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
   }
 
+  function renderApprovalStatusBadge(approvalId, isInline) {
+    if (!approvalId) return '';
+    const st = latestApprovalStatuses[approvalId] || (activePendingApprovalIds.has(approvalId) ? 'pending' : '');
+    const inlinePad = isInline ? 'font-size:11px; padding:3px 8px;' : 'margin-top:8px; font-size:0.78rem; padding:4px 10px;';
+    if (!st || st === 'pending') {
+      return `<button class="icon primary" style="${inlinePad}" onclick="jumpToElement('approvals', 'approval-${esc(approvalId)}')">⚡ View Pending Approval</button>`;
+    }
+    if (st === 'approved_once') {
+      return `<span class="pill ok" style="${inlinePad} display:inline-block; font-weight:600;" title="Action was approved and executed">✓ Approved once</span>`;
+    }
+    if (st === 'approved_repeatable') {
+      return `<button class="icon" style="${inlinePad} color:var(--ok); border-color:rgba(46,204,113,0.4); font-weight:600;" onclick="switchTab('memory')" title="Always allowed rule created - click to view in Memory & Rules">✓ Always allowed rule</button>`;
+    }
+    if (st === 'rejected') {
+      return `<button class="icon" style="${inlinePad} color:#e74c3c; border-color:rgba(231,76,60,0.4); font-weight:600;" onclick="switchTab('memory')" title="Rejected by user - click to view in Memory & Rules">✕ Rejected</button>`;
+    }
+    if (st === 'dismissed') {
+      return `<span class="pill" style="${inlinePad} display:inline-block; color:var(--muted);" title="Dismissed without execution">Dismissed</span>`;
+    }
+    return '';
+  }
+
+  function renderTopApprovalBadge(approvalId) {
+    if (!approvalId) return '';
+    const st = latestApprovalStatuses[approvalId] || (activePendingApprovalIds.has(approvalId) ? 'pending' : '');
+    if (!st || st === 'pending') {
+      return `<button class="icon" style="border-color:var(--warn); color:var(--warn); font-size:0.76rem; padding:2px 8px;" onclick="jumpToElement('approvals', 'approval-${esc(approvalId)}')">⚡ Pending Approval</button>`;
+    }
+    if (st === 'approved_once') {
+      return `<span class="pill ok" style="font-size:0.76rem; padding:2px 8px; font-weight:600;" title="Action was approved and executed">✓ Approved</span>`;
+    }
+    if (st === 'approved_repeatable') {
+      return `<button class="icon" style="font-size:0.76rem; padding:2px 8px; color:var(--ok); border-color:rgba(46,204,113,0.4); font-weight:600;" onclick="switchTab('memory')" title="Always allowed rule created">✓ Always allowed</button>`;
+    }
+    if (st === 'rejected') {
+      return `<button class="icon" style="font-size:0.76rem; padding:2px 8px; color:#e74c3c; border-color:rgba(231,76,60,0.4); font-weight:600;" onclick="switchTab('memory')" title="Rejected by user">✕ Rejected</button>`;
+    }
+    if (st === 'dismissed') {
+      return `<span class="pill" style="font-size:0.76rem; padding:2px 8px; color:var(--muted);" title="Dismissed without execution">Dismissed</span>`;
+    }
+    return '';
+  }
+
   function renderLog(l) {
     const research = (l.research_findings || []).map(rf => `
       <div class="finding"><strong>${esc(rf.topic)}</strong>
@@ -684,9 +729,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       const extra = intent.native_automation
         ? `<pre>${esc(JSON.stringify(intent.native_automation, null, 2))}</pre>`
         : (Object.keys(intent.service_data || {}).length ? `<pre>${esc(JSON.stringify(intent.service_data, null, 2))}</pre>` : '');
-      const jumpToApprovalBtn = approvalId
-        ? `<button class="icon primary" style="margin-top:8px; font-size:0.78rem; padding:4px 10px;" onclick="jumpToElement('approvals', 'approval-${esc(approvalId)}')">⚡ View Pending Approval</button>`
-        : '';
+      const jumpToApprovalBtn = approvalId ? renderApprovalStatusBadge(approvalId, false) : '';
       return `<div class="intent">
         <div><strong>${esc(intent.domain)}.${esc(intent.service)}</strong>
           ${(intent.target_entity_ids || []).length ? ` &rarr; <code>${esc(intent.target_entity_ids.join(', '))}</code>` : ''}
@@ -699,9 +742,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     const t = l.created_at ? new Date(l.created_at).toLocaleString() : '';
     const pendingIntents = (l.proposed_intents || []).filter(i => i.approval_id || ((l.execution_results || [])[l.proposed_intents.indexOf(i)] || {}).approval_id);
     const firstApprovalId = pendingIntents.length ? (pendingIntents[0].approval_id || ((l.execution_results || [])[l.proposed_intents.indexOf(pendingIntents[0])] || {}).approval_id) : '';
-    const topApprovalBtn = firstApprovalId
-      ? `<button class="icon" style="border-color:var(--warn); color:var(--warn); font-size:0.76rem; padding:2px 8px;" onclick="jumpToElement('approvals', 'approval-${esc(firstApprovalId)}')">⚡ Pending Approval</button>`
-      : '';
+    const topApprovalBtn = firstApprovalId ? renderTopApprovalBadge(firstApprovalId) : '';
 
     return `<div class="item" id="log-${esc(l.run_id)}" data-log-id="${esc(l.run_id)}">
       <div class="row">
@@ -925,6 +966,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
     $('licenseBox').textContent = `Plan: ${data.license.plan_tier} | Tokens used: ${data.license.tokens_used_this_period} (current container session)`;
 
+    latestApprovalStatuses = data.approval_statuses || {};
+    activePendingApprovalIds = new Set((data.pending_approvals || []).map(p => p.approval_id));
+
     renderQuota(data);
     reconcilePending(data.pending_approvals || []);
 
@@ -1077,13 +1121,14 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       if (allLoadedLogs.length === 0) {
         allLoadedLogs = [...data.recent_logs];
         allLoadedLogs.forEach(l => loadedLogIds.add(l.run_id));
-        lBox.innerHTML = allLoadedLogs.map(renderLog).join('');
       } else {
         data.recent_logs.filter(l => !loadedLogIds.has(l.run_id)).reverse().forEach(l => {
           allLoadedLogs.unshift(l); loadedLogIds.add(l.run_id);
-          lBox.insertAdjacentHTML('afterbegin', renderLog(l));
         });
       }
+      const scrollPos = $('logsScrollContainer') ? $('logsScrollContainer').scrollTop : 0;
+      lBox.innerHTML = allLoadedLogs.map(renderLog).join('');
+      if ($('logsScrollContainer')) $('logsScrollContainer').scrollTop = scrollPos;
     }
     const more = $('logsLoadMoreContainer');
     more.style.display = allLoadedLogs.length < totalServerLogs ? 'block' : 'none';
@@ -1130,7 +1175,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     html += proposals.map(({agent, intent, run_id}) => {
       const approvalId = intent.approval_id;
       const jumpApprovalBtn = approvalId
-        ? `<button class="icon primary" type="button" style="font-size:11px; padding:3px 8px;" onclick="jumpToElement('approvals', 'approval-${esc(approvalId)}')">⚡ View Pending Approval</button>`
+        ? renderApprovalStatusBadge(approvalId, true)
         : '';
       const viewRunBtn = run_id
         ? `<button class="icon" type="button" style="font-size:11px; padding:3px 8px; color:var(--accent); border-color:rgba(79,156,249,0.4);" onclick="jumpToElement('activity', 'log-${esc(run_id)}')">🔍 View <span class="hide-mobile">agent </span>reasoning</button>`
@@ -1237,12 +1282,18 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   async function decideApproval(id, decision) {
     const noteEl = document.getElementById('note_' + id);
     const humanNote = noteEl ? noteEl.value.trim() : '';
+    latestApprovalStatuses[id] = decision;
+    activePendingApprovalIds.delete(id);
     await post('./api/approvals/' + id + '/decide', {decision, human_note: humanNote});
     await refreshAll();
   }
 
   async function dismissAllApprovals() {
     if (!confirm('Dismiss all pending proposals?')) return;
+    activePendingApprovalIds.forEach(id => {
+      latestApprovalStatuses[id] = 'dismissed';
+    });
+    activePendingApprovalIds.clear();
     await post('./api/approvals/dismiss-all', {});
     await refreshAll();
   }

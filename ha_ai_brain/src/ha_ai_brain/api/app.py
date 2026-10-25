@@ -187,6 +187,7 @@ def create_app(settings: BrainSettings | None = None) -> Any:
         context_notes = await orchestrator.memory.get_user_context_notes(active_only=True)
         ignored_targets = await orchestrator.memory.get_ignored_targets()
         notify_services = await orchestrator.smart_home.get_available_notify_services()
+        approval_statuses = await orchestrator.memory.get_approval_statuses()
 
         settings_dict = orchestrator.settings.model_dump()
         raw_key = settings_dict.pop("llm_api_key", "")
@@ -215,6 +216,7 @@ def create_app(settings: BrainSettings | None = None) -> Any:
             "advisory_insights": [i.model_dump(mode="json") for i in insights],
             "active_insights_count": active_insights_count,
             "rejected_insights": [r.model_dump(mode="json") for r in rejected_insights],
+            "approval_statuses": approval_statuses,
         }
 
     @app.delete("/api/rejected")

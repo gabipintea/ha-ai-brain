@@ -325,6 +325,13 @@ class SQLiteMemoryAdapter(MemoryStorePort):
             count += 1
         return count
 
+    async def get_approval_statuses(self) -> dict[str, str]:
+        """Return a mapping of approval_id -> status across recorded approvals."""
+        rows = self._conn.execute(
+            "SELECT approval_id, status FROM pending_approvals ORDER BY created_at DESC LIMIT 500"
+        ).fetchall()
+        return {r["approval_id"]: r["status"] for r in rows}
+
     async def save_run_log(self, log: AgentRunLog) -> None:
         self._conn.execute(
             """

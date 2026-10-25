@@ -79,6 +79,10 @@ class MemoryStorePort(ABC):
         """Dismiss all currently pending proposals."""
         return 0
 
+    async def get_approval_statuses(self) -> dict[str, str]:
+        """Return a mapping of approval_id -> status across recorded approvals."""
+        return {}
+
     @abstractmethod
     async def save_run_log(self, log: AgentRunLog) -> None:
         """Record a full agent reasoning trace for explainability."""
