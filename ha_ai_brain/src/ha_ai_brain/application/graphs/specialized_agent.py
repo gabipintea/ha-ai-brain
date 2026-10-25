@@ -84,6 +84,12 @@ class SpecializedAgentGraph:
         self._cached_findings: dict[str, tuple[datetime, list[ResearchFinding]]] = {}
         self._compiled_graph = self._build_graph()
 
+    def invalidate_context_caches(self) -> None:
+        """Clear cached sub-agent research findings and computation code when context or rules change."""
+        self._cached_findings.clear()
+        if hasattr(self.computation_subagent, "_cached_code"):
+            self.computation_subagent._cached_code.clear()
+
     def _build_graph(self) -> Any:
         builder = StateGraph(AgentGraphState)
 

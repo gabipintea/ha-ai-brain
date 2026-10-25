@@ -474,6 +474,7 @@ def create_app(settings: BrainSettings | None = None) -> Any:
             related_entities=[e.strip() for e in req.related_entities if e.strip()],
         )
         await orchestrator.memory.save_user_context_note(note)
+        orchestrator.invalidate_context_caches()
         notes = await orchestrator.memory.get_user_context_notes(active_only=True)
         return {
             "status": "saved",
@@ -484,6 +485,7 @@ def create_app(settings: BrainSettings | None = None) -> Any:
     @app.delete("/api/context-notes/{note_id}")
     async def delete_context_note(note_id: str) -> dict[str, Any]:
         deleted = await orchestrator.memory.delete_user_context_note(note_id)
+        orchestrator.invalidate_context_caches()
         notes = await orchestrator.memory.get_user_context_notes(active_only=True)
         return {
             "status": "deleted" if deleted else "not_found",
@@ -497,6 +499,7 @@ def create_app(settings: BrainSettings | None = None) -> Any:
             raise HTTPException(status_code=400, detail="Ignore pattern cannot be empty")
         target = IgnoredTarget(pattern=cleaned, reason=req.reason.strip())
         await orchestrator.memory.save_ignored_target(target)
+        orchestrator.invalidate_context_caches()
         targets = await orchestrator.memory.get_ignored_targets()
         return {
             "status": "saved",
@@ -507,6 +510,7 @@ def create_app(settings: BrainSettings | None = None) -> Any:
     @app.delete("/api/ignore-list/{ignore_id}")
     async def delete_ignored_target(ignore_id: str) -> dict[str, Any]:
         deleted = await orchestrator.memory.delete_ignored_target(ignore_id)
+        orchestrator.invalidate_context_caches()
         targets = await orchestrator.memory.get_ignored_targets()
         return {
             "status": "deleted" if deleted else "not_found",

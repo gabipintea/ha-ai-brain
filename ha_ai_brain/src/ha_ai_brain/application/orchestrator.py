@@ -93,6 +93,11 @@ class BrainOrchestrator:
         if hasattr(self.memory, "get_ui_preferences_sync"):
             self._apply_ui_preferences_dict(self.memory.get_ui_preferences_sync())
 
+    def invalidate_context_caches(self) -> None:
+        """Notify agent graph to clear cached research findings and computations upon context or rule updates."""
+        if hasattr(self.agent_graph, "invalidate_context_caches"):
+            self.agent_graph.invalidate_context_caches()
+
     async def start_background_workers(self) -> None:
         """Start the live HA WebSocket stream listener and the Periodic Batch scheduler."""
         if self._running:

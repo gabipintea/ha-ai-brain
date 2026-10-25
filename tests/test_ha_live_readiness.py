@@ -315,6 +315,23 @@ class TestLiveHomeAssistantReadiness(unittest.IsolatedAsyncioTestCase):
         self.assertIn("mechanically broken", composed)
         self.assertIn("humidifier.philips_air_purifier", composed)
 
+        # Verify cache invalidation triggers immediately without requiring reloads or restarts
+        from datetime import datetime, timezone
+        from ha_ai_brain.domain.models import ResearchFinding
+        orchestrator.agent_graph._cached_findings["test_agent:global"] = (
+            datetime.now(timezone.utc),
+            [
+                ResearchFinding(
+                    topic="thermal",
+                    principle_summary="old cached finding",
+                    recommended_thresholds_or_physics="physics info",
+                )
+            ]
+        )
+        self.assertEqual(len(orchestrator.agent_graph._cached_findings), 1)
+        orchestrator.invalidate_context_caches()
+        self.assertEqual(len(orchestrator.agent_graph._cached_findings), 0)
+
         deleted = await orchestrator.memory.delete_user_context_note(note.note_id)
         self.assertTrue(deleted)
         self.assertEqual(len(await orchestrator.memory.get_user_context_notes()), 0)

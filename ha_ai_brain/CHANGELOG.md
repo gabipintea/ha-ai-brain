@@ -2,6 +2,14 @@
 
 All notable changes to **HA AI Brain** are documented in this file.
 
+## 0.1.19 - 2026-10-25
+
+### Added & Improved
+- **Zero-Latency Cache Invalidation for Memory Notes & Ignored Targets**:
+  - Confirmed and verified that all user context notes and ignored targets are fetched dynamically from SQLite on every agent invocation (`_corroborate_context_node`) without requiring any add-on restarts, reloads, or manual actions.
+  - Added explicit sub-agent cache invalidation (`invalidate_context_caches()` in `SpecializedAgentGraph` and `Orchestrator`) when adding or deleting notes and ignored targets, ensuring background research findings and computation routines immediately refresh on the very next telemetry event.
+  - Added regression test in `test_ha_live_readiness.py` verifying cache invalidation behavior.
+
 ## 0.1.18 - 2026-10-25
 
 ### Added & Improved
