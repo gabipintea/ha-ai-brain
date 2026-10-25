@@ -2,6 +2,14 @@
 
 All notable changes to **HA AI Brain** are documented in this file.
 
+## 0.1.16 - 2026-10-25
+
+### Added & Improved
+- **Scrollable List Containers on Memory & Rules Page**:
+  - Bound all growing lists on the **Memory & Rules** tab (`rulesList`, `rejectedList`, `rejectedInsightsList`, and `contextNotesList`) with `.scroll` containers (max-height: 520px with custom thin transparent scrollbars), matching the behavior of the **Activity & Insights** page.
+  - Added real-time item count badges to all card headers (`rulesCountBadge`, `rejectedCountBadge`, `rejectedInsightsCountBadge`, `contextNotesCountBadge`) that dynamically appear whenever items are present.
+  - Enhanced custom scrollbar styles across all tabs with subtle thumb contrast and hover effects.
+
 ## 0.1.15 - 2026-10-25
 
 ### Added & Improved

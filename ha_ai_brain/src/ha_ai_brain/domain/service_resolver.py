@@ -77,6 +77,13 @@ def resolve_notification_service(
         if clean_svc and (clean_svc in k or k.endswith(f"_{clean_svc}")):
             return orig
 
+    # 4b. Strip trailing counter digits (e.g. 'phone_2' -> 'phone' from duplicated mobile apps)
+    base_clean_svc = re.sub(r"_\d+$", "", clean_svc)
+    if base_clean_svc != clean_svc:
+        for k, orig in avail_lower.items():
+            if base_clean_svc and (base_clean_svc in k or k.endswith(f"_{base_clean_svc}")):
+                return orig
+
     # 5. Fallback: preferred_service if valid in available, else notify.notify if available, else first
     pref_lower = (preferred_service or "").lower()
     if pref_lower in avail_lower:

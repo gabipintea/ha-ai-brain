@@ -162,7 +162,26 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
     .inline-form { display: flex; gap: 8px; flex-wrap: wrap; }
     .inline-form input { flex: 1 1 160px; width: auto; }
-    .scroll { max-height: 560px; overflow-y: auto; padding-right: 4px; }
+    .scroll {
+      max-height: 520px;
+      overflow-y: auto;
+      padding-right: 6px;
+      scrollbar-width: thin;
+      scrollbar-color: rgba(255, 255, 255, 0.18) transparent;
+    }
+    .scroll::-webkit-scrollbar {
+      width: 6px;
+    }
+    .scroll::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    .scroll::-webkit-scrollbar-thumb {
+      background: rgba(255, 255, 255, 0.18);
+      border-radius: 4px;
+    }
+    .scroll::-webkit-scrollbar-thumb:hover {
+      background: rgba(255, 255, 255, 0.35);
+    }
     .banner {
       display: none; margin-bottom: 18px; padding: 14px 16px; border-radius: var(--radius);
       background: rgba(251,191,36,0.1); border: 1px solid rgba(251,191,36,0.4);
@@ -314,28 +333,40 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   <div id="pane-memory" class="tab-pane">
     <div class="grid two">
       <div class="card">
-        <div class="card-head"><h2>Always-allowed actions</h2></div>
+        <div class="card-head">
+          <h2>Always-allowed actions</h2>
+          <span class="pill ok" id="rulesCountBadge" style="display:none;">0</span>
+        </div>
         <div class="hint">Approved repeatable actions that run automatically without asking.</div>
-        <div id="rulesList"></div>
+        <div id="rulesList" class="scroll"></div>
       </div>
       <div class="card">
-        <div class="card-head"><h2>Rejected action suggestions</h2></div>
+        <div class="card-head">
+          <h2>Rejected action suggestions</h2>
+          <span class="pill warn" id="rejectedCountBadge" style="display:none;">0</span>
+        </div>
         <div class="hint">Blocked actions that will not be proposed again. Unblock one to let agents suggest it again.</div>
-        <div id="rejectedList"></div>
+        <div id="rejectedList" class="scroll"></div>
       </div>
     </div>
 
     <div class="grid" style="margin-top:16px;">
       <div class="card">
-        <div class="card-head"><h2>Rejected insights &amp; recommendations</h2></div>
+        <div class="card-head">
+          <h2>Rejected insights &amp; recommendations</h2>
+          <span class="pill warn" id="rejectedInsightsCountBadge" style="display:none;">0</span>
+        </div>
         <div class="hint">Advisory topics and hardware advice you rejected. Agents are forbidden from proposing these topics again. Unblock to allow agents to suggest them again.</div>
-        <div id="rejectedInsightsList"></div>
+        <div id="rejectedInsightsList" class="scroll"></div>
       </div>
     </div>
 
-    <div class="grid">
+    <div class="grid" style="margin-top:16px;">
       <div class="card">
-        <div class="card-head"><h2>Context for the Brain</h2></div>
+        <div class="card-head">
+          <h2>Context for the Brain</h2>
+          <span class="pill info" id="contextNotesCountBadge" style="display:none;">0</span>
+        </div>
         <div class="hint">Tell all agents about hardware quirks or personal rules (e.g. broken humidifier). Applied immediately across all agents.</div>
         <div class="fields">
           <textarea id="contextNoteInput" rows="2" placeholder="e.g. The humidifier on the bedroom air purifier is broken; I only use it to purify air."></textarea>
@@ -344,7 +375,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
             <button class="primary" onclick="addContextNote()">Save note</button>
           </div>
         </div>
-        <div id="contextNotesList" style="margin-top:14px;"></div>
+        <div id="contextNotesList" class="scroll" style="margin-top:14px;"></div>
       </div>
     </div>
   </div>
@@ -836,6 +867,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     reconcilePending(data.pending_approvals || []);
 
     const rules = Object.values(data.endorsed_rules || {});
+    const rBadge = $('rulesCountBadge');
+    if (rBadge) {
+      rBadge.style.display = rules.length ? 'inline-block' : 'none';
+      rBadge.textContent = rules.length;
+    }
     $('rulesList').innerHTML = rules.length ? rules.map(r => {
       const isAuto = r.domain_service === 'automation.upsert_native_automation' || (r.description && r.description.startsWith('Native Automation'));
       const titleHtml = isAuto
@@ -853,6 +889,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       : '<div class="empty">No actions are set to run automatically. Choose "Always allow" on an approval to add one.</div>';
 
     const rejected = data.rejected_suggestions || [];
+    const rejBadge = $('rejectedCountBadge');
+    if (rejBadge) {
+      rejBadge.style.display = rejected.length ? 'inline-block' : 'none';
+      rejBadge.textContent = rejected.length;
+    }
     $('rejectedList').innerHTML = rejected.length ? rejected.map(e => {
       const isAuto = e.service_called === 'automation.upsert_native_automation' || (e.service_data && !!e.service_data.alias);
       const autoAlias = (e.service_data && e.service_data.alias) || '';
@@ -885,8 +926,14 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       : '<div class="empty">No rejected suggestions.</div>';
 
     const rejInsBox = $('rejectedInsightsList');
+    const rejIns = data.rejected_insights || [];
+    const rejInsBadge = $('rejectedInsightsCountBadge');
+    if (rejInsBadge) {
+      rejInsBadge.style.display = rejIns.length ? 'inline-block' : 'none';
+      rejInsBadge.textContent = rejIns.length;
+    }
     if (rejInsBox) {
-      rejInsBox.innerHTML = (data.rejected_insights || []).length ? (data.rejected_insights).map(ins => `
+      rejInsBox.innerHTML = rejIns.length ? rejIns.map(ins => `
         <div class="item">
           <div class="row">
             <div>
@@ -900,6 +947,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
 
     const notes = data.user_context_notes || [];
+    const nBadge = $('contextNotesCountBadge');
+    if (nBadge) {
+      nBadge.style.display = notes.length ? 'inline-block' : 'none';
+      nBadge.textContent = notes.length;
+    }
     $('contextNotesList').innerHTML = notes.length ? notes.map(n => `
       <div class="item row"><div><div>${esc(n.content)}</div>
         <div class="muted">${esc(n.scope || 'global')}${(n.related_entities || []).length ? ' &middot; ' + esc(n.related_entities.join(', ')) : ''}</div></div>

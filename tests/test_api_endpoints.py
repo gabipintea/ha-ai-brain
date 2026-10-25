@@ -246,6 +246,16 @@ class TestControlPlaneAPI(unittest.IsolatedAsyncioTestCase):
             self.assertIn("handleHashNav", dash_html)
             self.assertIn("Create Native Automation:", dash_html)
 
+            # Verify scrollable list containers and count badges on Memory & Rules
+            self.assertIn('id="rulesList" class="scroll"', dash_html)
+            self.assertIn('id="rejectedList" class="scroll"', dash_html)
+            self.assertIn('id="rejectedInsightsList" class="scroll"', dash_html)
+            self.assertIn('id="contextNotesList" class="scroll"', dash_html)
+            self.assertIn('id="rulesCountBadge"', dash_html)
+            self.assertIn('id="rejectedCountBadge"', dash_html)
+            self.assertIn('id="rejectedInsightsCountBadge"', dash_html)
+            self.assertIn('id="contextNotesCountBadge"', dash_html)
+
 
 if __name__ == "__main__":
     unittest.main()
