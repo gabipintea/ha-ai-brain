@@ -874,8 +874,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       <span>Primary</span><span><code>${esc(q.primary_model || data.settings.llm_model)}</code></span>
       <span>Active</span><span><code>${esc(q.active_model || q.model || data.settings.llm_model)}</code></span>
       <span>Fallbacks</span><span>${esc(avail.join(', ') || 'none available')}${cool ? ' &middot; cooling: ' + cool : ''}</span>
-      <span>Requests</span><span>${esc(q.requests_succeeded_session || 0)} ok / ${esc(q.requests_rate_limited_session || 0)} rate-limited</span>
-      <span>Tokens</span><span>${esc(totalTok)} &middot; est. ${esc(spend)}</span>
+      <span>Requests</span><span>${esc(q.requests_succeeded_session || 0)} ok / ${esc(q.requests_rate_limited_session || 0)} rate-limited <small class="muted">(current run)</small></span>
+      <span>Tokens</span><span>${esc(totalTok)} &middot; est. ${esc(spend)} <small class="muted">(current run)</small></span>
       <span>Limit</span><span>${esc(limit)}${link}</span>`;
   }
 
@@ -923,7 +923,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         ob.style.display = needsOnboard ? 'block' : 'none';
       }
     }
-    $('licenseBox').textContent = `Plan: ${data.license.plan_tier} | Tokens used: ${data.license.tokens_used_this_period}`;
+    $('licenseBox').textContent = `Plan: ${data.license.plan_tier} | Tokens used: ${data.license.tokens_used_this_period} (current container session)`;
 
     renderQuota(data);
     reconcilePending(data.pending_approvals || []);

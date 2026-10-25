@@ -2,6 +2,13 @@
 
 All notable changes to **HA AI Brain** are documented in this file.
 
+## 0.1.22 - 2026-10-25
+
+### Improved
+- **Quota & Usage Telemetry Clarity**:
+  - Clarified on the dashboard quota card that requests and token counts reflect the **current container session** (since last restart), avoiding confusion with lifetime multi-day Google Cloud / AI Studio invoices.
+  - Added full pricing table mappings for `gemini-2.0-flash`, `gemini-1.5-pro`, `gemini-1.5-flash-8b`, and `gemini-pro` to ensure model spend estimation mirrors provider rates accurately.
+
 ## 0.1.21 - 2026-10-25
 
 ### Fixed & Improved
