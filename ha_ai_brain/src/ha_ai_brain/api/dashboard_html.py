@@ -251,7 +251,13 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   <div id="pane-activity" class="tab-pane">
     <div class="grid two">
       <div class="card">
-        <div class="card-head"><h2>Agent activity</h2><span class="pill" id="logsCountBadge">0</span></div>
+        <div class="card-head">
+          <h2>Agent activity</h2>
+          <div style="display:flex; align-items:center; gap:8px;">
+            <button id="clearLogsBtn" class="icon" style="display:none; font-size:12px; padding:4px 8px;" onclick="clearActivityLogs()">Clear logs</button>
+            <span class="pill" id="logsCountBadge">0</span>
+          </div>
+        </div>
         <div id="logsScrollContainer" class="scroll">
           <div id="logsList"></div>
           <div id="logsEmpty" class="empty">No agent activity yet.</div>
@@ -262,7 +268,14 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       </div>
 
       <div class="card">
-        <div class="card-head"><h2>Insights and proposed automations</h2></div>
+        <div class="card-head">
+          <h2>Insights and recommendations</h2>
+          <div style="display:flex; align-items:center; gap:8px;">
+            <button id="dismissAllInsightsBtn" class="icon" style="display:none; font-size:12px; padding:4px 8px;" onclick="dismissAllInsights()">Dismiss all</button>
+            <button id="clearAllInsightsBtn" class="icon" style="display:none; font-size:12px; padding:4px 8px;" onclick="clearAllInsights()">Clear all</button>
+            <span class="pill info" id="activeInsightsCountBadge" style="display:none;">0</span>
+          </div>
+        </div>
         <div id="insightsList" class="scroll"></div>
       </div>
     </div>
@@ -277,9 +290,17 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         <div id="rulesList"></div>
       </div>
       <div class="card">
-        <div class="card-head"><h2>Rejected suggestions</h2></div>
+        <div class="card-head"><h2>Rejected action suggestions</h2></div>
         <div class="hint">Blocked actions that will not be proposed again. Unblock one to let agents suggest it again.</div>
         <div id="rejectedList"></div>
+      </div>
+    </div>
+
+    <div class="grid" style="margin-top:16px;">
+      <div class="card">
+        <div class="card-head"><h2>Rejected insights &amp; recommendations</h2></div>
+        <div class="hint">Advisory topics and hardware advice you rejected. Agents are forbidden from proposing these topics again. Unblock to allow agents to suggest them again.</div>
+        <div id="rejectedInsightsList"></div>
       </div>
     </div>
 
@@ -636,6 +657,21 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         <button class="icon" data-sig="${esc(e.action_signature)}" onclick="unblockRejected(this.dataset.sig)">Unblock</button></div></div>`).join('')
       : '<div class="empty">No rejected suggestions.</div>';
 
+    const rejInsBox = $('rejectedInsightsList');
+    if (rejInsBox) {
+      rejInsBox.innerHTML = (data.rejected_insights || []).length ? (data.rejected_insights).map(ins => `
+        <div class="item">
+          <div class="row">
+            <div>
+              <strong>${esc(ins.title)}</strong>
+              <div class="muted" style="font-size:11px; margin-top:2px;">Category: ${esc(ins.category || 'advisory')} ${ins.resolved_at ? '&middot; Rejected ' + esc(new Date(ins.resolved_at).toLocaleDateString()) : ''}</div>
+            </div>
+            <button class="icon" onclick="unblockRejectedInsight('${esc(ins.insight_id)}')">Unblock</button>
+          </div>
+          ${ins.rejection_reason ? `<div class="muted" style="margin-top:6px; font-size:12px; background:rgba(255,255,255,0.04); padding:6px 8px; border-radius:4px;"><strong>Your rejection note:</strong> ${esc(ins.rejection_reason)}</div>` : ''}
+        </div>`).join('') : '<div class="empty">No rejected insights. When you reject an insight, it appears here and agents will not suggest it again.</div>';
+    }
+
     const notes = data.user_context_notes || [];
     $('contextNotesList').innerHTML = notes.length ? notes.map(n => `
       <div class="item row"><div><div>${esc(n.content)}</div>
@@ -673,11 +709,21 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
     totalServerLogs = data.total_logs_count || (data.recent_logs || []).length;
     $('logsCountBadge').textContent = totalServerLogs;
+    if ($('clearLogsBtn')) $('clearLogsBtn').style.display = totalServerLogs > 0 ? 'inline-block' : 'none';
+
+    const unreadInsights = data.active_insights_count !== undefined ? data.active_insights_count : (data.advisory_insights || []).length;
     const tabActBadge = $('tabBadge-activity');
     if (tabActBadge) {
-      tabActBadge.style.display = totalServerLogs ? 'inline-block' : 'none';
-      tabActBadge.textContent = totalServerLogs;
+      tabActBadge.style.display = unreadInsights > 0 ? 'inline-block' : 'none';
+      tabActBadge.textContent = unreadInsights;
     }
+    const insBadge = $('activeInsightsCountBadge');
+    if (insBadge) {
+      insBadge.style.display = unreadInsights > 0 ? 'inline-block' : 'none';
+      insBadge.textContent = unreadInsights;
+    }
+    if ($('dismissAllInsightsBtn')) $('dismissAllInsightsBtn').style.display = unreadInsights > 0 ? 'inline-block' : 'none';
+    if ($('clearAllInsightsBtn')) $('clearAllInsightsBtn').style.display = (data.advisory_insights || []).length > 0 ? 'inline-block' : 'none';
 
     const lBox = $('logsList');
     if (data.recent_logs && data.recent_logs.length) {
@@ -702,7 +748,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       if (i.domain === 'automation' || i.native_automation) proposals.push({agent: l.agent_id, intent: i});
     }));
     let html = (data.advisory_insights || []).map(ins => `
-      <div class="item">
+      <div class="item" id="ins-${ins.insight_id}">
         <div class="row">
           <div>
             <strong>${esc(ins.title)}</strong>
@@ -715,6 +761,17 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           <strong>Recommended:</strong> ${esc(ins.recommended_human_action)}
         </div>
         ${ins.estimated_impact ? `<div class="muted" style="margin-top:6px; font-size:12px;"><strong>Impact:</strong> ${esc(ins.estimated_impact)}</div>` : ''}
+        <div class="row" style="margin-top:10px; gap:8px; justify-content: flex-end; align-items:center;">
+          <button class="icon" style="font-size:12px; padding:4px 10px;" onclick="dismissInsight('${esc(ins.insight_id)}')" title="Mark as read / dismiss from active list">
+            ✓ Mark read
+          </button>
+          <button class="icon" style="font-size:12px; padding:4px 10px; color:#e74c3c;" onclick="rejectInsightPrompt('${esc(ins.insight_id)}', '${esc(ins.title).replace(/'/g, "\\'")}')" title="Reject this advice so agents never suggest it again">
+            ✕ Reject &amp; Never suggest
+          </button>
+          <button class="icon" style="font-size:12px; padding:4px 8px; color:var(--muted);" onclick="deleteInsight('${esc(ins.insight_id)}')" title="Delete insight permanently">
+            &times;
+          </button>
+        </div>
       </div>`).join('');
     html += proposals.map(({agent, intent}) => `
       <div class="item"><strong>Proposed automation</strong> <span class="muted">${esc(agent)}</span>
@@ -817,6 +874,51 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   async function revokeRule(signature) {
     if (!confirm('Revoke this rule? The action will ask for your approval again.')) return;
     await fetch('./api/rules?signature=' + encodeURIComponent(signature), {method: 'DELETE'});
+    await refreshAll();
+  }
+
+  async function clearActivityLogs() {
+    if (!confirm('Clear all agent activity logs? This frees database storage.')) return;
+    await fetch('./api/logs', {method: 'DELETE'});
+    allLoadedLogs = [];
+    loadedLogIds.clear();
+    $('logsList').innerHTML = '';
+    await refreshAll();
+  }
+
+  async function dismissInsight(insightId) {
+    await post('./api/insights/' + encodeURIComponent(insightId) + '/dismiss', {});
+    await refreshAll();
+  }
+
+  async function dismissAllInsights() {
+    if (!confirm('Mark all active insights as read / dismissed?')) return;
+    await post('./api/insights/dismiss_all', {});
+    await refreshAll();
+  }
+
+  async function rejectInsightPrompt(insightId, title) {
+    const reason = prompt('Why do you want to reject this recommendation?\n\n(Optional context/note so agents understand your preference and never suggest it again):', '');
+    if (reason === null) return;
+    await post('./api/insights/' + encodeURIComponent(insightId) + '/reject', {reason: reason});
+    await refreshAll();
+  }
+
+  async function deleteInsight(insightId) {
+    if (!confirm('Delete this insight permanently?')) return;
+    await fetch('./api/insights/' + encodeURIComponent(insightId), {method: 'DELETE'});
+    await refreshAll();
+  }
+
+  async function clearAllInsights() {
+    if (!confirm('Delete all insights permanently?')) return;
+    await fetch('./api/insights', {method: 'DELETE'});
+    await refreshAll();
+  }
+
+  async function unblockRejectedInsight(insightId) {
+    if (!confirm('Unblock this recommendation? Agents will be permitted to analyze and suggest it again.')) return;
+    await fetch('./api/insights/rejected/' + encodeURIComponent(insightId), {method: 'DELETE'});
     await refreshAll();
   }
 

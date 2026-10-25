@@ -143,6 +143,55 @@ class TestControlPlaneAPI(unittest.IsolatedAsyncioTestCase):
             cur_pend = (await client.get("/api/status")).json()["pending_approvals"]
             self.assertEqual(len(cur_pend), 0)
 
+            # 9. Test Insight Lifecycle: List, Dismiss, Reject with Note, Suppression, and Deletion
+            res_ins = await client.get("/api/insights")
+            self.assertEqual(res_ins.status_code, 200)
+            ins_data = res_ins.json()
+            self.assertGreaterEqual(len(ins_data["insights"]), 1)
+            target_ins = ins_data["insights"][0]
+            target_ins_id = target_ins["insight_id"]
+            target_title = target_ins["title"]
+
+            # 9a. Reject an insight with a custom human reason note
+            res_rej_ins = await client.post(
+                f"/api/insights/{target_ins_id}/reject",
+                json={"reason": "I do not want advice about this area"},
+            )
+            self.assertEqual(res_rej_ins.status_code, 200)
+            self.assertEqual(res_rej_ins.json()["insight"]["status"], "rejected")
+
+            # Verify it shows up in rejected_insights and is excluded from active advisory_insights
+            status_after_rej = (await client.get("/api/status")).json()
+            self.assertNotIn(target_ins_id, [i["insight_id"] for i in status_after_rej["advisory_insights"]])
+            rej_list = status_after_rej["rejected_insights"]
+            self.assertEqual(len(rej_list), 1)
+            self.assertEqual(rej_list[0]["rejection_reason"], "I do not want advice about this area")
+
+            # 9b. Verify subsequent batch analysis suppresses the rejected insight
+            res_batch_suppress = await client.post("/api/batch/analyze", json={"agent_id": "climate_thermal_agent", "lookback_hours": 24})
+            self.assertEqual(res_batch_suppress.status_code, 200)
+            batch_log_suppressed = res_batch_suppress.json()["run_log"]
+            suppressed_titles = [i["title"] for i in batch_log_suppressed.get("advisory_insights", [])]
+            self.assertNotIn(target_title, suppressed_titles)
+
+            # 9c. Unblock the rejected insight
+            res_unblock_ins = await client.delete(f"/api/insights/rejected/{target_ins_id}")
+            self.assertEqual(res_unblock_ins.status_code, 200)
+            status_after_unblock = (await client.get("/api/status")).json()
+            self.assertEqual(len(status_after_unblock["rejected_insights"]), 0)
+
+            # 9d. Dismiss all insights
+            res_dis_ins_all = await client.post("/api/insights/dismiss_all")
+            self.assertEqual(res_dis_ins_all.status_code, 200)
+            status_after_dis = (await client.get("/api/status")).json()
+            self.assertEqual(len(status_after_dis["advisory_insights"]), 0)
+
+            # 9e. Clear all logs to free storage
+            res_clear_logs = await client.delete("/api/logs")
+            self.assertEqual(res_clear_logs.status_code, 200)
+            status_after_clear = (await client.get("/api/status")).json()
+            self.assertEqual(status_after_clear["total_logs_count"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

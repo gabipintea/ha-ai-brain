@@ -74,6 +74,7 @@ class SQLiteMemoryAdapter(MemoryStorePort):
             CREATE TABLE IF NOT EXISTS advisory_insights (
                 insight_id TEXT PRIMARY KEY,
                 agent_id TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'active',
                 created_at TEXT NOT NULL,
                 payload_json TEXT NOT NULL
             );
@@ -108,10 +109,15 @@ class SQLiteMemoryAdapter(MemoryStorePort):
             CREATE INDEX IF NOT EXISTS idx_pending_approvals_status ON pending_approvals(status);
             CREATE INDEX IF NOT EXISTS idx_run_logs_created ON run_logs(created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_advisory_insights_created ON advisory_insights(created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_advisory_insights_status ON advisory_insights(status, created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_feedback_episodes_agent ON feedback_episodes(agent_id, created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_user_context_notes_active ON user_context_notes(active, created_at DESC);
             """
         )
+        try:
+            cur.execute("ALTER TABLE advisory_insights ADD COLUMN status TEXT NOT NULL DEFAULT 'active'")
+        except sqlite3.OperationalError:
+            pass
         self._conn.commit()
 
     async def save_feedback(self, episode: FeedbackEpisode) -> None:
@@ -302,6 +308,14 @@ class SQLiteMemoryAdapter(MemoryStorePort):
                 log.model_dump_json(),
             ),
         )
+        # Keep recent 300 logs in SQLite to prevent unbound storage growth
+        self._conn.execute(
+            """
+            DELETE FROM run_logs WHERE run_id NOT IN (
+                SELECT run_id FROM run_logs ORDER BY created_at DESC LIMIT 300
+            )
+            """
+        )
         self._conn.commit()
 
     async def get_recent_run_logs(self, limit: int = 25, offset: int = 0) -> list[AgentRunLog]:
@@ -315,28 +329,111 @@ class SQLiteMemoryAdapter(MemoryStorePort):
         row = self._conn.execute("SELECT COUNT(*) FROM run_logs").fetchone()
         return int(row[0]) if row else 0
 
+    async def clear_run_logs(self) -> int:
+        cur = self._conn.execute("DELETE FROM run_logs")
+        self._conn.commit()
+        return cur.rowcount
+
     async def save_advisory_insight(self, insight: AdvisoryInsight) -> None:
         self._conn.execute(
             """
             INSERT OR REPLACE INTO advisory_insights
-            (insight_id, agent_id, created_at, payload_json)
-            VALUES (?, ?, ?, ?)
+            (insight_id, agent_id, status, created_at, payload_json)
+            VALUES (?, ?, ?, ?, ?)
             """,
             (
                 insight.insight_id,
                 insight.agent_id,
+                insight.status,
                 insight.created_at.isoformat(),
                 insight.model_dump_json(),
             ),
         )
         self._conn.commit()
 
-    async def get_advisory_insights(self, limit: int = 30) -> list[AdvisoryInsight]:
+    async def get_advisory_insights(self, limit: int = 50, status: str | None = None) -> list[AdvisoryInsight]:
+        if status:
+            rows = self._conn.execute(
+                "SELECT payload_json FROM advisory_insights WHERE status = ? ORDER BY created_at DESC LIMIT ?",
+                (status, limit),
+            ).fetchall()
+        else:
+            rows = self._conn.execute(
+                "SELECT payload_json FROM advisory_insights ORDER BY created_at DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        return [AdvisoryInsight.model_validate_json(r["payload_json"]) for r in rows]
+
+    async def get_active_insights_count(self) -> int:
+        row = self._conn.execute("SELECT COUNT(*) FROM advisory_insights WHERE status = 'active'").fetchone()
+        return int(row[0]) if row else 0
+
+    async def resolve_advisory_insight(self, insight_id: str, status: str, rejection_reason: str = "") -> AdvisoryInsight | None:
+        row = self._conn.execute(
+            "SELECT payload_json FROM advisory_insights WHERE insight_id = ?",
+            (insight_id,),
+        ).fetchone()
+        if not row:
+            return None
+        insight = AdvisoryInsight.model_validate_json(row["payload_json"])
+        insight.status = status
+        if rejection_reason:
+            insight.rejection_reason = rejection_reason
+        insight.resolved_at = datetime.now(timezone.utc)
+        await self.save_advisory_insight(insight)
+        return insight
+
+    async def delete_advisory_insight(self, insight_id: str) -> bool:
+        cur = self._conn.execute("DELETE FROM advisory_insights WHERE insight_id = ?", (insight_id,))
+        self._conn.commit()
+        return cur.rowcount > 0
+
+    async def dismiss_all_advisory_insights(self) -> int:
+        rows = self._conn.execute("SELECT payload_json FROM advisory_insights WHERE status = 'active'").fetchall()
+        now = datetime.now(timezone.utc)
+        count = 0
+        for r in rows:
+            insight = AdvisoryInsight.model_validate_json(r["payload_json"])
+            insight.status = "dismissed"
+            insight.resolved_at = now
+            await self.save_advisory_insight(insight)
+            count += 1
+        return count
+
+    async def delete_all_advisory_insights(self, status: str | None = None) -> int:
+        if status:
+            cur = self._conn.execute("DELETE FROM advisory_insights WHERE status = ?", (status,))
+        else:
+            cur = self._conn.execute("DELETE FROM advisory_insights")
+        self._conn.commit()
+        return cur.rowcount
+
+    async def get_rejected_insights(self) -> list[AdvisoryInsight]:
         rows = self._conn.execute(
-            "SELECT payload_json FROM advisory_insights ORDER BY created_at DESC LIMIT ?",
-            (limit,),
+            "SELECT payload_json FROM advisory_insights WHERE status = 'rejected' ORDER BY created_at DESC"
         ).fetchall()
         return [AdvisoryInsight.model_validate_json(r["payload_json"]) for r in rows]
+
+    async def unblock_rejected_insight(self, insight_id: str) -> bool:
+        row = self._conn.execute(
+            "SELECT payload_json FROM advisory_insights WHERE insight_id = ?",
+            (insight_id,),
+        ).fetchone()
+        if not row:
+            return False
+        insight = AdvisoryInsight.model_validate_json(row["payload_json"])
+        # Also remove associated FeedbackEpisode if any
+        sig = f"insight:{insight.category}:{insight.title}"
+        self._conn.execute(
+            "DELETE FROM feedback_episodes WHERE action_signature = ?",
+            (sig,),
+        )
+        cur = self._conn.execute(
+            "UPDATE advisory_insights SET status = 'dismissed' WHERE insight_id = ?",
+            (insight_id,),
+        )
+        self._conn.commit()
+        return cur.rowcount > 0
 
     async def save_expected_outcome(self, outcome: ExpectedOutcome) -> None:
         self._conn.execute(

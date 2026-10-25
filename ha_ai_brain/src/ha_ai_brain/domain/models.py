@@ -173,7 +173,10 @@ class AdvisoryInsight(BaseModel):
     evidence_metrics: dict[str, Any] = Field(default_factory=dict)
     recommended_human_action: str
     estimated_impact: str = ""
+    status: str = "active"  # "active", "read", "dismissed", "rejected"
+    rejection_reason: str = ""
     created_at: datetime = Field(default_factory=utc_now)
+    resolved_at: datetime | None = None
 
 
 class ActionIntent(BaseModel):

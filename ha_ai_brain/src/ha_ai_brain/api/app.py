@@ -18,7 +18,7 @@ from ha_ai_brain.adapters.sandbox_python import PythonSandboxAdapter
 from ha_ai_brain.api.dashboard_html import DASHBOARD_HTML, render_dashboard_html
 from ha_ai_brain.application.orchestrator import BrainOrchestrator
 from ha_ai_brain.config import AutonomyLevel, BrainSettings, FallbackPolicy, OperatingMode
-from ha_ai_brain.domain.models import AgentSpec, IgnoredTarget, UserContextNote
+from ha_ai_brain.domain.models import AgentSpec, FeedbackEpisode, FeedbackPolarity, IgnoredTarget, UserContextNote
 from ha_ai_brain.ports.llm import LLMProviderPort
 
 
@@ -181,7 +181,9 @@ def create_app(settings: BrainSettings | None = None) -> Any:
         rejected = await orchestrator.memory.get_rejected_suggestions()
         logs = await orchestrator.memory.get_recent_run_logs(limit=10)
         total_logs = await orchestrator.memory.get_run_logs_count()
-        insights = await orchestrator.memory.get_advisory_insights(limit=10)
+        insights = await orchestrator.memory.get_advisory_insights(limit=30, status="active")
+        active_insights_count = await orchestrator.memory.get_active_insights_count()
+        rejected_insights = await orchestrator.memory.get_rejected_insights()
         context_notes = await orchestrator.memory.get_user_context_notes(active_only=True)
         ignored_targets = await orchestrator.memory.get_ignored_targets()
         notify_services = await orchestrator.smart_home.get_available_notify_services()
@@ -211,6 +213,8 @@ def create_app(settings: BrainSettings | None = None) -> Any:
             "recent_logs": [l.model_dump(mode="json") for l in logs],
             "total_logs_count": total_logs,
             "advisory_insights": [i.model_dump(mode="json") for i in insights],
+            "active_insights_count": active_insights_count,
+            "rejected_insights": [r.model_dump(mode="json") for r in rejected_insights],
         }
 
     @app.delete("/api/rejected")
@@ -240,6 +244,81 @@ def create_app(settings: BrainSettings | None = None) -> Any:
             "offset": offset,
             "limit": limit,
         }
+
+    @app.delete("/api/logs")
+    async def clear_logs() -> dict[str, Any]:
+        """Clear all agent run logs to free up storage."""
+        count = await orchestrator.memory.clear_run_logs()
+        return {"status": "cleared", "deleted_count": count}
+
+    @app.get("/api/insights")
+    async def list_insights(status: str | None = None, limit: int = 50) -> dict[str, Any]:
+        """List advisory insights optionally filtered by status ('active', 'dismissed', 'rejected')."""
+        items = await orchestrator.memory.get_advisory_insights(limit=limit, status=status)
+        active_count = await orchestrator.memory.get_active_insights_count()
+        return {
+            "insights": [i.model_dump(mode="json") for i in items],
+            "active_count": active_count,
+        }
+
+    @app.post("/api/insights/{insight_id}/dismiss")
+    async def dismiss_insight(insight_id: str) -> dict[str, Any]:
+        """Mark an advisory insight as read / dismissed."""
+        resolved = await orchestrator.memory.resolve_advisory_insight(insight_id=insight_id, status="dismissed")
+        if not resolved:
+            raise HTTPException(status_code=404, detail="Insight not found")
+        return {"status": "dismissed", "insight": resolved.model_dump(mode="json")}
+
+    @app.post("/api/insights/dismiss_all")
+    async def dismiss_all_insights() -> dict[str, Any]:
+        """Dismiss all currently active advisory insights."""
+        count = await orchestrator.memory.dismiss_all_advisory_insights()
+        return {"status": "dismissed_all", "count": count}
+
+    @app.post("/api/insights/{insight_id}/reject")
+    async def reject_insight(insight_id: str, req: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Reject an advisory insight with an optional reason note so agents never propose it again."""
+        reason = str((req or {}).get("reason", "")).strip()
+        resolved = await orchestrator.memory.resolve_advisory_insight(
+            insight_id=insight_id,
+            status="rejected",
+            rejection_reason=reason,
+        )
+        if not resolved:
+            raise HTTPException(status_code=404, detail="Insight not found")
+        episode = FeedbackEpisode(
+            agent_id=resolved.agent_id,
+            cause_category=f"rejected_insight_{resolved.category}",
+            action_signature=f"insight:{resolved.category}:{resolved.title}",
+            target_entity_ids=[],
+            service_called="advisory_insight",
+            polarity=FeedbackPolarity.REJECTED_EXPLICIT,
+            human_note=reason or f"Homeowner rejected insight '{resolved.title}'",
+        )
+        await orchestrator.memory.save_feedback(episode)
+        return {"status": "rejected", "insight": resolved.model_dump(mode="json")}
+
+    @app.delete("/api/insights/{insight_id}")
+    async def delete_insight(insight_id: str) -> dict[str, Any]:
+        """Delete an advisory insight permanently."""
+        deleted = await orchestrator.memory.delete_advisory_insight(insight_id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Insight not found")
+        return {"status": "deleted", "insight_id": insight_id}
+
+    @app.delete("/api/insights")
+    async def clear_all_insights(status: str | None = None) -> dict[str, Any]:
+        """Clear all advisory insights permanently, optionally filtered by status."""
+        count = await orchestrator.memory.delete_all_advisory_insights(status=status)
+        return {"status": "cleared", "deleted_count": count}
+
+    @app.delete("/api/insights/rejected/{insight_id}")
+    async def unblock_rejected_insight(insight_id: str) -> dict[str, Any]:
+        """Unblock a rejected insight so agents may propose recommendations in this domain again."""
+        unblocked = await orchestrator.memory.unblock_rejected_insight(insight_id)
+        if not unblocked:
+            raise HTTPException(status_code=404, detail="Rejected insight not found")
+        return {"status": "unblocked", "insight_id": insight_id}
 
     @app.post("/api/settings")
     async def update_settings(req: SettingsUpdateRequest) -> dict[str, Any]:

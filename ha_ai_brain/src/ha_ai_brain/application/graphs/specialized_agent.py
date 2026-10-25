@@ -44,6 +44,7 @@ class AgentGraphState(TypedDict, total=False):
     derived_signals: list[DerivedSignal]
     proposed_intents: list[ActionIntent]
     advisory_insights: list[AdvisoryInsight]
+    rejected_insights: list[AdvisoryInsight]
 
 
 # Backward compatibility alias
@@ -135,6 +136,7 @@ class SpecializedAgentGraph:
             limit=15,
         )
         user_notes = await self.memory.get_user_context_notes(active_only=True)
+        rejected_insights = await self.memory.get_rejected_insights()
         ignored_targets = await self.memory.get_ignored_targets()
         if ignored_targets:
             corroborated = {
@@ -153,6 +155,7 @@ class SpecializedAgentGraph:
             "history_series": history_series,
             "past_feedback": past_feedback,
             "user_context_notes": user_notes,
+            "rejected_insights": rejected_insights,
         }
 
     @staticmethod
@@ -334,6 +337,7 @@ class SpecializedAgentGraph:
         corroborated = state.get("corroborated_states", {})
         derived_signals = state.get("derived_signals", [])
         research_findings = state.get("research_findings", [])
+        rejected_insights = state.get("rejected_insights", [])
 
         existing_automations = {
             eid: {
@@ -345,12 +349,27 @@ class SpecializedAgentGraph:
             if st.domain == "automation"
         }
 
+        rej_instruction = ""
+        if rejected_insights:
+            rej_lines = "\n".join(
+                f"- Category: {r.category} | Title: '{r.title}'"
+                + (f" | Homeowner rejection note: '{r.rejection_reason}'" if r.rejection_reason else "")
+                for r in rejected_insights
+            )
+            rej_instruction = (
+                "\nCRITICAL RULES FOR REJECTED ADVISORY INSIGHTS (DO NOT SUGGEST AGAIN):\n"
+                "The homeowner has explicitly REJECTED the following insight topics/recommendations. "
+                "You MUST NOT suggest these insights or similar recommendations again under any circumstances:\n"
+                f"{rej_lines}\n"
+            )
+
         llm_response = await self.llm.generate_json(
             system_prompt=(
                 f"You are the {agent_spec.name} ({agent_spec.specialty}) running in Periodic Deep Batch Analysis Mode. "
                 f"You are analyzing historical entity trajectories over the past {state.get('lookback_hours', 24)} hours. "
                 "Examine the historical entity trajectories, the Research Sub-Agent's findings, the Computation "
                 "Sub-Agent's derived signals, and the `existing_automations` already configured in Home Assistant.\n"
+                f"{rej_instruction}"
                 "CRITICAL RULES FOR EXISTING AUTOMATIONS & USER CONTEXT NOTES:\n"
                 "- Strictly obey `user_context_notes` (e.g., mechanically broken features, devices used only in specific modes, or user directives). Never suggest actions or insights that contradict `user_context_notes`.\n"
                 "- Do NOT mistake repetitive device state changes driven by `existing_automations` for un-automated manual human habits.\n"
@@ -370,6 +389,10 @@ class SpecializedAgentGraph:
                         {"scope": n.scope, "content": n.content, "related_entities": n.related_entities}
                         for n in state.get("user_context_notes", [])
                     ],
+                    "rejected_insights": [
+                        {"category": r.category, "title": r.title, "reason": r.rejection_reason}
+                        for r in rejected_insights
+                    ],
                     "existing_automations": existing_automations,
                     "derived_signals": [d.model_dump(exclude={"python_code_executed"}) for d in derived_signals],
                     "research_findings": [f.model_dump() for f in research_findings],
@@ -388,8 +411,28 @@ class SpecializedAgentGraph:
                 "existing_automations": existing_automations,
                 "derived_signals": [d.model_dump() for d in derived_signals],
                 "research_findings": [f.model_dump() for f in research_findings],
+                "rejected_insights": [r.model_dump(mode="json") for r in rejected_insights],
             },
         )
+
+        import re
+
+        def _is_rejected_insight(cand_title: str, cand_category: str) -> bool:
+            ct = cand_title.lower().strip()
+            cc = cand_category.lower().strip()
+            for r in rejected_insights:
+                rt = r.title.lower().strip()
+                rc = r.category.lower().strip()
+                if rt == ct:
+                    return True
+                if len(rt) >= 8 and (rt in ct or ct in rt):
+                    return True
+                if rc == cc:
+                    r_words = set(re.findall(r"\w{4,}", rt))
+                    c_words = set(re.findall(r"\w{4,}", ct))
+                    if r_words and len(r_words & c_words) >= max(2, len(r_words) // 2):
+                        return True
+            return False
 
         insights: list[AdvisoryInsight] = []
         raw_insights = llm_response.get("advisory_insights", [])
@@ -397,6 +440,10 @@ class SpecializedAgentGraph:
             raw_insights = [raw_insights]
         for item in raw_insights if isinstance(raw_insights, list) else []:
             if isinstance(item, dict) and "title" in item:
+                cand_title = str(item["title"])
+                cand_cat = str(item.get("category", "thermal_efficiency"))
+                if _is_rejected_insight(cand_title, cand_cat):
+                    continue
                 raw_em = item.get("evidence_metrics", {})
                 if isinstance(raw_em, dict):
                     em_dict = raw_em
@@ -407,8 +454,8 @@ class SpecializedAgentGraph:
                 insights.append(
                     AdvisoryInsight(
                         agent_id=agent_spec.agent_id,
-                        category=str(item.get("category", "thermal_efficiency")),
-                        title=str(item["title"]),
+                        category=cand_cat,
+                        title=cand_title,
                         finding_details=str(item.get("finding_details", "")),
                         evidence_metrics=em_dict,
                         recommended_human_action=str(item.get("recommended_human_action", "")),

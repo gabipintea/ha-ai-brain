@@ -88,12 +88,44 @@ class MemoryStorePort(ABC):
         """Return total count of recorded agent run logs."""
 
     @abstractmethod
+    async def clear_run_logs(self) -> int:
+        """Clear all agent run logs to free up database storage."""
+
+    @abstractmethod
     async def save_advisory_insight(self, insight: AdvisoryInsight) -> None:
         """Store a structural/hardware/insulation recommendation."""
 
     @abstractmethod
-    async def get_advisory_insights(self, limit: int = 30) -> list[AdvisoryInsight]:
-        """List discovered advisory insights."""
+    async def get_advisory_insights(self, limit: int = 50, status: str | None = None) -> list[AdvisoryInsight]:
+        """List discovered advisory insights, optionally filtered by status."""
+
+    @abstractmethod
+    async def get_active_insights_count(self) -> int:
+        """Return count of active (un-dismissed, un-rejected) advisory insights."""
+
+    @abstractmethod
+    async def resolve_advisory_insight(self, insight_id: str, status: str, rejection_reason: str = "") -> AdvisoryInsight | None:
+        """Update an insight's status ('read', 'dismissed', 'rejected') and optional rejection reason."""
+
+    @abstractmethod
+    async def delete_advisory_insight(self, insight_id: str) -> bool:
+        """Delete an advisory insight by ID."""
+
+    @abstractmethod
+    async def dismiss_all_advisory_insights(self) -> int:
+        """Dismiss all currently active advisory insights."""
+
+    @abstractmethod
+    async def delete_all_advisory_insights(self, status: str | None = None) -> int:
+        """Delete all advisory insights, optionally filtered by status."""
+
+    @abstractmethod
+    async def get_rejected_insights(self) -> list[AdvisoryInsight]:
+        """Retrieve all homeowner-rejected advisory insights."""
+
+    @abstractmethod
+    async def unblock_rejected_insight(self, insight_id: str) -> bool:
+        """Unblock a rejected insight so agents may propose it again."""
 
     @abstractmethod
     async def save_expected_outcome(self, outcome: ExpectedOutcome) -> None:

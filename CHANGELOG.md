@@ -2,6 +2,25 @@
 
 All notable changes to **HA AI Brain** are documented in this file.
 
+## 0.1.10 - 2026-10-25
+
+### Added & Improved
+- **Insight Lifecycle Management (Dismiss / Mark Read & Delete)**:
+  - Added individual "✓ Mark read" (dismiss) and "Delete" actions on advisory insight cards.
+  - Added "Dismiss all" and "Clear all" bulk actions in the Insights header to easily triage and clear historical insights.
+  - Added status tracking (`active`, `dismissed`, `rejected`) in `advisory_insights` SQLite schema with migration and indexing.
+
+- **Insight Rejection with Feedback Notes & Topic Suppression**:
+  - Added "✕ Reject & Never suggest" action on advisory insights with an optional prompt for homeowner context/notes.
+  - Automatically records a `FeedbackEpisode` and marks the insight as `rejected`.
+  - Injected rejected topics, categories, and homeowner notes into batch agent prompts so LLMs are explicitly commanded never to propose rejected recommendations again.
+  - Added deterministic post-filtering in `SpecializedAgentGraph._synthesize_batch_node` guaranteeing that rejected insight topics never resurface.
+  - Added **"Rejected insights & recommendations"** section in the **Memory & Rules** tab where homeowners can view all rejected advice and click **Unblock** anytime.
+
+- **Activity Logs Storage Control & Tab Badge Fix**:
+  - Replaced the confusing "205" raw activity log count badge on the "Activity & Insights" navigation tab with the count of active, unread insights.
+  - Added "Clear logs" button to the Agent Activity card and automated log retention auto-pruning (capping at 300 recent logs) to keep SQLite storage lean and prevent unbound database growth.
+
 ## 0.1.9 - 2026-10-25
 
 ### Refactored & Hardened
