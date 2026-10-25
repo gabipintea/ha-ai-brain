@@ -2,6 +2,17 @@
 
 All notable changes to **HA AI Brain** are documented in this file.
 
+## 0.1.25 - 2026-10-25
+
+### Added & Improved
+- **Scheduled Next Batch Execution Indicators Across UI**:
+  - Added real-time tracking and relative countdown formatting (`formatRelativeSchedule`) for the next scheduled periodic batch analysis across 3 locations in the interface:
+    1. **Top Header**: Directly beneath the status controls (`Next batch: Today at 20:59 (in 5h 25m)`).
+    2. **Activity & Insights Tab**: Sub-header on the Agent Activity card.
+    3. **Settings Tab**: Summary card inside Operating Settings showing next scheduled batch time, batch interval (e.g. `every 6h`), and last completed batch execution.
+  - Implemented `get_next_batch_run_at()` and `get_last_batch_run_at()` on `BrainOrchestrator` with SQLite run log lookup (`get_last_batch_run_time()`).
+  - Added `next_batch_run_at`, `last_batch_run_at`, and `batch_interval_minutes` to `/api/status`.
+
 ## 0.1.24 - 2026-10-25
 
 ### Fixed & Improved

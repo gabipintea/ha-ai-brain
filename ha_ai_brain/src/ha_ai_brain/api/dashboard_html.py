@@ -283,10 +283,13 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       <h1>HA AI Brain</h1>
       <div class="sub">Autonomous cognitive layer for Home Assistant</div>
     </div>
-    <div class="status">
-      <span class="pill" id="modeBadge">Loading...</span>
-      <span class="pill ok" id="llmBadge"><span class="dot"></span><span id="llmBadgeText">AI ready</span></span>
-      <button onclick="triggerBatch()" id="batchBtn">Run analysis now</button>
+    <div class="status" style="display:flex; flex-direction:column; align-items:flex-end; gap:4px;">
+      <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap; justify-content:flex-end;">
+        <span class="pill" id="modeBadge">Loading...</span>
+        <span class="pill ok" id="llmBadge"><span class="dot"></span><span id="llmBadgeText">AI ready</span></span>
+        <button onclick="triggerBatch()" id="batchBtn">Run analysis now</button>
+      </div>
+      <div id="nextBatchHeader" class="muted" style="font-size:11px; white-space:nowrap; display:none;"></div>
     </div>
   </header>
 
@@ -340,7 +343,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     <div class="grid two">
       <div class="card">
         <div class="card-head">
-          <h2>Agent activity</h2>
+          <div>
+            <h2>Agent activity</h2>
+            <div id="nextBatchActivity" class="muted" style="font-size:11px; margin-top:2px; font-weight:normal;"></div>
+          </div>
           <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
             <button id="clearLogsBtn" class="icon" style="display:none; font-size:11px; padding:3px 8px;" onclick="clearActivityLogs()">Clear logs</button>
             <span class="pill" id="logsCountBadge">0</span>
@@ -472,6 +478,16 @@ DASHBOARD_HTML = """<!DOCTYPE html>
             <input type="checkbox" id="notifyCheck" autocomplete="off" onchange="updateSetting('notifications_enabled', this.checked)" checked />
             Send actionable approval notifications
           </label>
+          <div id="batchScheduleBox" style="margin-top:12px; padding:10px 12px; background:rgba(255,255,255,0.03); border:1px solid var(--border); border-radius:6px; font-size:12px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px; gap:8px;">
+              <span class="muted">Next scheduled batch:</span>
+              <strong id="nextBatchSettings">-</strong>
+            </div>
+            <div style="display:flex; justify-content:space-between; align-items:center; gap:8px;">
+              <span class="muted">Last batch executed:</span>
+              <span id="lastBatchSettings" class="muted">-</span>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -546,6 +562,50 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   }
   const $ = id => document.getElementById(id);
+
+  function formatRelativeSchedule(isoString) {
+    if (!isoString) return null;
+    const target = new Date(isoString);
+    if (isNaN(target.getTime())) return null;
+    const now = new Date();
+    const diffMs = target.getTime() - now.getTime();
+    const isPast = diffMs < -60000;
+    const absDiffSec = Math.floor(Math.abs(diffMs) / 1000);
+    const hours = Math.floor(absDiffSec / 3600);
+    const mins = Math.floor((absDiffSec % 3600) / 60);
+
+    let relText = '';
+    if (hours >= 24) {
+      const days = Math.floor(hours / 24);
+      relText = `${days}d ${hours % 24}h`;
+    } else if (hours > 0) {
+      relText = `${hours}h ${mins}m`;
+    } else if (mins > 0) {
+      relText = `${mins}m`;
+    } else {
+      relText = '<1m';
+    }
+
+    const timeStr = target.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const isToday = target.toDateString() === now.toDateString();
+    const tomorrow = new Date(now);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    const isTomorrow = target.toDateString() === tomorrow.toDateString();
+
+    let datePrefix = '';
+    if (isToday) {
+      datePrefix = 'Today';
+    } else if (isTomorrow) {
+      datePrefix = 'Tomorrow';
+    } else {
+      datePrefix = target.toLocaleDateString([], { month: 'short', day: 'numeric' });
+    }
+
+    if (isPast) {
+      return `${datePrefix} at ${timeStr} (${relText} ago)`;
+    }
+    return `${datePrefix} at ${timeStr} (in ${relText})`;
+  }
 
   let pendingHashTarget = null;
 
@@ -971,6 +1031,49 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
     renderQuota(data);
     reconcilePending(data.pending_approvals || []);
+
+    const opMode = (data.settings && data.settings.operating_mode) || 'hybrid';
+    const nextBatchStr = formatRelativeSchedule(data.next_batch_run_at);
+    const lastBatchStr = formatRelativeSchedule(data.last_batch_run_at);
+    const intervalMins = data.batch_interval_minutes || 360;
+    const intervalHours = (intervalMins / 60).toFixed(intervalMins % 60 === 0 ? 0 : 1);
+
+    const nbHeader = $('nextBatchHeader');
+    if (nbHeader) {
+      if (opMode === 'realtime_stream') {
+        nbHeader.textContent = 'Next batch: Paused in Real-time mode';
+        nbHeader.style.display = 'block';
+      } else if (nextBatchStr) {
+        nbHeader.textContent = 'Next batch: ' + nextBatchStr;
+        nbHeader.style.display = 'block';
+      } else {
+        nbHeader.style.display = 'none';
+      }
+    }
+
+    const nbActivity = $('nextBatchActivity');
+    if (nbActivity) {
+      if (opMode === 'realtime_stream') {
+        nbActivity.textContent = 'Periodic batch paused (Real-time event mode)';
+      } else if (nextBatchStr) {
+        nbActivity.textContent = 'Next scheduled batch: ' + nextBatchStr;
+      } else {
+        nbActivity.textContent = '';
+      }
+    }
+
+    const nbSettings = $('nextBatchSettings');
+    const lbSettings = $('lastBatchSettings');
+    if (nbSettings) {
+      if (opMode === 'realtime_stream') {
+        nbSettings.textContent = 'Paused in Real-time mode';
+      } else {
+        nbSettings.textContent = (nextBatchStr || '-') + (intervalHours ? ` (every ${intervalHours}h)` : '');
+      }
+    }
+    if (lbSettings) {
+      lbSettings.textContent = lastBatchStr || (data.last_batch_run_at ? new Date(data.last_batch_run_at).toLocaleString() : 'None yet');
+    }
 
     const rules = Object.values(data.endorsed_rules || {});
     const rBadge = $('rulesCountBadge');

@@ -99,6 +99,10 @@ class MemoryStorePort(ABC):
     async def get_run_logs_count(self) -> int:
         """Return total count of recorded agent run logs."""
 
+    async def get_last_batch_run_time(self) -> datetime | None:
+        """Return the timestamp of the most recent periodic batch run."""
+        return None
+
     @abstractmethod
     async def clear_run_logs(self) -> int:
         """Clear all agent run logs to free up database storage."""

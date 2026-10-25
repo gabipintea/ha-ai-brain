@@ -377,6 +377,18 @@ class SQLiteMemoryAdapter(MemoryStorePort):
         row = self._conn.execute("SELECT COUNT(*) FROM run_logs").fetchone()
         return int(row[0]) if row else 0
 
+    async def get_last_batch_run_time(self) -> datetime | None:
+        """Return the timestamp of the most recent periodic batch run."""
+        row = self._conn.execute(
+            "SELECT created_at FROM run_logs WHERE mode = 'periodic_batch' ORDER BY created_at DESC LIMIT 1"
+        ).fetchone()
+        if not row or not row["created_at"]:
+            return None
+        try:
+            return datetime.fromisoformat(row["created_at"])
+        except Exception:
+            return None
+
     async def clear_run_logs(self) -> int:
         cur = self._conn.execute("DELETE FROM run_logs")
         self._conn.commit()

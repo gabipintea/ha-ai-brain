@@ -90,8 +90,33 @@ class BrainOrchestrator:
         self._background_tasks: list[asyncio.Task[Any]] = []
         self._running = False
         self._cached_states: dict[str, Any] = {}
+        self._next_batch_run_at: datetime | None = None
+        self._last_batch_run_at: datetime | None = None
         if hasattr(self.memory, "get_ui_preferences_sync"):
             self._apply_ui_preferences_dict(self.memory.get_ui_preferences_sync())
+
+    async def get_next_batch_run_at(self) -> datetime | None:
+        """Return the calculated date & time of the next scheduled periodic batch analysis."""
+        if self.settings.operating_mode == OperatingMode.REALTIME_STREAM:
+            return None
+        if self._next_batch_run_at:
+            return self._next_batch_run_at
+        last_run = await self.get_last_batch_run_at()
+        interval = timedelta(minutes=self.settings.batch_interval_minutes)
+        now = datetime.now(timezone.utc)
+        if last_run:
+            next_t = last_run + interval
+            if next_t > now:
+                return next_t
+        return now + interval
+
+    async def get_last_batch_run_at(self) -> datetime | None:
+        """Return the timestamp when the most recent periodic batch run occurred."""
+        if self._last_batch_run_at:
+            return self._last_batch_run_at
+        if hasattr(self.memory, "get_last_batch_run_time"):
+            self._last_batch_run_at = await self.memory.get_last_batch_run_time()
+        return self._last_batch_run_at
 
     def invalidate_context_caches(self) -> None:
         """Notify agent graph to clear cached research findings and computations upon context or rule updates."""
@@ -202,16 +227,20 @@ class BrainOrchestrator:
         first_run = True
         while self._running:
             try:
+                now = datetime.now(timezone.utc)
                 if first_run and self.settings.llm_api_key and not self.settings.use_simulator:
                     first_run = False
+                    self._next_batch_run_at = now + timedelta(seconds=3.0)
                     await asyncio.sleep(3.0)
                 else:
                     first_run = False
                     interval_seconds = max(60, self.settings.batch_interval_minutes * 60)
+                    self._next_batch_run_at = now + timedelta(seconds=interval_seconds)
                     await asyncio.sleep(interval_seconds)
                 if not self._running:
                     break
                 if self.settings.operating_mode in (OperatingMode.PERIODIC_BATCH, OperatingMode.HYBRID):
+                    self._last_batch_run_at = datetime.now(timezone.utc)
                     active_agents = self.registry.get_active_agents()
                     logger.info("Executing Periodic Batch Analysis across %d active specialized agents...", len(active_agents))
                     for agent in active_agents:
@@ -480,6 +509,9 @@ class BrainOrchestrator:
         )
         self._log_agent_run_summary(run_log)
         await self.memory.save_run_log(run_log)
+        self._last_batch_run_at = datetime.now(timezone.utc)
+        if self.settings.operating_mode != OperatingMode.REALTIME_STREAM:
+            self._next_batch_run_at = self._last_batch_run_at + timedelta(minutes=self.settings.batch_interval_minutes)
         return run_log
 
     async def run_all_periodic_batch_analyses(

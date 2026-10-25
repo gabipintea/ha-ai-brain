@@ -52,10 +52,12 @@ class TestControlPlaneAPI(unittest.IsolatedAsyncioTestCase):
             sim_data = res_sim.json()
             self.assertEqual(len(sim_data["run_logs"]), 1)
 
-            # 3. Check status for pending approvals
+            # 3. Check status for pending approvals & scheduled batch time
             res_status = await client.get("/api/status")
             self.assertEqual(res_status.status_code, 200)
             status_data = res_status.json()
+            self.assertIn("next_batch_run_at", status_data)
+            self.assertIsNotNone(status_data["next_batch_run_at"])
             self.assertGreaterEqual(len(status_data["pending_approvals"]), 1)
 
             # 4. Approve first pending action as repeatable
