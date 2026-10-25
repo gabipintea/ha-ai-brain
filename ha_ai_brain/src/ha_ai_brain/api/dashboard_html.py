@@ -174,6 +174,35 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     .kv span:nth-child(odd) { color: var(--muted); }
     .finding { padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; margin-top: 6px; background: #0a1120; }
     .intent { padding: 8px 10px; border-left: 3px solid var(--ok); border-radius: 6px; margin-top: 6px; background: #0a1120; }
+    @keyframes highlightPulse {
+      0% {
+        box-shadow: 0 0 0 0 rgba(79, 156, 249, 0.95);
+        border-color: var(--accent);
+        transform: translateY(-2px);
+      }
+      20% {
+        box-shadow: 0 0 0 8px rgba(79, 156, 249, 0.45);
+        border-color: var(--accent);
+        transform: translateY(-2px);
+      }
+      45% {
+        box-shadow: 0 0 0 14px rgba(79, 156, 249, 0.18);
+        border-color: var(--accent);
+      }
+      70% {
+        box-shadow: 0 0 0 6px rgba(79, 156, 249, 0.25);
+        border-color: var(--accent);
+      }
+      100% {
+        box-shadow: none;
+        border-color: var(--border);
+        transform: translateY(0);
+      }
+    }
+    .highlight-pulse {
+      animation: highlightPulse 3.5s cubic-bezier(0.25, 1, 0.5, 1) forwards !important;
+      border-color: var(--accent) !important;
+    }
     @media (max-width: 600px) {
       body { padding-top: 14px; }
       .btn-row button { flex: 1 1 100%; }
@@ -442,6 +471,83 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   }
   const $ = id => document.getElementById(id);
 
+  let pendingHashTarget = null;
+
+  function pulseElement(el) {
+    if (!el) return;
+    el.classList.remove('highlight-pulse');
+    void el.offsetWidth;
+    el.classList.add('highlight-pulse');
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    setTimeout(() => {
+      if (el) el.classList.remove('highlight-pulse');
+    }, 3600);
+  }
+
+  async function fetchAndInsertLog(runId) {
+    if (!runId || loadedLogIds.has(runId)) return;
+    try {
+      const res = await fetch('./api/logs/' + encodeURIComponent(runId));
+      if (!res.ok) return;
+      const json = await res.json();
+      if (json && json.log && !loadedLogIds.has(json.log.run_id)) {
+        allLoadedLogs.unshift(json.log);
+        loadedLogIds.add(json.log.run_id);
+        const lBox = $('logsList');
+        if (lBox) {
+          $('logsEmpty').style.display = 'none';
+          lBox.insertAdjacentHTML('afterbegin', renderLog(json.log));
+        }
+      }
+    } catch (e) {
+      // ignore
+    }
+  }
+
+  async function jumpToElement(tabName, elementId) {
+    switchTab(tabName);
+    if (window.history && window.history.replaceState) {
+      window.history.replaceState(null, null, '#' + elementId);
+    }
+    let el = document.getElementById(elementId)
+      || (elementId.startsWith('approval-') ? document.querySelector(`[data-approval-id="${elementId.replace('approval-', '')}"]`) : null)
+      || (elementId.startsWith('log-') ? document.querySelector(`[data-log-id="${elementId.replace('log-', '')}"]`) : null)
+      || (elementId.startsWith('ins-') || elementId.startsWith('insight-') ? (document.getElementById(elementId) || document.getElementById('ins-' + elementId.replace(/^ins(ight)?-/, ''))) : null);
+
+    if (el) {
+      pulseElement(el);
+      return;
+    }
+
+    if (elementId.startsWith('log-')) {
+      const runId = elementId.replace(/^log-/, '');
+      await fetchAndInsertLog(runId);
+      el = document.getElementById('log-' + runId) || document.querySelector(`[data-log-id="${runId}"]`);
+      if (el) {
+        pulseElement(el);
+        return;
+      }
+    }
+
+    pendingHashTarget = elementId;
+  }
+
+  function handleHashNav() {
+    const rawHash = (window.location.hash || '').replace('#', '').trim();
+    if (!rawHash) return;
+    if (['approvals', 'activity', 'memory', 'settings'].includes(rawHash)) {
+      switchTab(rawHash);
+      return;
+    }
+    if (rawHash.startsWith('approval-')) {
+      jumpToElement('approvals', rawHash);
+    } else if (rawHash.startsWith('log-')) {
+      jumpToElement('activity', rawHash);
+    } else if (rawHash.startsWith('ins-') || rawHash.startsWith('insight-')) {
+      jumpToElement('activity', rawHash);
+    }
+  }
+
   function switchTab(tabName) {
     const tabs = ['approvals', 'activity', 'memory', 'settings'];
     if (!tabs.includes(tabName)) tabName = 'approvals';
@@ -452,14 +558,19 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       if (pane) pane.classList.toggle('active', t === tabName);
     });
     if (window.history && window.history.replaceState) {
-      window.history.replaceState(null, null, '#' + tabName);
+      const curHash = (window.location.hash || '').replace('#', '');
+      if (['approvals', 'activity', 'memory', 'settings'].includes(curHash)) {
+        window.history.replaceState(null, null, '#' + tabName);
+      }
     }
   }
 
   function initTabs() {
-    const hash = (window.location.hash || '').replace('#', '');
+    const hash = (window.location.hash || '').replace('#', '').trim();
     if (['approvals', 'activity', 'memory', 'settings'].includes(hash)) {
       switchTab(hash);
+    } else if (hash) {
+      handleHashNav();
     } else {
       switchTab('approvals');
     }
@@ -476,18 +587,37 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       : '';
     const intents = (l.proposed_intents || []).map((intent, idx) => {
       const ex = (l.execution_results || [])[idx] || {};
+      const approvalId = intent.approval_id || ex.approval_id;
       const extra = intent.native_automation
         ? `<pre>${esc(JSON.stringify(intent.native_automation, null, 2))}</pre>`
         : (Object.keys(intent.service_data || {}).length ? `<pre>${esc(JSON.stringify(intent.service_data, null, 2))}</pre>` : '');
+      const jumpToApprovalBtn = approvalId
+        ? `<button class="icon primary" style="margin-top:8px; font-size:0.78rem; padding:4px 10px;" onclick="jumpToElement('approvals', 'approval-${esc(approvalId)}')">⚡ View Pending Approval</button>`
+        : '';
       return `<div class="intent">
         <div><strong>${esc(intent.domain)}.${esc(intent.service)}</strong>
           ${(intent.target_entity_ids || []).length ? ` &rarr; <code>${esc(intent.target_entity_ids.join(', '))}</code>` : ''}
           <span class="pill" style="margin-left:6px;">${esc(ex.status || 'proposed')}</span></div>
-        <div class="muted" style="margin-top:4px;">${esc(intent.rationale)}</div>${extra}</div>`;
+        <div class="muted" style="margin-top:4px;">${esc(intent.rationale)}</div>
+        ${extra}
+        ${jumpToApprovalBtn}
+      </div>`;
     }).join('');
     const t = l.created_at ? new Date(l.created_at).toLocaleString() : '';
-    return `<div class="item" data-log-id="${esc(l.run_id)}">
-      <div class="row"><strong>${esc(l.agent_id)}</strong><span class="muted">${esc(t)}</span></div>
+    const pendingIntents = (l.proposed_intents || []).filter(i => i.approval_id || ((l.execution_results || [])[l.proposed_intents.indexOf(i)] || {}).approval_id);
+    const firstApprovalId = pendingIntents.length ? (pendingIntents[0].approval_id || ((l.execution_results || [])[l.proposed_intents.indexOf(pendingIntents[0])] || {}).approval_id) : '';
+    const topApprovalBtn = firstApprovalId
+      ? `<button class="icon" style="border-color:var(--warn); color:var(--warn); font-size:0.76rem; padding:2px 8px;" onclick="jumpToElement('approvals', 'approval-${esc(firstApprovalId)}')">⚡ Pending Approval</button>`
+      : '';
+
+    return `<div class="item" id="log-${esc(l.run_id)}" data-log-id="${esc(l.run_id)}">
+      <div class="row">
+        <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+          <strong>${esc(l.agent_id)}</strong>
+          ${topApprovalBtn}
+        </div>
+        <span class="muted">${esc(t)}</span>
+      </div>
       <div class="muted" style="margin:2px 0 4px;">${esc(l.mode)} &middot; ${esc(l.trigger_summary)}</div>
       ${research ? `<div class="sec-title">Research</div>${research}` : ''}
       ${signals ? `<div class="sec-title">Computed signals</div>${signals}` : ''}
@@ -498,17 +628,73 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   function renderPendingCard(p) {
     const div = document.createElement('div');
     div.className = 'item';
+    div.id = 'approval-' + p.approval_id;
     div.setAttribute('data-approval-id', p.approval_id);
+
+    const isAutomation = (p.intent.domain === 'automation') && (p.intent.service === 'upsert_native_automation' || !!p.intent.native_automation);
+    const runId = p.run_id || (p.intent && p.intent.run_id);
+    const reasoningBtn = runId
+      ? `<button class="icon" type="button" style="border-color:rgba(79,156,249,0.5); color:var(--accent); font-size:0.8rem; padding:5px 10px;" onclick="jumpToElement('activity', 'log-${esc(runId)}')">🔍 View agent reasoning &amp; telemetry</button>`
+      : '';
+
+    let contentHtml = '';
+    if (isAutomation) {
+      const auto = p.intent.native_automation || (p.intent.service_data && typeof p.intent.service_data === 'object' ? p.intent.service_data : {});
+      const alias = auto.alias || 'Native Automation';
+      const autoId = auto.automation_id || ((p.intent.target_entity_ids || [])[0]) || '';
+      const triggers = Array.isArray(auto.trigger) ? auto.trigger : (auto.trigger ? [auto.trigger] : []);
+      const conditions = Array.isArray(auto.condition) ? auto.condition : (auto.condition ? [auto.condition] : []);
+      const actions = Array.isArray(auto.action) ? auto.action : (auto.action ? [auto.action] : []);
+
+      contentHtml = `
+        <div style="margin-bottom:8px;">
+          <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+            <span class="pill" style="background:rgba(79,156,249,0.18); color:var(--accent); border-color:rgba(79,156,249,0.4); text-transform:none; font-weight:700; font-size:0.75rem;">⚡ Native Automation</span>
+            <span style="font-size:1.02rem; font-weight:650; color:#fff;">Create Native Automation: <strong style="color:var(--accent);">${esc(alias)}</strong></span>
+          </div>
+          <div class="muted" style="font-size:0.8rem; margin-top:4px;">
+            Target Entity ID: <code>${esc(autoId || 'automation.new')}</code> &middot; 
+            <span>${triggers.length} trigger${triggers.length === 1 ? '' : 's'}</span> &middot; 
+            <span>${conditions.length} condition${conditions.length === 1 ? '' : 's'}</span> &middot; 
+            <span>${actions.length} action${actions.length === 1 ? '' : 's'}</span>
+          </div>
+        </div>
+        <div class="muted" style="margin:8px 0; white-space:pre-wrap; line-height:1.45;">${esc(p.intent.rationale || auto.description || '')}</div>
+        <details style="margin:8px 0 12px; background:rgba(0,0,0,0.3); border:1px solid var(--border); border-radius:8px; padding:8px 12px;">
+          <summary style="cursor:pointer; font-size:0.82rem; font-weight:600; color:var(--accent); user-select:none;">📋 View Automation Triggers, Conditions &amp; Actions</summary>
+          <div style="margin-top:8px;">
+            ${auto.description ? `<div class="muted" style="font-size:0.82rem; margin-bottom:6px;"><strong>Description:</strong> ${esc(auto.description)}</div>` : ''}
+            <div class="sec-title" style="margin-top:4px;">Triggers (${triggers.length})</div>
+            <pre>${esc(JSON.stringify(triggers, null, 2))}</pre>
+            ${conditions.length ? `<div class="sec-title">Conditions (${conditions.length})</div><pre>${esc(JSON.stringify(conditions, null, 2))}</pre>` : ''}
+            <div class="sec-title">Actions (${actions.length})</div>
+            <pre>${esc(JSON.stringify(actions, null, 2))}</pre>
+          </div>
+        </details>`;
+    } else {
+      const targets = (p.intent.target_entity_ids || []).join(', ');
+      const svcData = p.intent.service_data || {};
+      const paramsPreview = Object.keys(svcData).length ? `<div class="muted" style="font-size:0.8rem; margin-top:4px;">Parameters: <code>${esc(JSON.stringify(svcData))}</code></div>` : '';
+      contentHtml = `
+        <div style="margin-bottom:6px;">
+          <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+            <strong>${esc(p.intent.domain)}.${esc(p.intent.service)}</strong>
+            ${targets ? `&rarr; <code>${esc(targets)}</code>` : ''}
+          </div>
+          ${paramsPreview}
+        </div>
+        <div class="muted" style="margin:6px 0; white-space:pre-wrap; line-height:1.4;">${esc(p.intent.rationale)}</div>`;
+    }
+
     div.innerHTML = `
-      <div><strong>${esc(p.intent.domain)}.${esc(p.intent.service)}</strong>
-        &rarr; <code>${esc((p.intent.target_entity_ids || []).join(', '))}</code></div>
-      <div class="muted" style="margin:6px 0; white-space: pre-wrap; line-height: 1.4;">${esc(p.intent.rationale)}</div>
-      <input type="text" id="note_${esc(p.approval_id)}" autocomplete="off" placeholder="Optional note for the Brain (saved if you reject)" />
-      <div class="btn-row">
+      ${contentHtml}
+      <input type="text" id="note_${esc(p.approval_id)}" autocomplete="off" placeholder="Optional note for the Brain (saved if you reject)" style="margin-top:6px;" />
+      <div class="btn-row" style="align-items:center;">
         <button class="primary" onclick="decideApproval('${esc(p.approval_id)}', 'approved_once')">Approve once</button>
         <button class="success" onclick="decideApproval('${esc(p.approval_id)}', 'approved_repeatable')">Always allow</button>
         <button class="icon" title="Dismiss this proposal without executing or permanently blocking" onclick="decideApproval('${esc(p.approval_id)}', 'dismissed')">Dismiss</button>
         <button class="danger" onclick="decideApproval('${esc(p.approval_id)}', 'rejected')">Reject</button>
+        ${reasoningBtn}
       </div>`;
     return div;
   }
@@ -532,6 +718,15 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     if (tabBadge) {
       tabBadge.style.display = pending.length ? 'inline-block' : 'none';
       tabBadge.textContent = pending.length;
+    }
+
+    if (pendingHashTarget && pendingHashTarget.startsWith('approval-')) {
+      const aid = pendingHashTarget.replace('approval-', '');
+      const el = document.getElementById(pendingHashTarget) || document.querySelector(`[data-approval-id="${aid}"]`);
+      if (el) {
+        pulseElement(el);
+        pendingHashTarget = null;
+      }
     }
   }
 
@@ -745,16 +940,23 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
     const proposals = [];
     (data.recent_logs || []).forEach(l => (l.proposed_intents || []).forEach(i => {
-      if (i.domain === 'automation' || i.native_automation) proposals.push({agent: l.agent_id, intent: i});
+      if (i.domain === 'automation' || i.native_automation) proposals.push({agent: l.agent_id, intent: i, run_id: l.run_id});
     }));
-    let html = (data.advisory_insights || []).map(ins => `
-      <div class="item" id="ins-${ins.insight_id}">
+    let html = (data.advisory_insights || []).map(ins => {
+      const viewRunBtn = ins.run_id
+        ? `<button class="icon" type="button" style="font-size:11px; padding:3px 8px; color:var(--accent); border-color:rgba(79,156,249,0.4);" onclick="jumpToElement('activity', 'log-${esc(ins.run_id)}')">🔍 View agent reasoning</button>`
+        : '';
+      return `
+      <div class="item" id="ins-${esc(ins.insight_id)}" data-insight-id="${esc(ins.insight_id)}">
         <div class="row">
           <div>
             <strong>${esc(ins.title)}</strong>
             ${ins.created_at ? `<div class="muted" style="font-size:11px; margin-top:2px;">${esc(new Date(ins.created_at).toLocaleString())}</div>` : ''}
           </div>
-          <span class="pill">${esc((ins.category || 'advisory').replace(/_/g, ' '))}</span>
+          <div style="display:flex; align-items:center; gap:6px;">
+            <span class="pill">${esc((ins.category || 'advisory').replace(/_/g, ' '))}</span>
+            ${viewRunBtn}
+          </div>
         </div>
         <div class="muted" style="margin:8px 0; white-space: pre-wrap; line-height: 1.45;">${esc(ins.finding_details)}</div>
         <div style="margin-top:6px; padding:6px 10px; background:rgba(46, 204, 113, 0.12); border-left:3px solid #2ecc71; border-radius:4px; font-size:13px;">
@@ -772,12 +974,38 @@ DASHBOARD_HTML = """<!DOCTYPE html>
             &times;
           </button>
         </div>
-      </div>`).join('');
-    html += proposals.map(({agent, intent}) => `
-      <div class="item"><strong>Proposed automation</strong> <span class="muted">${esc(agent)}</span>
+      </div>`;
+    }).join('');
+    html += proposals.map(({agent, intent, run_id}) => {
+      const approvalId = intent.approval_id;
+      const jumpApprovalBtn = approvalId
+        ? `<button class="icon primary" type="button" style="font-size:11px; padding:3px 8px;" onclick="jumpToElement('approvals', 'approval-${esc(approvalId)}')">⚡ View Pending Approval</button>`
+        : '';
+      const viewRunBtn = run_id
+        ? `<button class="icon" type="button" style="font-size:11px; padding:3px 8px; color:var(--accent); border-color:rgba(79,156,249,0.4);" onclick="jumpToElement('activity', 'log-${esc(run_id)}')">🔍 View agent reasoning</button>`
+        : '';
+      return `
+      <div class="item">
+        <div class="row">
+          <div><strong>Proposed automation</strong> <span class="muted">${esc(agent)}</span></div>
+          <div style="display:flex; align-items:center; gap:6px;">${jumpApprovalBtn}${viewRunBtn}</div>
+        </div>
         <div class="muted" style="margin:6px 0;">${esc(intent.rationale)}</div>
-        <pre>${esc(JSON.stringify(intent.native_automation || intent.service_data, null, 2))}</pre></div>`).join('');
+        <pre>${esc(JSON.stringify(intent.native_automation || intent.service_data, null, 2))}</pre>
+      </div>`;
+    }).join('');
     $('insightsList').innerHTML = html || '<div class="empty">No insights yet. Run an analysis to generate some.</div>';
+
+    if (pendingHashTarget) {
+      let el = document.getElementById(pendingHashTarget)
+        || (pendingHashTarget.startsWith('approval-') ? document.querySelector(`[data-approval-id="${pendingHashTarget.replace('approval-', '')}"]`) : null)
+        || (pendingHashTarget.startsWith('log-') ? document.querySelector(`[data-log-id="${pendingHashTarget.replace('log-', '')}"]`) : null)
+        || (pendingHashTarget.startsWith('ins-') || pendingHashTarget.startsWith('insight-') ? (document.getElementById(pendingHashTarget) || document.getElementById('ins-' + pendingHashTarget.replace(/^ins(ight)?-/, ''))) : null);
+      if (el) {
+        pulseElement(el);
+        pendingHashTarget = null;
+      }
+    }
   }
 
   async function post(url, body) {
@@ -969,6 +1197,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   }
 
   initTabs();
+  window.addEventListener('hashchange', handleHashNav);
   refreshAll();
   setInterval(refreshAll, 5000);
 </script>

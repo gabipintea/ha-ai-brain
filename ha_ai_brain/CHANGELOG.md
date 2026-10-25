@@ -2,6 +2,24 @@
 
 All notable changes to **HA AI Brain** are documented in this file.
 
+## 0.1.13 - 2026-10-25
+
+### Added & Improved
+- **Bidirectional Deep-Linking & Glowing Pulse Highlighting**:
+  - Seamlessly jump from any Pending Approval card to its generating Agent Activity log with a single click ("🔍 View agent reasoning & telemetry"), automatically switching tabs, scrolling into view, and highlighting the card with an attention-grabbing blue glow animation (`highlight-pulse`).
+  - Added reciprocal "⚡ View Pending Approval" buttons on Agent Activity run logs and proposed native automations, allowing immediate navigation to the corresponding pending approval.
+  - Linked advisory insights to agent run logs with "🔍 View agent reasoning" shortcuts.
+- **Mobile Notification Direct Deep-Linking**:
+  - Updated Home Assistant Companion push notification payload URLs (`clickAction` and `url`) to `#approval-{approval_id}` and `#insight-{insight_id}`.
+  - Tapping a notification on a mobile phone opens the Ingress web dashboard, directly activates the correct tab, scrolls to the target item, and triggers the pulse highlight.
+- **Human-Readable Native Automation Proposal Cards & Notifications**:
+  - Replaced cryptic `automation.upsert_native_automation -> automation.ai_brain_...` titles with clear, user-friendly titles: e.g. `⚡ Create Native Automation: {alias}`.
+  - Added prominent target entity details and a summary pill indicating the number of triggers, conditions, and actions.
+  - Added an expandable `<details>` section displaying full formatted triggers, conditions, and actions JSON definitions directly on the approval card.
+  - Mobile push notifications for native automations now clearly announce `⚡ Create Automation: {alias}` with formatted description context.
+- **Single Log Retrieval Endpoint**:
+  - Added `GET /api/logs/{run_id}` API endpoint and `get_run_log(run_id)` memory methods to dynamically fetch and display individual reasoning audit traces even if paginated out of view.
+
 ## 0.1.12 - 2026-10-25
 
 ### Fixed

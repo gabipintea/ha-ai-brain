@@ -175,6 +175,7 @@ class AdvisoryInsight(BaseModel):
     estimated_impact: str = ""
     status: str = "active"  # "active", "read", "dismissed", "rejected"
     rejection_reason: str = ""
+    run_id: str | None = None
     created_at: datetime = Field(default_factory=utc_now)
     resolved_at: datetime | None = None
 
@@ -196,6 +197,8 @@ class ActionIntent(BaseModel):
     risk_level: ActionRiskLevel = ActionRiskLevel.LOW
     expected_outcome: ExpectedOutcome | None = None
     native_automation: NativeAutomationProposal | None = None
+    run_id: str | None = None
+    approval_id: str | None = None
     created_at: datetime = Field(default_factory=utc_now)
 
     def repeatable_signature(self) -> str:
@@ -231,6 +234,7 @@ class PendingApproval(BaseModel):
     intent: ActionIntent
     signature: str
     status: str = "pending"  # pending, approved_once, approved_repeatable, rejected, expired
+    run_id: str | None = None
     created_at: datetime = Field(default_factory=utc_now)
     resolved_at: datetime | None = None
 

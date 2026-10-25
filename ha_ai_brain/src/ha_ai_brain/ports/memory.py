@@ -84,6 +84,10 @@ class MemoryStorePort(ABC):
         """Fetch recent agent invocation logs with optional pagination offset."""
 
     @abstractmethod
+    async def get_run_log(self, run_id: str) -> AgentRunLog | None:
+        """Fetch a single agent invocation log by its run_id."""
+
+    @abstractmethod
     async def get_run_logs_count(self) -> int:
         """Return total count of recorded agent run logs."""
 

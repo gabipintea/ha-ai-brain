@@ -335,6 +335,15 @@ class SQLiteMemoryAdapter(MemoryStorePort):
         ).fetchall()
         return [AgentRunLog.model_validate_json(r["payload_json"]) for r in rows]
 
+    async def get_run_log(self, run_id: str) -> AgentRunLog | None:
+        row = self._conn.execute(
+            "SELECT payload_json FROM run_logs WHERE run_id = ?",
+            (run_id,),
+        ).fetchone()
+        if not row:
+            return None
+        return AgentRunLog.model_validate_json(row["payload_json"])
+
     async def get_run_logs_count(self) -> int:
         row = self._conn.execute("SELECT COUNT(*) FROM run_logs").fetchone()
         return int(row[0]) if row else 0

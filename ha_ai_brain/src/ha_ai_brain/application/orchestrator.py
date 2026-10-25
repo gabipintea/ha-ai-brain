@@ -319,16 +319,24 @@ class BrainOrchestrator:
 
         final_state = await self.agent_graph.ainvoke(initial_state)
         intents = final_state.get("proposed_intents", [])
-        exec_results = await self._evaluate_and_dispatch_intents(intents)
+        insights = final_state.get("advisory_insights", [])
+        run_id = f"run_{uuid.uuid4().hex[:8]}"
+        for intent in intents:
+            intent.run_id = run_id
+        for insight in insights:
+            insight.run_id = run_id
+
+        exec_results = await self._evaluate_and_dispatch_intents(intents, run_id=run_id)
 
         run_log = AgentRunLog(
+            run_id=run_id,
             agent_id=agent_spec.agent_id,
             mode="realtime_stream",
             trigger_summary=frame.significance_reason,
             research_findings=final_state.get("research_findings", []),
             derived_signals=final_state.get("derived_signals", []),
             proposed_intents=intents,
-            advisory_insights=final_state.get("advisory_insights", []),
+            advisory_insights=insights,
             execution_results=exec_results,
         )
         self._log_agent_run_summary(run_log)
@@ -425,8 +433,10 @@ class BrainOrchestrator:
         final_state = await self.agent_graph.ainvoke(initial_state)
         intents = final_state.get("proposed_intents", [])
         insights = final_state.get("advisory_insights", [])
+        run_id = f"run_{uuid.uuid4().hex[:8]}"
 
         for insight in insights:
+            insight.run_id = run_id
             await self.memory.save_advisory_insight(insight)
             if self.settings.notifications_enabled and self.settings.default_autonomy != "shadow":
                 try:
@@ -434,9 +444,13 @@ class BrainOrchestrator:
                 except Exception as exc:
                     logger.warning("Could not dispatch advisory notification: %s", exc)
 
-        exec_results = await self._evaluate_and_dispatch_intents(intents)
+        for intent in intents:
+            intent.run_id = run_id
+
+        exec_results = await self._evaluate_and_dispatch_intents(intents, run_id=run_id)
 
         run_log = AgentRunLog(
+            run_id=run_id,
             agent_id=agent_spec.agent_id,
             mode="periodic_batch",
             trigger_summary=f"Batch Historical Analysis ({len(filtered_states)} relevant entities analyzed over {effective_lookback}h)",
@@ -500,7 +514,9 @@ class BrainOrchestrator:
 
         return False, ""
 
-    async def _evaluate_and_dispatch_intents(self, intents: list[ActionIntent]) -> list[dict[str, Any]]:
+    async def _evaluate_and_dispatch_intents(
+        self, intents: list[ActionIntent], run_id: str | None = None
+    ) -> list[dict[str, Any]]:
         """Pass proposed ActionIntents through the Conflict Arbiter and Guardrail Engine."""
         results: list[dict[str, Any]] = []
         endorsed_rules = await self.memory.get_endorsed_rules()
@@ -601,7 +617,13 @@ class BrainOrchestrator:
                     }
                 )
             elif eval_res.decision == GuardrailDecisionType.REQUIRE_USER_APPROVAL:
-                pending = PendingApproval(intent=intent, signature=eval_res.signature)
+                effective_run_id = run_id or intent.run_id
+                pending = PendingApproval(
+                    intent=intent,
+                    signature=eval_res.signature,
+                    run_id=effective_run_id,
+                )
+                intent.approval_id = pending.approval_id
                 await self.memory.save_pending_approval(pending)
                 if self.settings.notifications_enabled:
                     await self.notification.send_approval_request(pending)
@@ -609,6 +631,7 @@ class BrainOrchestrator:
                     {
                         "intent_id": intent.intent_id,
                         "approval_id": pending.approval_id,
+                        "run_id": effective_run_id,
                         "signature": eval_res.signature,
                         "status": "awaiting_user_approval",
                         "reason": eval_res.reason,

@@ -131,12 +131,18 @@ class HomeAssistantNotificationAdapter(NotificationPort):
         """
         Format a compact approval message for mobile cards:
         Action target on line 1, first sentence of rationale on line 2.
+        For native automations, displays human-readable title and description.
         Full rationale and raw service parameters remain visible in Web UI.
         """
-        targets = ", ".join(intent.target_entity_ids) if intent.target_entity_ids else "system"
-        header = f"{intent.domain}.{intent.service} → {targets}"
+        if intent.domain == "automation" and intent.native_automation:
+            auto = intent.native_automation
+            header = f"⚡ Create Automation: {auto.alias}"
+            why = (intent.rationale or auto.description or "").strip().replace("\n", " ")
+        else:
+            targets = ", ".join(intent.target_entity_ids) if intent.target_entity_ids else "system"
+            header = f"{intent.domain}.{intent.service} → {targets}"
+            why = (intent.rationale or "").strip().replace("\n", " ")
 
-        why = (intent.rationale or "").strip().replace("\n", " ")
         sentences = re.split(r"(?<=[.!?])\s+", why)
         short_why = sentences[0].strip() if sentences else why
 
@@ -150,9 +156,15 @@ class HomeAssistantNotificationAdapter(NotificationPort):
         intent = pending.intent
         aid = pending.approval_id
 
-        title = "🧠 AI Brain · Approval Needed"
+        if intent.domain == "automation" and intent.native_automation:
+            alias = intent.native_automation.alias
+            title = self._compact_title(f"New Automation: {alias}", prefix="🧠 AI Brain")
+            subtitle = f"Automation: {alias}"
+        else:
+            title = "🧠 AI Brain · Approval Needed"
+            subtitle = f"{intent.domain}.{intent.service}"
+
         message = self._compact_approval_message(intent)
-        subtitle = f"{intent.domain}.{intent.service}"
 
         payload = {
             "title": title,
@@ -161,8 +173,8 @@ class HomeAssistantNotificationAdapter(NotificationPort):
                 "tag": f"ha_ai_brain_{aid}",
                 "group": "ha_ai_brain_approvals",
                 "subtitle": subtitle,
-                "url": "/ha_ai_brain",
-                "clickAction": "/ha_ai_brain",
+                "url": f"/ha_ai_brain#approval-{aid}",
+                "clickAction": f"/ha_ai_brain#approval-{aid}",
                 "actions": [
                     {
                         "action": f"BRAIN_APPROVE_ONCE:{aid}",
@@ -235,8 +247,8 @@ class HomeAssistantNotificationAdapter(NotificationPort):
                 "tag": f"ha_ai_brain_insight_{insight.insight_id}",
                 "group": "ha_ai_brain_insights",
                 "subtitle": category_title,
-                "url": "/ha_ai_brain",
-                "clickAction": "/ha_ai_brain",
+                "url": f"/ha_ai_brain#insight-{insight.insight_id}",
+                "clickAction": f"/ha_ai_brain#insight-{insight.insight_id}",
             },
         }
         self.sent_notifications.append({"type": "advisory_insight", "insight_id": insight.insight_id, "payload": payload})

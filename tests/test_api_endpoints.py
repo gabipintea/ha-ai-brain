@@ -203,6 +203,49 @@ class TestControlPlaneAPI(unittest.IsolatedAsyncioTestCase):
             status_after_clear = (await client.get("/api/status")).json()
             self.assertEqual(status_after_clear["total_logs_count"], 0)
 
+            # 10. Test Bidirectional Deep-Linking between Run Logs & Approvals, Single Log Fetching
+            res_sim_link = await client.post("/api/events/simulate", json={"entity_id": "sensor.master_bedroom_humidity", "new_value": "71.5"})
+            self.assertEqual(res_sim_link.status_code, 200)
+            sim_logs = res_sim_link.json()["run_logs"]
+            self.assertEqual(len(sim_logs), 1)
+            target_run_id = sim_logs[0]["run_id"]
+
+            # Verify pending approval carries run_id
+            st_link = (await client.get("/api/status")).json()
+            self.assertGreaterEqual(len(st_link["pending_approvals"]), 1)
+            matched_p = [p for p in st_link["pending_approvals"] if p.get("run_id") == target_run_id]
+            self.assertGreaterEqual(len(matched_p), 1)
+            link_aid = matched_p[0]["approval_id"]
+
+            # Verify single log fetch by run_id
+            res_single_log = await client.get(f"/api/logs/{target_run_id}")
+            self.assertEqual(res_single_log.status_code, 200)
+            fetched_log = res_single_log.json()["log"]
+            self.assertEqual(fetched_log["run_id"], target_run_id)
+            # Verify intent inside run_log carries the approval_id for direct linking
+            intents_with_app = [i for i in fetched_log["proposed_intents"] if i.get("approval_id") == link_aid]
+            self.assertEqual(len(intents_with_app), 1)
+
+            # Verify 404 on nonexistent log
+            res_404_log = await client.get("/api/logs/nonexistent_run_9999")
+            self.assertEqual(res_404_log.status_code, 404)
+
+            # Verify batch analysis links insights to run_id
+            res_batch_link = await client.post("/api/batch/analyze", json={"agent_id": "climate_thermal_agent", "lookback_hours": 12})
+            self.assertEqual(res_batch_link.status_code, 200)
+            b_log = res_batch_link.json()["run_log"]
+            b_run_id = b_log["run_id"]
+            res_ins_after = (await client.get("/api/insights")).json()
+            b_insights = [i for i in res_ins_after["insights"] if i.get("run_id") == b_run_id]
+            self.assertGreaterEqual(len(b_insights), 1)
+
+            # Verify dashboard HTML includes highlight-pulse and deep-linking methods
+            dash_html = (await client.get("/")).text
+            self.assertIn("highlight-pulse", dash_html)
+            self.assertIn("jumpToElement", dash_html)
+            self.assertIn("handleHashNav", dash_html)
+            self.assertIn("Create Native Automation:", dash_html)
+
 
 if __name__ == "__main__":
     unittest.main()

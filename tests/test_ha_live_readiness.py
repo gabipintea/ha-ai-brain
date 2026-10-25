@@ -559,7 +559,8 @@ class TestLiveHomeAssistantReadiness(unittest.IsolatedAsyncioTestCase):
         p1 = notif.sent_notifications[-1]["payload"]
         self.assertEqual(p1["title"], "🧠 AI Brain · High Humidity Alert")
         self.assertTrue(p1["message"].startswith("👉 Turn off humidifier"))
-        self.assertEqual(p1["data"]["url"], "/ha_ai_brain")
+        self.assertEqual(p1["data"]["url"], f"/ha_ai_brain#insight-{insight.insight_id}")
+        self.assertEqual(p1["data"]["clickAction"], f"/ha_ai_brain#insight-{insight.insight_id}")
         self.assertEqual(p1["data"]["subtitle"], "Thermal Insulation")
 
         # 4. Test very long title and message are compacted cleanly for mobile lockscreen cards
@@ -579,8 +580,9 @@ class TestLiveHomeAssistantReadiness(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(p2["title"].endswith("…"))
         self.assertTrue(p2["message"].startswith("👉 Set the master purifier"))
         self.assertLessEqual(len(p2["message"]), 180)
-        # 5. Test send_approval_request formatting is compact and actionable
-        from ha_ai_brain.domain.models import ActionIntent, PendingApproval
+        self.assertEqual(p2["data"]["url"], f"/ha_ai_brain#insight-{long_insight.insight_id}")
+        # 5. Test send_approval_request formatting is compact and actionable with deep-link
+        from ha_ai_brain.domain.models import ActionIntent, NativeAutomationProposal, PendingApproval
         app_intent = ActionIntent(
             agent_id="climate_thermal_agent",
             cause_category="thermal_loss_pre_trim",
@@ -600,7 +602,37 @@ class TestLiveHomeAssistantReadiness(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(app_payload["message"].startswith("climate.set_temperature → climate.master_bedroom_ufh"))
         self.assertLessEqual(len(app_payload["message"]), 180)
         self.assertEqual(app_payload["data"]["subtitle"], "climate.set_temperature")
+        self.assertEqual(app_payload["data"]["url"], f"/ha_ai_brain#approval-{pending.approval_id}")
+        self.assertEqual(app_payload["data"]["clickAction"], f"/ha_ai_brain#approval-{pending.approval_id}")
         self.assertEqual(len(app_payload["data"]["actions"]), 4)
+
+        # 6. Test send_approval_request for native automation proposal has human-readable title and deep link
+        auto_prop = NativeAutomationProposal(
+            alias="Dehumidify on High Humidity",
+            description="Turns on exhaust fan when relative humidity exceeds 65%",
+            trigger=[{"platform": "numeric_state", "entity_id": "sensor.bedroom_humidity", "above": 65}],
+            action=[{"service": "fan.turn_on", "target": {"entity_id": "fan.bedroom_purifier"}}],
+        )
+        auto_intent = ActionIntent(
+            agent_id="climate_thermal_agent",
+            domain="automation",
+            service="upsert_native_automation",
+            target_entity_ids=[f"automation.{auto_prop.automation_id}"],
+            service_data=auto_prop.model_dump(),
+            cause_category="prevent_condensation",
+            rationale="Humidity exceeds 65% for extended periods.",
+            native_automation=auto_prop,
+        )
+        pending_auto = PendingApproval(
+            intent=auto_intent,
+            signature=f"sig:climate_thermal_agent:automation.upsert_native_automation:automation.{auto_prop.automation_id}",
+        )
+        await notif.send_approval_request(pending_auto)
+        auto_payload = notif.sent_notifications[-1]["payload"]
+        self.assertTrue(auto_payload["title"].startswith("🧠 AI Brain · New Automation:"))
+        self.assertTrue(auto_payload["message"].startswith("⚡ Create Automation: Dehumidify on High Humidity"))
+        self.assertEqual(auto_payload["data"]["url"], f"/ha_ai_brain#approval-{pending_auto.approval_id}")
+        self.assertEqual(auto_payload["data"]["clickAction"], f"/ha_ai_brain#approval-{pending_auto.approval_id}")
 
     def test_13_codebase_zero_personal_entity_leakage(self) -> None:
         """

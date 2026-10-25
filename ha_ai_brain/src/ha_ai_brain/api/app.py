@@ -245,6 +245,14 @@ def create_app(settings: BrainSettings | None = None) -> Any:
             "limit": limit,
         }
 
+    @app.get("/api/logs/{run_id}")
+    async def get_single_log(run_id: str) -> dict[str, Any]:
+        """Fetch a specific agent run log by run_id for deep-linking and explainability."""
+        log = await orchestrator.memory.get_run_log(run_id)
+        if not log:
+            raise HTTPException(status_code=404, detail="Run log not found")
+        return {"log": log.model_dump(mode="json")}
+
     @app.delete("/api/logs")
     async def clear_logs() -> dict[str, Any]:
         """Clear all agent run logs to free up storage."""
