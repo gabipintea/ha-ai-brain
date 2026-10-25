@@ -205,9 +205,43 @@ class ActionIntent(BaseModel):
         """
         Compute a canonical, repeatable signature for this class of action.
         Canonical signature is derived strictly from (agent_id, domain.service, target_entity_ids).
+        For native automations, derives the signature from the canonical automation alias
+        and controlled entities rather than an ephemeral random hex ID (e.g. ai_brain_...).
         By excluding free-form LLM rationale and variable cause_category descriptions,
         rules and rejections endorsed by the user will reliably match future proposals.
         """
+        if self.domain == "automation" and (self.native_automation is not None or "alias" in self.service_data):
+            alias = ""
+            if self.native_automation:
+                alias = self.native_automation.alias
+            elif "alias" in self.service_data:
+                alias = str(self.service_data["alias"])
+            import re
+            slug = re.sub(r"[^a-z0-9]+", "_", alias.lower()).strip("_") if alias else "native_automation"
+            controlled: list[str] = []
+            auto_actions = []
+            if self.native_automation and self.native_automation.action:
+                auto_actions = self.native_automation.action
+            elif isinstance(self.service_data.get("action"), list):
+                auto_actions = self.service_data["action"]
+            for act in auto_actions:
+                if isinstance(act, dict):
+                    t = act.get("target", {})
+                    if isinstance(t, dict) and "entity_id" in t:
+                        e = t["entity_id"]
+                        if isinstance(e, list):
+                            controlled.extend(str(x) for x in e)
+                        elif e:
+                            controlled.append(str(e))
+                    elif "entity_id" in act:
+                        e = act["entity_id"]
+                        if isinstance(e, list):
+                            controlled.extend(str(x) for x in e)
+                        elif e:
+                            controlled.append(str(e))
+            targets = ",".join(sorted(set(controlled))) if controlled else slug
+            return f"sig:{self.agent_id}:automation.upsert_native_automation:{slug}:{targets}"
+
         targets = ",".join(sorted(self.target_entity_ids)) or "all"
         return f"sig:{self.agent_id}:{self.domain}.{self.service}:{targets}"
 

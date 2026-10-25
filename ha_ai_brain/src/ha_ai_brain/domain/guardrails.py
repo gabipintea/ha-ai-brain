@@ -74,6 +74,14 @@ class GuardrailEngine:
                         if not intent.target_entity_ids or any(t in rej_sig for t in intent.target_entity_ids):
                             matched_rejection = True
                             break
+                        if intent.domain == "automation":
+                            alias = (intent.native_automation.alias if intent.native_automation else "") or str(intent.service_data.get("alias", ""))
+                            if alias:
+                                import re
+                                slug = re.sub(r"[^a-z0-9]+", "_", alias.lower()).strip("_")
+                                if slug and slug in rej_sig:
+                                    matched_rejection = True
+                                    break
 
         if matched_rejection:
             return GuardrailEvaluation(

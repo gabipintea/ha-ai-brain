@@ -836,20 +836,52 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     reconcilePending(data.pending_approvals || []);
 
     const rules = Object.values(data.endorsed_rules || {});
-    $('rulesList').innerHTML = rules.length ? rules.map(r => `
-      <div class="item"><div class="row"><div><strong>${esc(r.domain_service)}</strong>
+    $('rulesList').innerHTML = rules.length ? rules.map(r => {
+      const isAuto = r.domain_service === 'automation.upsert_native_automation' || (r.description && r.description.startsWith('Native Automation'));
+      const titleHtml = isAuto
+        ? `<div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
+            <span class="pill ok" style="font-size:0.72rem; padding:1px 6px;">⚡ Native Automation</span>
+            <strong>${esc(r.description || r.domain_service)}</strong>
+          </div>`
+        : `<strong>${esc(r.domain_service)}</strong>`;
+      return `<div class="item"><div class="row"><div>
+        ${titleHtml}
         <div class="muted">${esc((r.target_entity_ids || []).join(', '))}</div>
         <div class="muted">${esc(r.execution_count)} auto-runs</div></div>
-        <button class="danger icon" data-sig="${esc(r.signature)}" onclick="revokeRule(this.dataset.sig)">Revoke</button></div></div>`).join('')
+        <button class="danger icon" data-sig="${esc(r.signature)}" onclick="revokeRule(this.dataset.sig)">Revoke</button></div></div>`;
+    }).join('')
       : '<div class="empty">No actions are set to run automatically. Choose "Always allow" on an approval to add one.</div>';
 
     const rejected = data.rejected_suggestions || [];
-    $('rejectedList').innerHTML = rejected.length ? rejected.map(e => `
-      <div class="item"><div class="row"><div><strong>${esc(e.service_called)}</strong>
-        <div class="muted">${esc((e.target_entity_ids || []).join(', '))}</div>
-        <div class="muted">${esc(e.agent_id)} &middot; ${esc(e.cause_category)}${e.created_at ? ' &middot; ' + esc(new Date(e.created_at).toLocaleDateString()) : ''}</div>
-        ${e.human_note && !e.human_note.startsWith('Rejected by user') ? `<div class="muted">Note: ${esc(e.human_note)}</div>` : ''}</div>
-        <button class="icon" data-sig="${esc(e.action_signature)}" onclick="unblockRejected(this.dataset.sig)">Unblock</button></div></div>`).join('')
+    $('rejectedList').innerHTML = rejected.length ? rejected.map(e => {
+      const isAuto = e.service_called === 'automation.upsert_native_automation' || (e.service_data && !!e.service_data.alias);
+      const autoAlias = (e.service_data && e.service_data.alias) || '';
+      const titleHtml = isAuto
+        ? `<div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
+            <span class="pill danger" style="font-size:0.72rem; padding:1px 6px;">⚡ Native Automation</span>
+            <strong>${esc(autoAlias ? `Create Native Automation: ${autoAlias}` : e.service_called)}</strong>
+          </div>`
+        : `<strong>${esc(e.service_called)}</strong> &rarr; <code>${esc((e.target_entity_ids || []).join(', '))}</code>`;
+
+      const subHtml = isAuto
+        ? `<div class="muted" style="font-size:12px; margin-top:2px;">Target: <code>${esc((e.target_entity_ids || []).join(', '))}</code> &middot; ${esc(e.agent_id)} &middot; ${esc(e.cause_category)}${e.created_at ? ' &middot; ' + esc(new Date(e.created_at).toLocaleDateString()) : ''}</div>`
+        : `<div class="muted">${esc(e.agent_id)} &middot; ${esc(e.cause_category)}${e.created_at ? ' &middot; ' + esc(new Date(e.created_at).toLocaleDateString()) : ''}</div>`;
+
+      const noteHtml = e.human_note && !e.human_note.startsWith('Rejected by user')
+        ? `<div class="muted" style="margin-top:6px; font-size:12px; background:rgba(255,255,255,0.04); padding:6px 8px; border-radius:4px;"><strong>Your rejection note:</strong> ${esc(e.human_note)}</div>`
+        : '';
+
+      return `<div class="item">
+        <div class="row">
+          <div>
+            ${titleHtml}
+            ${subHtml}
+            ${noteHtml}
+          </div>
+          <button class="icon" data-sig="${esc(e.action_signature)}" onclick="unblockRejected(this.dataset.sig)">Unblock</button>
+        </div>
+      </div>`;
+    }).join('')
       : '<div class="empty">No rejected suggestions.</div>';
 
     const rejInsBox = $('rejectedInsightsList');

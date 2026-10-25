@@ -277,6 +277,84 @@ class TestMultiAgentCognitiveEngine(unittest.IsolatedAsyncioTestCase):
         res_opposing = await self.orchestrator._evaluate_and_dispatch_intents([open_back])
         self.assertEqual(res_opposing[0]["status"], "blocked_by_conflict")
 
+    async def test_7_content_aware_automation_rejection_and_signature_blocking(self) -> None:
+        """
+        Verify that rejecting a native automation proposal creates a content-aware signature
+        based on the automation alias and controlled devices (not random hex ID), so future
+        proposals with fresh random IDs are deterministically blocked by guardrails.
+        """
+        from ha_ai_brain.domain.models import NativeAutomationProposal
+
+        # 1. Create first automation proposal
+        proposal1 = NativeAutomationProposal(
+            alias="Morning Cover Opener",
+            description="Open covers at 8 AM",
+            trigger=[{"platform": "time", "at": "08:00:00"}],
+            action=[{"service": "cover.open_cover", "target": {"entity_id": "cover.living_room_blinds"}}],
+        )
+        intent1 = ActionIntent(
+            agent_id="cover_shading_agent",
+            domain="automation",
+            service="upsert_native_automation",
+            target_entity_ids=[f"automation.{proposal1.automation_id}"],
+            service_data=proposal1.model_dump(),
+            cause_category="circadian_lighting",
+            rationale="Automatic cover opening based on sunlight pattern.",
+            risk_level=ActionRiskLevel.MEDIUM,
+            native_automation=proposal1,
+        )
+
+        sig1 = intent1.repeatable_signature()
+        self.assertEqual(
+            sig1,
+            "sig:cover_shading_agent:automation.upsert_native_automation:morning_cover_opener:cover.living_room_blinds",
+        )
+
+        # 2. Dispatch intent -> generates pending approval
+        res1 = await self.orchestrator._evaluate_and_dispatch_intents([intent1])
+        self.assertEqual(res1[0]["status"], "awaiting_user_approval")
+        aid1 = res1[0]["approval_id"]
+
+        # 3. Reject this approval with a note
+        await self.orchestrator.handle_approval_decision(
+            approval_id=aid1,
+            decision="rejected",
+            human_note="We use manual scripts for wake-up covers.",
+        )
+
+        # Verify rejection is saved
+        rejected_sigs = await self.orchestrator.memory.get_rejected_signatures()
+        self.assertIn(sig1, rejected_sigs)
+
+        # 4. Agent runs again in the future with a completely DIFFERENT random automation ID:
+        proposal2 = NativeAutomationProposal(
+            alias="Morning Cover Opener",
+            description="Open covers at 8 AM daily",
+            trigger=[{"platform": "time", "at": "08:00:00"}],
+            action=[{"service": "cover.open_cover", "target": {"entity_id": "cover.living_room_blinds"}}],
+        )
+        self.assertNotEqual(proposal1.automation_id, proposal2.automation_id)
+
+        intent2 = ActionIntent(
+            agent_id="cover_shading_agent",
+            domain="automation",
+            service="upsert_native_automation",
+            target_entity_ids=[f"automation.{proposal2.automation_id}"],
+            service_data=proposal2.model_dump(),
+            cause_category="circadian_lighting",
+            rationale="Open covers at 8 AM",
+            risk_level=ActionRiskLevel.MEDIUM,
+            native_automation=proposal2,
+        )
+
+        # 5. Must have the same canonical content-aware signature despite different automation_id
+        self.assertEqual(intent2.repeatable_signature(), sig1)
+
+        # 6. Evaluation must HARD BLOCK it deterministically!
+        res2 = await self.orchestrator._evaluate_and_dispatch_intents([intent2])
+        self.assertEqual(res2[0]["status"], "hard_blocked")
+        self.assertIn("previously rejected", res2[0]["reason"])
+
 
 if __name__ == "__main__":
     unittest.main()

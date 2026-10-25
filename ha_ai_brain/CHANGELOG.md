@@ -2,6 +2,18 @@
 
 All notable changes to **HA AI Brain** are documented in this file.
 
+## 0.1.14 - 2026-10-25
+
+### Added & Improved
+- **Content-Aware Automation Signatures**:
+  - Native automation proposals now compute repeatable action signatures canonically from their normalized alias slug and controlled actuators (e.g. `sig:cover_shading_agent:automation.upsert_native_automation:morning_cover_opener:cover.living_room_blinds`) rather than an ephemeral random hex entity ID (`ai_brain_<random>`).
+  - Rejecting an automation proposal now deterministically hard-blocks future proposals for that automation logic across subsequent analysis runs, regardless of whether a new random ID is generated.
+- **Batch Analysis Automation Rejection Injection & Post-Filtering**:
+  - Injected all rejected automation proposals (alias, controlled devices, and homeowner notes) directly into the LLM system prompt during batch analysis, explicitly commanding agents never to re-propose those automations.
+  - Added deterministic post-filtering in `_synthesize_batch_node` that automatically discards candidate automations matching rejected aliases, slugs, or high keyword overlap.
+- **Human-Readable Cards in "Rejected action suggestions" & "Always-allowed actions"**:
+  - Enhanced the "Rejected action suggestions" and "Always-allowed actions" cards in the **Memory & Rules** tab to display a `⚡ Native Automation` badge, the clear human-readable title (e.g. `Create Native Automation: Morning Cover Opener`), target entities, and homeowner notes with clean, distinct styling.
+
 ## 0.1.13 - 2026-10-25
 
 ### Added & Improved

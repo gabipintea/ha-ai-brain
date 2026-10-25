@@ -137,6 +137,7 @@ class SpecializedAgentGraph:
         )
         user_notes = await self.memory.get_user_context_notes(active_only=True)
         rejected_insights = await self.memory.get_rejected_insights()
+        rejected_actions = await self.memory.get_rejected_suggestions()
         ignored_targets = await self.memory.get_ignored_targets()
         if ignored_targets:
             corroborated = {
@@ -156,6 +157,7 @@ class SpecializedAgentGraph:
             "past_feedback": past_feedback,
             "user_context_notes": user_notes,
             "rejected_insights": rejected_insights,
+            "rejected_actions": rejected_actions,
         }
 
     @staticmethod
@@ -338,6 +340,11 @@ class SpecializedAgentGraph:
         derived_signals = state.get("derived_signals", [])
         research_findings = state.get("research_findings", [])
         rejected_insights = state.get("rejected_insights", [])
+        rejected_actions = state.get("rejected_actions", [])
+        rejected_automations = [
+            ep for ep in rejected_actions
+            if ep.service_called == "automation.upsert_native_automation"
+        ]
 
         existing_automations = {
             eid: {
@@ -363,6 +370,21 @@ class SpecializedAgentGraph:
                 f"{rej_lines}\n"
             )
 
+        rej_auto_instruction = ""
+        if rejected_automations:
+            auto_lines = "\n".join(
+                f"- Alias: '{(ep.service_data or {}).get('alias') or ep.cause_category}'"
+                + (f" | Target: {ep.target_entity_ids}" if ep.target_entity_ids else "")
+                + (f" | Homeowner rejection note: '{ep.human_note}'" if ep.human_note and not ep.human_note.startswith("Rejected by user") else "")
+                for ep in rejected_automations
+            )
+            rej_auto_instruction = (
+                "\nCRITICAL RULES FOR REJECTED NATIVE AUTOMATIONS (DO NOT PROPOSE AGAIN):\n"
+                "The homeowner has explicitly REJECTED the following native automation proposals. "
+                "You MUST NOT propose these automations, similar logic, or automations controlling these devices again:\n"
+                f"{auto_lines}\n"
+            )
+
         llm_response = await self.llm.generate_json(
             system_prompt=(
                 f"You are the {agent_spec.name} ({agent_spec.specialty}) running in Periodic Deep Batch Analysis Mode. "
@@ -370,6 +392,7 @@ class SpecializedAgentGraph:
                 "Examine the historical entity trajectories, the Research Sub-Agent's findings, the Computation "
                 "Sub-Agent's derived signals, and the `existing_automations` already configured in Home Assistant.\n"
                 f"{rej_instruction}"
+                f"{rej_auto_instruction}"
                 "CRITICAL RULES FOR EXISTING AUTOMATIONS & USER CONTEXT NOTES:\n"
                 "- Strictly obey `user_context_notes` (e.g., mechanically broken features, devices used only in specific modes, or user directives). Never suggest actions or insights that contradict `user_context_notes`.\n"
                 "- Do NOT mistake repetitive device state changes driven by `existing_automations` for un-automated manual human habits.\n"
@@ -393,6 +416,14 @@ class SpecializedAgentGraph:
                         {"category": r.category, "title": r.title, "reason": r.rejection_reason}
                         for r in rejected_insights
                     ],
+                    "rejected_automations": [
+                        {
+                            "alias": (ep.service_data or {}).get("alias") or ep.cause_category,
+                            "targets": ep.target_entity_ids,
+                            "note": ep.human_note,
+                        }
+                        for ep in rejected_automations
+                    ],
                     "existing_automations": existing_automations,
                     "derived_signals": [d.model_dump(exclude={"python_code_executed"}) for d in derived_signals],
                     "research_findings": [f.model_dump() for f in research_findings],
@@ -409,9 +440,10 @@ class SpecializedAgentGraph:
                 "agent_id": agent_spec.agent_id,
                 "corroborated": {eid: s.model_dump(mode="json") for eid, s in corroborated.items()},
                 "existing_automations": existing_automations,
-                "derived_signals": [d.model_dump() for d in derived_signals],
+                "derived_signals": [d.model_dump(exclude={"python_code_executed"}) for d in derived_signals],
                 "research_findings": [f.model_dump() for f in research_findings],
                 "rejected_insights": [r.model_dump(mode="json") for r in rejected_insights],
+                "rejected_automations": [ep.model_dump(mode="json") for ep in rejected_automations],
             },
         )
 
@@ -463,12 +495,30 @@ class SpecializedAgentGraph:
                     )
                 )
 
+        def _is_rejected_automation(cand_alias: str, cand_desc: str) -> bool:
+            ca = cand_alias.lower().strip()
+            ca_slug = re.sub(r"[^a-z0-9]+", "_", ca).strip("_")
+            for r in rejected_automations:
+                ra = str((r.service_data or {}).get("alias") or r.cause_category or "").lower().strip()
+                ra_slug = re.sub(r"[^a-z0-9]+", "_", ra).strip("_")
+                if ra_slug and (ra_slug == ca_slug or ra_slug in ca_slug or ca_slug in ra_slug):
+                    return True
+                r_words = set(re.findall(r"\w{4,}", ra))
+                c_words = set(re.findall(r"\w{4,}", ca))
+                if r_words and len(r_words & c_words) >= max(2, len(r_words) // 2):
+                    return True
+            return False
+
         intents: list[ActionIntent] = []
         raw_autos = llm_response.get("native_automations", [])
         if isinstance(raw_autos, dict):
             raw_autos = [raw_autos]
         for auto in raw_autos if isinstance(raw_autos, list) else []:
             if isinstance(auto, dict) and "alias" in auto:
+                cand_alias = str(auto["alias"])
+                cand_desc = str(auto.get("description", ""))
+                if _is_rejected_automation(cand_alias, cand_desc):
+                    continue
                 raw_trig = auto.get("trigger", [])
                 raw_cond = auto.get("condition", [])
                 raw_act = auto.get("action", [])
