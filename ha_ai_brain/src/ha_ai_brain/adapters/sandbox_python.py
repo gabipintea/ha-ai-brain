@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 import asyncio
 import json
+import os
 import sys
 from typing import Any
 
@@ -13,6 +14,16 @@ from ha_ai_brain.ports.sandbox import ComputationSandboxPort
 
 _SUBPROCESS_HARNESS = """
 import json, math, statistics, sys
+
+# Best-effort resource limits (POSIX only); the parent additionally enforces a wall-clock timeout.
+try:
+    import resource
+    resource.setrlimit(resource.RLIMIT_CPU, (10, 10))
+    resource.setrlimit(resource.RLIMIT_FSIZE, (0, 0))
+    if sys.platform.startswith("linux"):
+        resource.setrlimit(resource.RLIMIT_AS, (768 * 1024 * 1024, 768 * 1024 * 1024))
+except Exception:
+    pass
 
 SAFE_BUILTINS = {
     "abs": abs, "all": all, "any": any, "bool": bool, "dict": dict,
@@ -72,6 +83,8 @@ class PythonSandboxAdapter(ComputationSandboxPort):
     ) -> dict[str, Any]:
         """Validate AST and run the Python snippet in an isolated subprocess with `inputs`."""
         proc = None
+        # Never leak API keys / tokens from the parent environment into generated code.
+        child_env = {"PATH": os.environ.get("PATH", ""), "LANG": "C.UTF-8", "PYTHONIOENCODING": "utf-8"}
         try:
             sanitized_code = self._validate_ast(code)
             proc = await asyncio.create_subprocess_exec(
@@ -82,6 +95,7 @@ class PythonSandboxAdapter(ComputationSandboxPort):
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                env=child_env,
             )
             stdin_bytes = json.dumps({"code": sanitized_code, "inputs": input_variables}).encode("utf-8")
             stdout_bytes, stderr_bytes = await asyncio.wait_for(
@@ -101,3 +115,11 @@ class PythonSandboxAdapter(ComputationSandboxPort):
             return {"signals": [], "error": f"Computation timed out after {timeout_seconds}s"}
         except Exception as exc:
             return {"signals": [], "error": str(exc)}
+        finally:
+            # Covers cancellation (e.g. add-on shutdown) so a runaway script is never orphaned.
+            if proc is not None and proc.returncode is None:
+                try:
+                    proc.kill()
+                    await proc.wait()
+                except Exception:
+                    pass

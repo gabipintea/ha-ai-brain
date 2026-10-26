@@ -121,6 +121,10 @@ class SimulatorMockLLMAdapter(LLMProviderPort):
         self.license_port = license_port
         self.quota_monitor = BaseQuotaMonitorAdapter(provider="simulator_mock", default_model="simulator-mock")
 
+    @property
+    def is_available(self) -> bool:
+        return False  # the offline mock cannot write real research
+
     async def get_quota_status(self) -> LLMQuotaAndUsageSnapshot:
         return await self.quota_monitor.get_quota_and_usage_snapshot()
 
@@ -160,6 +164,9 @@ class SimulatorMockLLMAdapter(LLMProviderPort):
 
         if task == "generate_computation_code":
             return {"python_code": MOCK_SANDBOX_SCRIPT}
+
+        if task in ("compile_watch", "plan_research_topics", "knowledge_research"):
+            return {}  # the offline simulator cannot interpret free text
 
         if task == "synthesize_realtime_reactions":
             return self._mock_realtime(hint)

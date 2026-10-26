@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
+from collections import deque
 from typing import Any
 
 from ha_ai_brain.domain.models import ActionIntent, AdvisoryInsight, PendingApproval
@@ -25,7 +26,8 @@ class HomeAssistantNotificationAdapter(NotificationPort):
     def __init__(self, smart_home: SmartHomePort, notify_service: str = "notify.notify") -> None:
         self.smart_home = smart_home
         self.notify_service = notify_service
-        self.sent_notifications: list[dict[str, Any]] = []
+        # Bounded history (inspection/testing only); an unbounded list would grow for the lifetime of the add-on.
+        self.sent_notifications: deque[dict[str, Any]] = deque(maxlen=200)
 
     async def _resolve_service_name(self) -> tuple[str, str]:
         """
@@ -206,6 +208,9 @@ class HomeAssistantNotificationAdapter(NotificationPort):
 
     async def dismiss_approval_notification(self, approval_id: str) -> None:
         domain, service = await self._resolve_service_name()
+        if not service.startswith("mobile_app_"):
+            # `clear_notification` is a Companion App command; other notify targets would show it as literal text.
+            return
         payload = {
             "message": "clear_notification",
             "data": {
@@ -222,7 +227,47 @@ class HomeAssistantNotificationAdapter(NotificationPort):
         except Exception:
             pass
 
-    async def send_advisory_alert(self, insight: AdvisoryInsight) -> None:
+    async def send_action_taken(self, intent: ActionIntent, undo_id: str | None) -> None:
+        domain, service = await self._resolve_service_name()
+        panel_path = await self._panel_path()
+        payload = {
+            "title": "🧠 AI Brain · Done automatically",
+            "message": self._compact_approval_message(intent),
+            "data": {
+                "tag": f"ha_ai_brain_done_{undo_id or intent.intent_id}",
+                "group": "ha_ai_brain_actions",
+                "subtitle": f"{intent.domain}.{intent.service}",
+                "url": panel_path,
+                "clickAction": panel_path,
+            },
+        }
+        if undo_id:
+            payload["data"]["actions"] = [{"action": f"BRAIN_UNDO:{undo_id}", "title": "Undo"}]
+        self.sent_notifications.append({"type": "action_taken", "undo_id": undo_id, "payload": payload})
+        await self._send(domain, service, payload, "action notice")
+
+    async def _panel_path(self) -> str:
+        if hasattr(self.smart_home, "get_addon_panel_path"):
+            try:
+                return await self.smart_home.get_addon_panel_path()
+            except Exception:
+                pass
+        return "/ha_ai_brain"
+
+    async def _send(self, domain: str, service: str, payload: dict[str, Any], what: str) -> None:
+        try:
+            await self.smart_home.call_service(domain=domain, service=service, target_entity_ids=[], service_data=payload)
+        except Exception as exc:
+            logger.warning("Failed sending %s to %s.%s: %s; trying notify.notify fallback", what, domain, service, exc)
+            if service != "notify":
+                try:
+                    await self.smart_home.call_service(
+                        domain="notify", service="notify", target_entity_ids=[], service_data=payload
+                    )
+                except Exception as fb_exc:
+                    logger.error("Failed sending %s on fallback notify.notify: %s", what, fb_exc)
+
+    async def send_advisory_alert(self, insight: AdvisoryInsight, urgent: bool = False) -> None:
         domain, service = await self._resolve_service_name()
         title = self._compact_title(insight.title, prefix="🧠 AI Brain")
         message = self._compact_insight_message(insight)
@@ -246,6 +291,11 @@ class HomeAssistantNotificationAdapter(NotificationPort):
                 "clickAction": f"{panel_path}#insight-{insight.insight_id}",
             },
         }
+        if urgent:
+            # iOS: break through Focus modes; Android: high-priority delivery
+            payload["data"]["push"] = {"interruption-level": "time-sensitive"}
+            payload["data"]["priority"] = "high"
+            payload["data"]["ttl"] = 0
         self.sent_notifications.append({"type": "advisory_insight", "insight_id": insight.insight_id, "payload": payload})
         try:
             await self.smart_home.call_service(

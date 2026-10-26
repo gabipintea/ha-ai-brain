@@ -48,10 +48,11 @@ DEFAULT_FALLBACKS_BY_PROVIDER: dict[str, list[str]] = {
         "claude-3-5-sonnet-20241022",
         "claude-3-haiku-20240307",
     ],
+    # Keep the "openrouter/" prefix: it is stripped when stored, which preserves the vendor segment.
     "openrouter": [
-        "google/gemini-2.5-flash",
-        "openai/gpt-4o-mini",
-        "anthropic/claude-3.5-sonnet",
+        "openrouter/google/gemini-2.5-flash",
+        "openrouter/openai/gpt-4o-mini",
+        "openrouter/anthropic/claude-3.5-sonnet",
     ],
 }
 
@@ -313,11 +314,16 @@ class BaseQuotaMonitorAdapter(LLMQuotaMonitorPort):
         short_m = model.split("/", 1)[-1]
         self._snapshot.model = short_m
         self._snapshot.requests_rate_limited_session += 1
-        if status_code == 429:
-            self._snapshot.quota_exhausted = True
         if headers:
             self._parse_headers(headers)
-        self._parse_error_payload(status_code, error_body, headers or {})
+        if status_code == 429 or status_code >= 500 or status_code == 408:
+            # Rate limits and transient provider outages put the model into a cooldown window.
+            if status_code == 429:
+                self._snapshot.quota_exhausted = True
+            self._parse_error_payload(status_code, error_body, headers or {})
+        else:
+            # Auth / bad-request errors are not quota problems: surface them without starting a cooldown.
+            self._snapshot.last_error_message = (error_body or f"HTTP {status_code}")[:240]
         self._refresh_routing_state()
         return self._snapshot
 
@@ -557,6 +563,18 @@ class OpenAIAnthropicHeadersQuotaMonitorAdapter(BaseQuotaMonitorAdapter):
         self._snapshot.last_error_message = error_body[:240]
 
 
+def _compatible_fallbacks(models: list[str] | None, provider_prefix: str, allow_bare: bool) -> list[str] | None:
+    """
+    Keep only fallback models the active provider can actually serve (the shared default list is Gemini-based
+    and cannot be called with an OpenAI/Anthropic/OpenRouter key). Returns None when nothing is compatible so the
+    provider-specific defaults apply.
+    """
+    if not models:
+        return None
+    kept = [m for m in models if m.startswith(f"{provider_prefix}/") or (allow_bare and "/" not in m)]
+    return kept or None
+
+
 def create_quota_monitor_for_model(
     model: str,
     api_key: str = "",
@@ -575,7 +593,7 @@ def create_quota_monitor_for_model(
             provider="anthropic",
             default_model=model,
             api_key=api_key,
-            fallback_models=fallback_models,
+            fallback_models=_compatible_fallbacks(fallback_models, "anthropic", allow_bare=False),
             fallback_policy=fallback_policy,
         )
     if model.startswith("openrouter/"):
@@ -583,20 +601,20 @@ def create_quota_monitor_for_model(
             provider="openrouter",
             default_model=model,
             api_key=api_key,
-            fallback_models=fallback_models,
+            fallback_models=_compatible_fallbacks(fallback_models, "openrouter", allow_bare=False),
             fallback_policy=fallback_policy,
         )
     if model.startswith("ollama/"):
         return BaseQuotaMonitorAdapter(
             provider="ollama_local",
             default_model=model,
-            fallback_models=fallback_models,
+            fallback_models=_compatible_fallbacks(fallback_models, "ollama", allow_bare=False),
             fallback_policy=fallback_policy,
         )
     return OpenAIAnthropicHeadersQuotaMonitorAdapter(
         provider="openai",
         default_model=model,
         api_key=api_key,
-        fallback_models=fallback_models,
+        fallback_models=_compatible_fallbacks(fallback_models, "openai", allow_bare=True),
         fallback_policy=fallback_policy,
     )

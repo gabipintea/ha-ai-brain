@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from datetime import datetime
+from typing import Any
 
 from ha_ai_brain.domain.models import (
     AdvisoryInsight,
@@ -78,6 +80,10 @@ class MemoryStorePort(ABC):
     async def dismiss_all_pending_approvals(self) -> int:
         """Dismiss all currently pending proposals."""
         return 0
+
+    async def expire_stale_pending_approvals(self, max_age_hours: float = 24.0) -> list[str]:
+        """Expire pending approvals older than `max_age_hours`; returns the expired approval ids (default: no-op)."""
+        return []
 
     async def get_approval_statuses(self) -> dict[str, str]:
         """Return a mapping of approval_id -> status across recorded approvals."""
@@ -175,3 +181,39 @@ class MemoryStorePort(ABC):
     async def get_ui_preferences(self) -> dict[str, str]:
         """Return all persisted UI preferences."""
         return {}
+
+    # ---- generic key/value cache (research findings, undo records, counters) ----
+    async def get_kv(self, key: str) -> str | None:
+        """Read a small persisted string value (default: nothing stored)."""
+        return None
+
+    async def set_kv(self, key: str, value: str) -> None:
+        """Persist a small string value."""
+
+    async def delete_kv(self, key: str) -> None:
+        """Remove a persisted value."""
+
+    async def list_kv(self, prefix: str) -> dict[str, str]:
+        """All persisted values whose key starts with `prefix`."""
+        return {}
+
+    # ---- retention and upkeep ----
+    async def prune_old(self, now: datetime) -> dict[str, int]:
+        """Delete resolved / purely historical records that aged out; returns rows removed per category."""
+        return {}
+
+    async def maintain(self) -> None:
+        """Reclaim free pages and truncate the write-ahead log."""
+
+    # ---- closed-loop outcome verification ----
+    async def get_due_expected_outcomes(self, now: datetime) -> list[ExpectedOutcome]:
+        """Pending outcomes whose verification time has passed."""
+        return []
+
+    async def set_expected_outcome_status(self, outcome_id: str, status: str) -> None:
+        """Mark an outcome as verified_success / verified_failure / unverifiable."""
+
+    # ---- feedback analytics ----
+    async def get_feedback_counts(self, since: datetime) -> list[dict[str, Any]]:
+        """Aggregated feedback: [{agent_id, service_called, polarity, count}] since `since`."""
+        return []

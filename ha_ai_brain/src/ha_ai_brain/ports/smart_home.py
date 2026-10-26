@@ -60,3 +60,21 @@ class SmartHomePort(ABC):
     async def get_addon_panel_path(self) -> str:
         """Dynamically discover the Home Assistant frontend panel path for this add-on."""
         return "/ha_ai_brain"
+
+    supports_history_backfill: bool = True
+
+    async def get_automation_configs(self) -> list[dict[str, Any]]:
+        """Configuration (triggers / conditions / actions) of the automations defined in Home Assistant, each with its `id`."""
+        return []
+
+    async def get_weather_forecast(self, entity_id: str, forecast_type: str = "hourly") -> list[dict[str, Any]]:
+        """Short-term forecast entries for a weather entity (empty when unsupported)."""
+        return []
+
+    async def get_timezone(self) -> str:
+        """IANA timezone configured in Home Assistant (empty when unknown)."""
+        return ""
+
+    async def get_device_inventory(self) -> list[dict[str, Any]]:
+        """Distinct physical device models in the home: [{manufacturer, model, integrations, domains, entity_count}]."""
+        return []

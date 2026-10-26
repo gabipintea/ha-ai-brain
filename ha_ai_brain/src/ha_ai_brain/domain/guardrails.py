@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import re
 from enum import Enum
+
 from pydantic import BaseModel
 
 from ha_ai_brain.config import AutonomyLevel
@@ -45,6 +47,13 @@ class GuardrailEngine:
         ("alarm_control_panel", "alarm_disarm"),
     }
 
+    # Domains an LLM-authored action may never call: they run arbitrary code/commands or manage the host.
+    FORBIDDEN_DOMAINS = frozenset(
+        {"shell_command", "python_script", "pyscript", "command_line", "rest_command", "hassio", "script", "recorder"}
+    )
+
+    _RISK_ORDER = (ActionRiskLevel.LOW, ActionRiskLevel.MEDIUM, ActionRiskLevel.HIGH, ActionRiskLevel.CRITICAL)
+
     HIGH_RISK_SERVICES = {
         ("valve", "close_valve"),
         ("homeassistant", "restart"),
@@ -62,26 +71,19 @@ class GuardrailEngine:
         """Evaluate an ActionIntent against deterministic safety rules and user approval memory."""
         signature = intent.repeatable_signature()
 
+        # 0. Domains that execute arbitrary code/commands are never allowed from an LLM proposal
+        if intent.domain in self.FORBIDDEN_DOMAINS:
+            return GuardrailEvaluation(
+                decision=GuardrailDecisionType.HARD_BLOCKED,
+                effective_risk=ActionRiskLevel.CRITICAL,
+                signature=signature,
+                reason=f"Hard Safety Guardrail: domain '{intent.domain}' can run arbitrary code or manage the host and is never allowed.",
+            )
+
         # 1. Check if the user previously explicitly banned/rejected this repeatable signature
-        matched_rejection = False
-        if rejected_signatures:
-            if signature in rejected_signatures:
-                matched_rejection = True
-            else:
-                svc_tag = f"{intent.domain}.{intent.service}"
-                for rej_sig in rejected_signatures:
-                    if intent.agent_id in rej_sig and svc_tag in rej_sig:
-                        if not intent.target_entity_ids or any(t in rej_sig for t in intent.target_entity_ids):
-                            matched_rejection = True
-                            break
-                        if intent.domain == "automation":
-                            alias = (intent.native_automation.alias if intent.native_automation else "") or str(intent.service_data.get("alias", ""))
-                            if alias:
-                                import re
-                                slug = re.sub(r"[^a-z0-9]+", "_", alias.lower()).strip("_")
-                                if slug and slug in rej_sig:
-                                    matched_rejection = True
-                                    break
+        matched_rejection = signature in rejected_signatures if rejected_signatures else False
+        if rejected_signatures and not matched_rejection:
+            matched_rejection = self._matches_rejected_signature(intent, rejected_signatures)
 
         if matched_rejection:
             return GuardrailEvaluation(
@@ -208,6 +210,38 @@ class GuardrailEngine:
             ),
         )
 
+    @staticmethod
+    def _matches_rejected_signature(intent: ActionIntent, rejected_signatures: set[str]) -> bool:
+        """
+        Match an intent against previously rejected signatures of the same agent and service.
+        Signature layout: `sig:<agent_id>:<domain.service>:<targets or automation slug[:targets]>`.
+        Targets are compared as exact entity ids (never as substrings), so rejecting `light.kitchen`
+        does not also block `light.kitchen_ceiling`.
+        """
+        svc_tag = f"{intent.domain}.{intent.service}"
+        intent_targets = set(intent.target_entity_ids)
+        slug = ""
+        if intent.domain == "automation":
+            alias = (intent.native_automation.alias if intent.native_automation else "") or str(intent.service_data.get("alias", ""))
+            slug = re.sub(r"[^a-z0-9]+", "_", alias.lower()).strip("_")
+
+        for rej_sig in rejected_signatures:
+            parts = rej_sig.split(":", 3)
+            if len(parts) < 4 or parts[0] != "sig" or parts[1] != intent.agent_id or parts[2] != svc_tag:
+                continue
+            rejected_tokens = {tok for tok in re.split(r"[,:]", parts[3]) if tok}
+            if not intent_targets:
+                return True
+            if intent_targets & rejected_tokens:
+                return True
+            if slug and slug in rejected_tokens:
+                return True
+        return False
+
+    @classmethod
+    def _max_risk(cls, *levels: ActionRiskLevel) -> ActionRiskLevel:
+        return max(levels, key=cls._RISK_ORDER.index)
+
     def _determine_effective_risk(self, intent: ActionIntent) -> ActionRiskLevel:
         """Compute deterministic floor risk for sensitive services."""
         pair = (intent.domain, intent.service)
@@ -217,21 +251,22 @@ class GuardrailEngine:
             return ActionRiskLevel.HIGH
 
         if intent.domain == "cover":
-            # Opening garage doors is HIGH/CRITICAL; opening motorized exterior windows > 30% is HIGH; blinds/shades are LOW/MEDIUM
+            opening = intent.service != "close_cover"
             for entity_id in intent.target_entity_ids:
-                if "garage" in entity_id or "gate" in entity_id:
+                # Opening a garage door or gate exposes the property; closing one is never escalated.
+                if opening and ("garage" in entity_id or "gate" in entity_id):
                     return ActionRiskLevel.CRITICAL
                 if any(k in entity_id for k in ("blind", "shade", "curtain", "shutter")):
                     return intent.risk_level
             pos = intent.service_data.get("position", 100 if intent.service == "open_cover" else 0)
             try:
                 if float(pos) > 30:
-                    return max(intent.risk_level, ActionRiskLevel.HIGH, key=lambda r: ["low", "medium", "high", "critical"].index(r.value))
+                    return self._max_risk(intent.risk_level, ActionRiskLevel.HIGH)
             except (TypeError, ValueError):
                 pass
-            return max(intent.risk_level, ActionRiskLevel.MEDIUM, key=lambda r: ["low", "medium", "high", "critical"].index(r.value))
+            return self._max_risk(intent.risk_level, ActionRiskLevel.MEDIUM)
 
         if intent.domain == "automation":
-            return max(intent.risk_level, ActionRiskLevel.MEDIUM, key=lambda r: ["low", "medium", "high", "critical"].index(r.value))
+            return self._max_risk(intent.risk_level, ActionRiskLevel.MEDIUM)
 
         return intent.risk_level

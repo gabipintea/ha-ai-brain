@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import json
 from typing import Any
 
 from ha_ai_brain.domain.models import ResearchFinding
-from ha_ai_brain.ports.llm import LLMProviderPort
+from ha_ai_brain.domain.promptfmt import dumps
+from ha_ai_brain.ports.llm import REASONING_LOW, LLMProviderPort
 from ha_ai_brain.ports.research import ResearchPort
 
 
@@ -35,13 +35,16 @@ class ScientificResearchAdapter(ResearchPort):
         resp = await self.llm.generate_json(
             system_prompt=(
                 "You are an autonomous Scientific & Domain Research Sub-Agent for a Smart Home AI Brain.\n"
-                "Examine the provided Home Assistant sensor entity keys, current values, units, device classes, "
-                "areas, and historical summary from an expert domain perspective.\n"
+                "Examine the kinds of Home Assistant entities present (`observed_telemetry.entity_types`: domain, device class, unit, count) "
+                "from an expert domain perspective.\n"
                 "Without relying on pre-programmed rules, determine:\n"
                 "1) What physical, environmental, thermodynamic, or behavioral phenomena and interactions "
                 "could be analyzed across these specific entities.\n"
                 "2) What derived signals, equations, or statistical metrics (if any) would be valuable to compute "
                 "from these raw entity values and history to assess risks, comfort, efficiency, or automation opportunities.\n"
+                "`observed_telemetry.reference_knowledge` holds curated expert guidance: base your findings on it where it applies and "
+                "cite its `id` in `sources`. Do NOT invent standards, publications or URLs; if you rely on general engineering knowledge "
+                "that is not in the reference list, label the source 'general engineering practice'.\n"
                 "Return JSON with key `findings`, where each item is an object with:\n"
                 "- `topic`: string\n"
                 "- `principle_summary`: string (including any physical or statistical formulas to compute)\n"
@@ -49,16 +52,17 @@ class ScientificResearchAdapter(ResearchPort):
                 "- `actionable_implications`: list of strings\n"
                 "- `sources`: list of strings"
             ),
-            user_prompt=json.dumps(
+            user_prompt=dumps(
                 {
-                    "research_objective": query,
                     "site_context": site_context,
                     "observed_telemetry": telemetry_context or {},
+                    "research_objective": query,
                 }
             ),
             use_fast_tier=False,
             context_hint={
                 "task": "expert_scientific_research",
+                "reasoning": REASONING_LOW,
                 "query": query,
                 "site_context": site_context,
                 "telemetry_context": telemetry_context or {},

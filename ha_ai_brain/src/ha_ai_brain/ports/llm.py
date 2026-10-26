@@ -8,6 +8,13 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 
+# Provider-neutral hint (context_hint["reasoning"]) telling an adapter how much hidden "thinking" a call deserves.
+# Adapters that can control it (e.g. models with a thinking budget) honour it; all others simply ignore it.
+REASONING_OFF = "off"
+REASONING_LOW = "low"
+REASONING_DEFAULT = "default"
+
+
 class LLMQuotaAndUsageSnapshot(BaseModel):
     """Normalized provider-agnostic quota, rate-limit cooldown, fallback routing, and token/cost telemetry."""
 
@@ -63,6 +70,17 @@ class LLMQuotaAndUsageSnapshot(BaseModel):
         return data
 
 
+class ResearchResult(BaseModel):
+    """Outcome of a web-grounded research call."""
+
+    grounded: bool = False  # True only when the provider actually searched and returned citations
+    text: str = ""
+    parsed: dict[str, Any] = Field(default_factory=dict)
+    citations: list[dict[str, str]] = Field(default_factory=list)  # [{"url", "title"}]
+    coverage: float = 0.0  # share of the answer text backed by the cited sources (0..1)
+    queries: list[str] = Field(default_factory=list)
+
+
 class LLMQuotaMonitorPort(ABC):
     """
     Hexagonal Port Interface for inspecting and parsing LLM provider quota limits,
@@ -111,6 +129,25 @@ class LLMProviderPort(ABC):
     async def get_quota_status(self) -> LLMQuotaAndUsageSnapshot:
         """Return current provider quota, cooldown, and spend telemetry."""
         return LLMQuotaAndUsageSnapshot()
+
+    @property
+    def is_available(self) -> bool:
+        """True when the provider is configured well enough to answer (an API key, a proxy or a local model)."""
+        return True
+
+    @property
+    def supports_web_search(self) -> bool:
+        """True when the provider can ground answers in live web search with citations."""
+        return False
+
+    async def generate_research(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        context_hint: dict[str, Any] | None = None,
+    ) -> ResearchResult:
+        """Answer a research question using web search; providers without search return an ungrounded, empty result."""
+        return ResearchResult()
 
     def reconfigure(
         self,

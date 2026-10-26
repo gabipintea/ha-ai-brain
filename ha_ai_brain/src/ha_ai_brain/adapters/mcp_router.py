@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from ha_ai_brain.ports.mcp import McpClientPort
+
+ToolHandler = Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
 
 
 class ExtensibleMcpClientAdapter(McpClientPort):
@@ -16,6 +19,7 @@ class ExtensibleMcpClientAdapter(McpClientPort):
     """
 
     def __init__(self) -> None:
+        self._handlers: dict[tuple[str, str], ToolHandler] = {}
         self._registered_servers: dict[str, dict[str, Any]] = {
             "router_network_mcp": {
                 "description": "Local Router & LAN Diagnostics MCP (DHCP Lease Table, ARP Scan, Static IP Reservation)",
@@ -45,21 +49,18 @@ class ExtensibleMcpClientAdapter(McpClientPort):
                 out.append({"server": s_name, **t})
         return out
 
+    def register_tool_handler(self, server_name: str, tool_name: str, handler: ToolHandler) -> None:
+        """Attach a real implementation (e.g. a router API client) for a tool exposed by a registered server."""
+        self._handlers[(server_name, tool_name)] = handler
+
     async def call_tool(self, server_name: str, tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-        if server_name == "router_network_mcp":
-            if tool_name == "find_device_by_hostname_or_mac":
-                hostname = arguments.get("hostname", "bedroom_air_monitor")
-                return {
-                    "status": "found",
-                    "hostname": hostname,
-                    "mac": "AA:BB:CC:11:22:33",
-                    "previous_ip": "192.168.1.142",
-                    "current_ip": "192.168.1.189",
-                }
-            if tool_name == "reserve_static_dhcp_lease":
-                return {
-                    "status": "reserved",
-                    "mac": arguments.get("mac", "AA:BB:CC:11:22:33"),
-                    "reserved_ip": arguments.get("ip", "192.168.1.189"),
-                }
-        return {"status": "executed", "server": server_name, "tool": tool_name, "arguments": arguments}
+        handler = self._handlers.get((server_name, tool_name))
+        if handler is None:
+            # Never fabricate results: an agent must be able to tell a tool is not connected.
+            return {
+                "status": "unavailable",
+                "server": server_name,
+                "tool": tool_name,
+                "message": "No connector is configured for this MCP tool.",
+            }
+        return await handler(arguments)

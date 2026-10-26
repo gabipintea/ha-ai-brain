@@ -9,3 +9,4 @@ build/
 *.db-journal
 .env
 data/
+.DS_Store

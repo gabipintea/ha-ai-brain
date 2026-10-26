@@ -1,5 +1,5 @@
 name: "HA AI Brain"
-version: "0.1.25"
+version: "0.2.0"
 slug: "ha_ai_brain"
 description: "Autonomous Multi-Agent AI Brain for Home Assistant (Climate, Lighting, Security, Repair, and Custom Domain Agents)"
 url: "https://github.com/gabipintea/ha-ai-brain"
@@ -9,6 +9,7 @@ arch:
 startup: application
 boot: auto
 init: false
+watchdog: "http://[HOST]:[PORT:8099]/api/health"
 ingress: true
 ingress_port: 8099
 panel_icon: "mdi:brain"
@@ -30,6 +31,15 @@ options:
   notification_service: "notify.notify"
   batch_analysis_interval_minutes: 360
   batch_lookback_hours: 24
+  realtime_gating: true
+  exception_detection: true
+  deterministic_automations: true
+  privacy_scrub: true
+  daily_token_budget: 0
+  log_level: "info"
+  research_enabled: true
+  research_web_search: false
+  research_interval_days: 7
 schema:
   operating_mode: "list(realtime_stream|periodic_batch|hybrid)"
   default_autonomy_level: "list(shadow|copilot|autonomous)"
@@ -40,4 +50,18 @@ schema:
   enable_actionable_notifications: "bool"
   notification_service: "str"
   batch_analysis_interval_minutes: "int(15,10080)"
-  batch_lookback_hours: "int(1,168)?"
+  batch_lookback_hours: "int(1,720)?"
+  realtime_gating: "bool"
+  exception_detection: "bool"
+  deterministic_automations: "bool"
+  privacy_scrub: "bool"
+  daily_token_budget: "int(0,1000000000)"
+  log_level: "list(debug|info|warning)"
+  research_enabled: "bool"
+  research_web_search: "bool"
+  research_interval_days: "int(1,90)"
+  quiet_hours_start: "str?"
+  quiet_hours_end: "str?"
+  timezone: "str?"
+  managed_cloud_proxy_url: "str?"
+  license_key: "password?"

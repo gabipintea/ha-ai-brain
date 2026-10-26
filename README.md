@@ -3,97 +3,112 @@
 [![Home Assistant Add-on](https://img.shields.io/badge/Home%20Assistant-Add--on-blue.svg?logo=home-assistant)](https://github.com/gabipintea/ha-ai-brain)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/)
 [![License: Proprietary](https://img.shields.io/badge/license-Proprietary-green.svg)]()
-[![Multi-Provider AI](https://img.shields.io/badge/AI%20Providers-Gemini%20%7C%20OpenAI%20%7C%20Claude%20%7C%20Ollama-orange.svg)]()
+[![Multi-Provider AI](https://img.shields.io/badge/AI%20Providers-Gemini%20%7C%20OpenAI%20%7C%20Claude%20%7C%20OpenRouter%20%7C%20Ollama-orange.svg)]()
 
-**Autonomous Multi-Agent Cognitive Layer for Home Assistant** built with **Python, LangGraph, FastAPI, and Hexagonal Architecture**.
+**A background brain for Home Assistant.** It watches what happens in your home, learns what is normal for *your* house, turns your own recurring habits into native Home Assistant automations, tells you when something is unusual, and lets specialised AI agents think about the harder questions — always within safety limits you control.
 
-Instead of manually crafting fragile automations, specialized AI agents (**Climate & Thermal Inertia**, **Lighting & Habit**, **Security & Safety**, **Repair & Diagnostics**, and **Custom User Agents** like **Solar Energy & Battery**) continuously observe Home Assistant telemetry, discover physics and psychrometric formulas, and formulate proactive optimizations with built-in human co-pilot approvals and deterministic safety guardrails.
-
----
-
-## 📦 Production: Installing as a Home Assistant OS Add-on
-
-You can install HA AI Brain directly onto your Home Assistant OS instance (Green, Yellow, Raspberry Pi 4/5, x86/ODROID):
-
-1. In Home Assistant, open **Settings** → **Add-ons** → **Add-on Store**.
-2. Click the **⋮** menu (top right) → **Repositories**.
-3. Paste the repository URL:
-   ```text
-   https://github.com/gabipintea/ha-ai-brain
-   ```
-4. Click **Add**, close the modal, and refresh the store.
-5. Click on **HA AI Brain** → **Install**.
-6. Turn on **Show in sidebar**, then click **Start**.
-7. Click **AI Brain** in your Home Assistant left sidebar to open the Ingress dashboard and complete initial onboarding!
-
-### 🎯 Zero-Friction Onboarding in Home Assistant
-When running as an add-on, **connection to Home Assistant is 100% automatic** (via Supervisor internal token). You never need to copy Long-Lived Access Tokens or configure local network URLs.
-
-In the dashboard **Settings** tab:
-* **Pick your AI Provider**: Google Gemini (free AI Studio key), OpenAI ChatGPT (`sk-...`), Anthropic Claude (`sk-ant-...`), OpenRouter, or 100% local offline Ollama (`ollama/llama3.2`).
-* **Describe your home**: Add a few lines in **Site & Building Context** (rooms, heating type, window orientation, occupants).
-* **Select your phone**: Choose your device from the discovered notification services list (`notify.mobile_app_...`).
+> 📖 **The complete user manual (how everything works, every feature, settings, privacy, costs and an FAQ) is in [`ha_ai_brain/DOCS.md`](ha_ai_brain/DOCS.md)** and in the add-on's *Documentation* tab inside Home Assistant.
 
 ---
 
-## 🤖 Recommended Models & Provider Selection Guide
+## What it does
 
-### Do Cheaper Models Perform the Same in Our Context?
-**Yes—and in fact, compact "Flash / Mini" models are often superior for real-time smart home reflexes:**
+**Understands your home by itself**
+* Discovers entities, areas, devices, services and notification targets — nothing to configure.
+* Imports your recent Home Assistant history and keeps its own compact long-term record of state changes and hourly sensor values.
+* Knows who is home, the time of day, sun, weather and forecast, and electricity-price / solar-forecast sensors.
+* You add context in plain words: a site description, permanent notes the AI must obey, and an ignore list.
 
-1. **Sub-Second Latency**: Real-time reflexes (closing covers on solar spike, turning on ventilation on humidity surge) require sub-second reaction times. Models like `gpt-4o-mini` and `gemini-3.5-flash` respond in **300–600ms**, compared to 3–8 seconds for frontier reasoning models.
-2. **Structured JSON Specialization**: Our agents feed structured JSON telemetry and expect clean JSON service calls. Modern lightweight models are heavily fine-tuned on JSON schema adherence and perform with near 100% reliability on smart home actions.
-3. **Where Frontier Models Shine**: High-reasoning models (`claude-3-5-sonnet`, `gemini-3.8-flash`, `gpt-4o`) are best reserved for **Periodic Deep Batch Analysis** (running once every 4–6 hours) to author complex Home Assistant YAML automations and thermodynamic decay models.
+**Learns locally — no AI tokens**
+* Finds your **habits** ("this goes off around 23:00 on weekdays", "this follows that within minutes").
+* Turns strong, un-automated habits into **native Home Assistant automations** — written by statistics, not by an AI call.
+* **Backtests** every proposed automation against your own history before you see it.
+* Learns what each sensor normally reads at each hour, and how long each device normally stays in each state.
+* Reads your existing UI-made automations, so it does not propose what you already have.
 
-### Recommended Model Split per Provider
+**Tells you when something is unusual** (no device list to maintain)
+* Broken routines, states that last far too long, entities that went silent, flapping devices, sensors far out of range, sensors that stopped reporting, many entities unavailable at once, automations that did not run, and "the house is open while everyone is away".
+* Learns from your reactions: dismiss an alert and it waits longer, reject it and it stays muted.
 
-| Provider | Primary Model (Real-Time & Sub-Agents) | Deep Batch Model (Periodic Audits & Automations) | Fallback Model | Est. Monthly Cost | Why This Combination? |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| **Google Gemini** *(Free / Budget)* | `gemini/gemini-3.5-flash` | `gemini/gemini-3.8-flash` | `gemini/gemini-3.6-flash` | **$0.00** *(Free Tier)*<br>< $0.30/mo *(Pay-as-you-go)* | **Best for free/budget setups.** Massive context window, ultra-fast reflexes on Gemini 3.5, and deep reasoning on Gemini 3.8. |
-| **OpenAI** *(Most Reliable)* | `openai/gpt-4o-mini` | `openai/gpt-4o` | `openai/gpt-4o-mini` | **~$0.20 – $0.50 / mo** | **Best for rock-solid stability.** Exceptional uptime, zero schema deviations, and rock-bottom pricing for `gpt-4o-mini`. |
-| **Anthropic Claude** *(Best Reasoning)* | `anthropic/claude-3-5-haiku-20241022` | `anthropic/claude-3-5-sonnet-20241022` | `anthropic/claude-3-haiku-20240307` | **~$0.50 – $1.20 / mo** | **Highest intelligence.** Sonnet produces the most sophisticated Home Assistant native automations and building physics insights. |
-| **OpenRouter** *(Aggregator)* | `openrouter/google/gemini-2.5-flash` | `openrouter/anthropic/claude-3.5-sonnet` | `openrouter/openai/gpt-4o-mini` | **~$0.30 – $0.80 / mo** | **Maximum flexibility.** Use a single API key to mix Gemini for instant reflexes and Claude for deep batch audits. |
-| **Local Ollama** *(100% Private)* | `ollama/qwen2.5:7b` *(or `llama3.2:3b`)* | `ollama/qwen2.5:14b` *(or `llama3.3:70b`)* | `ollama/qwen2.5:7b` | **$0.00** *(Zero cloud spend)* | **Best for strict privacy.** 100% offline, zero data leaves your local network, works without internet connectivity. |
+**Your own alerts in plain language (Watches)**
+* Describe a condition in a sentence; the AI interprets it once, shows how it understood you and how often it would have fired on your history; from then on it runs locally for free.
+
+**Specialised AI agents**
+* Climate, Lighting, Security, Energy & Solar, Shading and Repair agents, plus your own custom agents.
+* **Regular analysis of the whole picture**: every few hours each agent studies your entities, trends and existing automations and proposes insights, recommendations and new automation ideas — even when nothing is wrong (for example condensation risk from indoor humidity/temperature and the outdoor temperature). Calculations run in a sandbox.
+* Real-time reactions to unusual events.
+* In real time, only called when local learning says it is worth it — routine events, normal readings and things already automated never reach the AI.
+* Weekly **research homework**: each agent proposes practical knowledge for your equipment and setup, usable only after you approve it. Works with any AI provider; optional cited web research for Google Gemini.
+
+**You stay in control**
+* Shadow / Co-pilot / Autonomous — globally and per device type (for example lights autonomous, locks co-pilot).
+* Hard guardrails the AI cannot override: temperature limits, blocked code-execution domains, approval always required for unlocking, disarming, garage doors, valves and restarts.
+* Approve from your phone: *Approve once*, *Always allow*, *Dismiss*, *Reject*. **Undo** button on everything it does by itself.
+* Action rate limits, quiet hours, a daily token budget, a kill switch, and a privacy filter that hides people, phones and network identifiers from cloud AI.
+
+**Light on tokens and hardware (Raspberry Pi friendly)**
+* Skips agents with nothing to do, skips unchanged batches, coalesces event bursts, caches calculations and research, compact database with automatic clean-up and batched writes. Works the same with any AI provider.
+
+**Transparent**
+* Dashboard with approvals, a full activity log with the agents' reasoning, what it has learned, automation health reviews, research waiting for your review, and a weekly digest.
 
 ---
 
-## 🛠️ Local Development & Testing Environment
+## How it works (in short)
 
-You can continue developing and testing locally on your Mac/Linux workstation while running production on your Home Assistant machine:
+1. **Observe** — live events plus imported history.
+2. **Learn locally** — habits, normal ranges, routines (free).
+3. **Decide** — filters and learned routines decide what deserves attention and what deserves the AI.
+4. **Think** — the matching specialised agent analyses the situation.
+5. **Act or ask** — deterministic safety checks, then shadow-log, ask you, or act (with Undo), and verify the result.
+
+Read the details in [`DOCS.md`](ha_ai_brain/DOCS.md#3-how-it-works).
+
+---
+
+## 📦 Install as a Home Assistant add-on
+
+1. **Settings → Add-ons → Add-on Store → ⋮ → Repositories**, add `https://github.com/gabipintea/ha-ai-brain`.
+2. Install **HA AI Brain**, enable **Show in sidebar**, **Start**.
+3. Open **AI Brain** in the sidebar → *Settings*: choose an AI provider (Gemini, OpenAI, Anthropic, OpenRouter, a local Ollama model, or any other LiteLLM model), paste the key, describe your home, pick your phone as the notification target.
+
+Connection to Home Assistant is automatic. Leave autonomy on **Co-pilot** at first and follow the [recommended rollout](ha_ai_brain/DOCS.md#7-recommended-rollout).
+
+---
+
+## ❓ FAQ (short version — the full FAQ is at the bottom of [`DOCS.md`](ha_ai_brain/DOCS.md#14-faq))
+
+**Does it change my devices without asking?** Not in the default Co-pilot mode. In Autonomous mode low/medium-risk actions run by themselves with an Undo button; unlocking, disarming, garage doors, valves and restarts always need approval. Note: with approval notifications switched off, low/medium-risk actions run without asking even in Co-pilot.
+
+**Does it need a cloud AI?** No. With a local Ollama model nothing leaves your network. Habit detection, backtesting, unusual-situation alerts and running your watches need no AI at all.
+
+**How much does it cost?** Most of the work is local and free. Tokens are used by agent reactions to unusual events, one analysis per agent per interval (skipped when nothing changed), and a few research calls per week. A daily token budget caps it.
+
+**How long until it is useful?** About 3 days of history; it imports your recent history at startup, so often almost immediately.
+
+**What data does the AI see?** Entity IDs, names, states and statistics needed for the question, your site context and notes — never anything when no AI call happens. People, phones and network identifiers are replaced by aliases by default.
+
+**What if it proposes something I already automate?** Automations written in YAML cannot be read in detail (only UI-made ones), so it may; reject the proposal and it will not return.
+
+**Does the license key unlock anything?** Not in this version.
+
+---
+
+## 🛠️ Local development
 
 ```bash
-# 1. Clone & activate virtual environment
 git clone git@github.com:gabipintea/ha-ai-brain.git
 cd ha-ai-brain
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -e ha_ai_brain
-
-# 2. Configure development environment (.env)
-cp .env.example .env  # Add your live HA Nabu Casa token or keep simulator mode
-
-# 3. Run all unit and integration tests
-.venv/bin/pytest -v
-
-# 4. Launch local dev server with hot reload
-.venv/bin/uvicorn ha_ai_brain.api.app:create_app --factory --host 0.0.0.0 --port 8099
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e "ha_ai_brain[dev]"
+cp .env.example .env            # keep simulator mode, or add a Home Assistant token
+.venv/bin/pytest -v             # run the tests
+.venv/bin/uvicorn ha_ai_brain.api.app:create_app --factory --host 127.0.0.1 --port 8099
 ```
 
-Open `http://localhost:8099` to access your local development dashboard.
+Open `http://localhost:8099`. Without a Home Assistant token the brain runs against a built-in simulated smart home.
 
----
-
-## ✨ Architecture & Core Capabilities
-
-1. **Hexagonal Architecture (Ports & Adapters)**
-   - **Domain Core**: Signal triage, deadband jitter filtering, causal loop prevention, conflict arbitration hierarchy (`Life > Human > Equipment > Comfort > Energy`), and deterministic physical guardrails.
-   - **LangGraph Workflows**: Real-time event streaming + periodic batch deep-think analysis with sub-agents running sandbox calculations (Dew point, window condensation risk, solar heat gain index, and thermal decay rate $dT/dt$).
-   - **Multi-Provider AI**: Google Gemini, OpenAI, Claude, OpenRouter, and Ollama with live rate-limit tracking, session spend accounting, and automatic fallback cooldown rotation.
-   - **SQLite Episodic Memory**: Rejection tracking, user context notes, repeatable approval rules, and advisory insights.
-
-2. **Human Co-Pilot & Actionable Approvals**
-   - Actionable mobile notifications with **Approve once**, **Always allow** (creates an automatic endorsement rule), and **Reject**.
-   - Manage and revoke endorsed rules or unblock rejected actions at any time via the dashboard.
+**Architecture:** hexagonal (ports & adapters). `domain/` holds the pure logic (triage, guardrails, arbiter, habit mining, backtesting, anomaly detection, watches, research), `application/` the orchestrator, learning engine and LangGraph agent workflows, `adapters/` Home Assistant, SQLite, LiteLLM, notifications and the sandbox, `api/` the FastAPI service and dashboard.
 
 ---
 

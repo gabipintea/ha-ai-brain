@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+import json
 import sqlite3
+import zlib
 from typing import Any
+
+from ha_ai_brain.adapters.sqlite_maintenance import configure_connection, ensure_incremental_vacuum, run_maintenance
 
 from ha_ai_brain.domain.models import (
     AdvisoryInsight,
@@ -30,7 +34,9 @@ class SQLiteMemoryAdapter(MemoryStorePort):
         self.db_path = db_path
         self._conn = sqlite3.connect(db_path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
+        configure_connection(self._conn)
         self._init_schema()
+        ensure_incremental_vacuum(self._conn, db_path)
 
     def _init_schema(self) -> None:
         cur = self._conn.cursor()
@@ -101,6 +107,12 @@ class SQLiteMemoryAdapter(MemoryStorePort):
                 payload_json TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS kv_store (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS ui_preferences (
                 pref_key TEXT PRIMARY KEY,
                 pref_value TEXT NOT NULL
@@ -117,6 +129,14 @@ class SQLiteMemoryAdapter(MemoryStorePort):
         except Exception:
             pass
 
+        # Migration: outcome verification needs a due time
+        try:
+            existing = {col[1] for col in cur.execute("PRAGMA table_info(expected_outcomes)").fetchall()}
+            if "due_at" not in existing:
+                cur.execute("ALTER TABLE expected_outcomes ADD COLUMN due_at TEXT")
+        except Exception:
+            pass
+
         # Create indexes only after all tables and columns are guaranteed to exist
         cur.executescript(
             """
@@ -124,6 +144,7 @@ class SQLiteMemoryAdapter(MemoryStorePort):
             CREATE INDEX IF NOT EXISTS idx_run_logs_created ON run_logs(created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_advisory_insights_created ON advisory_insights(created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_advisory_insights_status ON advisory_insights(status, created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_expected_outcomes_due ON expected_outcomes(status, due_at);
             CREATE INDEX IF NOT EXISTS idx_feedback_episodes_agent ON feedback_episodes(agent_id, created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_user_context_notes_active ON user_context_notes(active, created_at DESC);
             """
@@ -293,8 +314,9 @@ class SQLiteMemoryAdapter(MemoryStorePort):
         return [PendingApproval.model_validate_json(r["payload_json"]) for r in rows]
 
     async def resolve_pending_approval(self, approval_id: str, status: str) -> PendingApproval | None:
+        """Resolve a still-pending approval exactly once; already-resolved approvals return None (prevents double execution)."""
         row = self._conn.execute(
-            "SELECT payload_json FROM pending_approvals WHERE approval_id = ?",
+            "SELECT payload_json FROM pending_approvals WHERE approval_id = ? AND status = 'pending'",
             (approval_id,),
         ).fetchone()
         if not row:
@@ -325,12 +347,63 @@ class SQLiteMemoryAdapter(MemoryStorePort):
             count += 1
         return count
 
+    async def expire_stale_pending_approvals(self, max_age_hours: float = 24.0) -> list[str]:
+        """Mark pending approvals older than `max_age_hours` as expired; returns their ids."""
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=max_age_hours)).isoformat()
+        rows = self._conn.execute(
+            "SELECT payload_json FROM pending_approvals WHERE status = 'pending' AND created_at < ?",
+            (cutoff,),
+        ).fetchall()
+        expired_ids: list[str] = []
+        now = datetime.now(timezone.utc)
+        for r in rows:
+            pending = PendingApproval.model_validate_json(r["payload_json"])
+            pending.status = "expired"
+            pending.resolved_at = now
+            await self.save_pending_approval(pending)
+            expired_ids.append(pending.approval_id)
+        return expired_ids
+
     async def get_approval_statuses(self) -> dict[str, str]:
         """Return a mapping of approval_id -> status across recorded approvals."""
         rows = self._conn.execute(
             "SELECT approval_id, status FROM pending_approvals ORDER BY created_at DESC LIMIT 500"
         ).fetchall()
         return {r["approval_id"]: r["status"] for r in rows}
+
+    # Run logs are the largest rows: the sandbox code used to be repeated in every derived signal (about 85 % of the
+    # bytes), so it is stored once per run, and bigger payloads are compressed.
+    COMPRESS_ABOVE_BYTES = 1500
+    RUN_LOG_MAX_AGE_DAYS = 30
+    RUN_LOG_MAX_COUNT = 300
+
+    @classmethod
+    def _pack_log(cls, log: AgentRunLog) -> str | bytes:
+        data = log.model_dump(mode="json")
+        shared = ""
+        for sig in data.get("derived_signals", []):
+            code = sig.get("python_code_executed") or ""
+            if code and not shared:
+                shared = code
+            if code and code == shared:
+                sig["python_code_executed"] = ""
+        if shared:
+            data["_shared_code"] = shared
+        text = json.dumps(data, separators=(",", ":"), ensure_ascii=False)
+        if len(text) > cls.COMPRESS_ABOVE_BYTES:
+            return b"Z" + zlib.compress(text.encode("utf-8"), 6)
+        return text
+
+    @staticmethod
+    def _unpack_log(raw: str | bytes) -> AgentRunLog:
+        text = zlib.decompress(raw[1:]).decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw
+        data = json.loads(text)
+        shared = data.pop("_shared_code", "")
+        if shared:
+            for sig in data.get("derived_signals", []):
+                if not sig.get("python_code_executed"):
+                    sig["python_code_executed"] = shared
+        return AgentRunLog.model_validate(data)
 
     async def save_run_log(self, log: AgentRunLog) -> None:
         self._conn.execute(
@@ -339,21 +412,13 @@ class SQLiteMemoryAdapter(MemoryStorePort):
             (run_id, agent_id, mode, created_at, payload_json)
             VALUES (?, ?, ?, ?, ?)
             """,
-            (
-                log.run_id,
-                log.agent_id,
-                log.mode,
-                log.created_at.isoformat(),
-                log.model_dump_json(),
-            ),
+            (log.run_id, log.agent_id, log.mode, log.created_at.isoformat(), self._pack_log(log)),
         )
-        # Keep recent 300 logs in SQLite to prevent unbound storage growth
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=self.RUN_LOG_MAX_AGE_DAYS)).isoformat()
+        self._conn.execute("DELETE FROM run_logs WHERE created_at < ?", (cutoff,))
         self._conn.execute(
-            """
-            DELETE FROM run_logs WHERE run_id NOT IN (
-                SELECT run_id FROM run_logs ORDER BY created_at DESC LIMIT 300
-            )
-            """
+            "DELETE FROM run_logs WHERE run_id NOT IN (SELECT run_id FROM run_logs ORDER BY created_at DESC LIMIT ?)",
+            (self.RUN_LOG_MAX_COUNT,),
         )
         self._conn.commit()
 
@@ -362,16 +427,14 @@ class SQLiteMemoryAdapter(MemoryStorePort):
             "SELECT payload_json FROM run_logs ORDER BY created_at DESC LIMIT ? OFFSET ?",
             (limit, offset),
         ).fetchall()
-        return [AgentRunLog.model_validate_json(r["payload_json"]) for r in rows]
+        return [self._unpack_log(r["payload_json"]) for r in rows]
 
     async def get_run_log(self, run_id: str) -> AgentRunLog | None:
         row = self._conn.execute(
             "SELECT payload_json FROM run_logs WHERE run_id = ?",
             (run_id,),
         ).fetchone()
-        if not row:
-            return None
-        return AgentRunLog.model_validate_json(row["payload_json"])
+        return self._unpack_log(row["payload_json"]) if row else None
 
     async def get_run_logs_count(self) -> int:
         row = self._conn.execute("SELECT COUNT(*) FROM run_logs").fetchone()
@@ -496,20 +559,123 @@ class SQLiteMemoryAdapter(MemoryStorePort):
         return cur.rowcount > 0
 
     async def save_expected_outcome(self, outcome: ExpectedOutcome) -> None:
+        due = datetime.now(timezone.utc) + timedelta(minutes=max(1, outcome.check_after_minutes))
         self._conn.execute(
             """
             INSERT OR REPLACE INTO expected_outcomes
-            (outcome_id, action_id, status, payload_json)
-            VALUES (?, ?, ?, ?)
+            (outcome_id, action_id, status, payload_json, due_at)
+            VALUES (?, ?, ?, ?, ?)
             """,
             (
                 outcome.outcome_id,
                 outcome.action_id,
                 outcome.status,
                 outcome.model_dump_json(),
+                due.isoformat(),
             ),
         )
         self._conn.commit()
+
+    async def get_due_expected_outcomes(self, now: datetime) -> list[ExpectedOutcome]:
+        rows = self._conn.execute(
+            "SELECT payload_json FROM expected_outcomes WHERE status = 'pending' AND due_at IS NOT NULL AND due_at <= ? LIMIT 100",
+            (now.isoformat(),),
+        ).fetchall()
+        return [ExpectedOutcome.model_validate_json(r["payload_json"]) for r in rows]
+
+    async def set_expected_outcome_status(self, outcome_id: str, status: str) -> None:
+        row = self._conn.execute("SELECT payload_json FROM expected_outcomes WHERE outcome_id = ?", (outcome_id,)).fetchone()
+        if not row:
+            return
+        outcome = ExpectedOutcome.model_validate_json(row["payload_json"])
+        outcome.status = status
+        self._conn.execute(
+            "UPDATE expected_outcomes SET status = ?, payload_json = ? WHERE outcome_id = ?",
+            (status, outcome.model_dump_json(), outcome_id),
+        )
+        self._conn.commit()
+
+    async def prune_old(self, now: datetime) -> dict[str, int]:
+        """
+        Retention for tables that would otherwise grow forever. Rules, rejected actions / insights, endorsed automations,
+        notes and settings are never touched; only resolved or purely historical records age out.
+        """
+        def cut(days: int) -> str:
+            return (now - timedelta(days=days)).isoformat()
+
+        removed: dict[str, int] = {}
+
+        def run(label: str, sql: str, params: tuple[Any, ...] = ()) -> None:
+            removed[label] = self._conn.execute(sql, params).rowcount
+
+        run("approvals", "DELETE FROM pending_approvals WHERE status != 'pending' AND created_at < ?", (cut(60),))
+        run("insights", "DELETE FROM advisory_insights WHERE status IN ('dismissed', 'read') AND created_at < ?", (cut(90),))
+        run(
+            "feedback",
+            "DELETE FROM feedback_episodes WHERE created_at < ? AND polarity IN (?, ?, ?)",
+            (
+                cut(180),
+                FeedbackPolarity.OUTCOME_VERIFIED_SUCCESS.value,
+                FeedbackPolarity.OUTCOME_VERIFIED_FAILURE.value,
+                FeedbackPolarity.OVERRIDDEN_IMPLICIT.value,
+            ),
+        )
+        run("outcomes", "DELETE FROM expected_outcomes WHERE due_at IS NULL OR (status != 'pending' AND due_at < ?)", (cut(30),))
+        kv_rules = (
+            ("rcache:%", 30), ("stats:%", 90), ("tokens:%", 90), ("batchfp:%", 30), ("compcode:%", 30),
+            ("undo:%", 2), ("lifecycle:notified:%", 120), ("trust:notified:%", 120),
+        )
+        kv_removed = 0
+        for pattern, days in kv_rules:
+            kv_removed += self._conn.execute("DELETE FROM kv_store WHERE key LIKE ? AND updated_at < ?", (pattern, cut(days))).rowcount
+        # caches written by earlier versions used the "research:" prefix, which also holds the last-run markers
+        kv_removed += self._conn.execute(
+            "DELETE FROM kv_store WHERE key LIKE 'research:%' AND key NOT IN ('research:last_run', 'research:last_summary') AND updated_at < ?",
+            (cut(30),),
+        ).rowcount
+        removed["kv"] = kv_removed
+        self._conn.commit()
+        return removed
+
+    async def maintain(self) -> None:
+        run_maintenance(self._conn)
+
+    async def get_kv(self, key: str) -> str | None:
+        row = self._conn.execute("SELECT value FROM kv_store WHERE key = ?", (key,)).fetchone()
+        return str(row["value"]) if row else None
+
+    async def set_kv(self, key: str, value: str) -> None:
+        self._conn.execute(
+            "INSERT OR REPLACE INTO kv_store (key, value, updated_at) VALUES (?, ?, ?)",
+            (key, value, datetime.now(timezone.utc).isoformat()),
+        )
+        self._conn.commit()
+
+    async def delete_kv(self, key: str) -> None:
+        self._conn.execute("DELETE FROM kv_store WHERE key = ?", (key,))
+        self._conn.commit()
+
+    async def list_kv(self, prefix: str) -> dict[str, str]:
+        escaped = prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        rows = self._conn.execute(
+            "SELECT key, value FROM kv_store WHERE key LIKE ? ESCAPE '\\'", (escaped + "%",)
+        ).fetchall()
+        return {str(r["key"]): str(r["value"]) for r in rows}
+
+    async def get_feedback_counts(self, since: datetime) -> list[dict[str, Any]]:
+        rows = self._conn.execute(
+            "SELECT payload_json FROM feedback_episodes WHERE created_at >= ? ORDER BY created_at DESC LIMIT 5000",
+            (since.isoformat(),),
+        ).fetchall()
+        counts: dict[tuple[str, str, str], int] = {}
+        for r in rows:
+            ep = FeedbackEpisode.model_validate_json(r["payload_json"])
+            key = (ep.agent_id, ep.service_called, ep.polarity.value)
+            counts[key] = counts.get(key, 0) + 1
+        return [
+            {"agent_id": a, "service_called": svc, "polarity": pol, "count": n}
+            for (a, svc, pol), n in counts.items()
+        ]
 
     async def save_user_context_note(self, note: UserContextNote) -> None:
         self._conn.execute(

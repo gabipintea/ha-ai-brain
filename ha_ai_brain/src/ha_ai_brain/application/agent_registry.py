@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
+
 import yaml
 
 from ha_ai_brain.domain.models import AgentSpec
+
+logger = logging.getLogger(__name__)
 
 
 def get_builtin_agents() -> list[AgentSpec]:
@@ -126,6 +130,7 @@ def get_builtin_agents() -> list[AgentSpec]:
                 "Detect unavailable entities, inspect HA system logs, and diagnose root causes",
                 "Use available MCP tools and HA services to self-heal integrations or report actionable diagnostics",
             ],
+            batch_trigger="unavailable_only",
             enabled=True,
             is_custom=False,
         ),
@@ -135,24 +140,30 @@ def get_builtin_agents() -> list[AgentSpec]:
 class AgentRegistry:
     """Manages active built-in agents and user-defined custom agents (YAML / API)."""
 
-    def __init__(self, custom_agents_dir: str = "agents") -> None:
+    def __init__(self, custom_agents_dir: str = "agents", bundled_agents_dir: str = "") -> None:
         self.custom_agents_dir = Path(custom_agents_dir)
+        self.bundled_agents_dir = Path(bundled_agents_dir) if bundled_agents_dir else None
         self._agents: dict[str, AgentSpec] = {a.agent_id: a for a in get_builtin_agents()}
         self.load_custom_agents_from_disk()
 
     def load_custom_agents_from_disk(self) -> None:
-        """Load declarative custom agent YAML files from `custom_agents_dir`."""
-        if not self.custom_agents_dir.exists():
-            return
-        for yaml_path in sorted(self.custom_agents_dir.glob("*.yaml")):
-            try:
-                raw = yaml.safe_load(yaml_path.read_text(encoding="utf-8"))
-                if isinstance(raw, dict) and "agent_id" in raw:
-                    raw["is_custom"] = True
-                    spec = AgentSpec.model_validate(raw)
-                    self._agents[spec.agent_id] = spec
-            except Exception:
+        """Load declarative custom agent YAML files (shipped examples first, then the user's persisted agents)."""
+        directories: list[Path] = []
+        if self.bundled_agents_dir and self.bundled_agents_dir.resolve() != self.custom_agents_dir.resolve():
+            directories.append(self.bundled_agents_dir)
+        directories.append(self.custom_agents_dir)
+        for directory in directories:
+            if not directory.is_dir():
                 continue
+            for yaml_path in sorted(directory.glob("*.yaml")):
+                try:
+                    raw = yaml.safe_load(yaml_path.read_text(encoding="utf-8"))
+                    if isinstance(raw, dict) and "agent_id" in raw:
+                        raw["is_custom"] = True
+                        spec = AgentSpec.model_validate(raw)
+                        self._agents[spec.agent_id] = spec
+                except Exception as exc:
+                    logger.warning("Skipping invalid agent definition %s: %s", yaml_path, exc)
 
     def register_custom_agent(self, spec: AgentSpec, persist_to_disk: bool = True) -> AgentSpec:
         """Register a new user-defined specialized agent dynamically."""
@@ -161,7 +172,7 @@ class AgentRegistry:
         if persist_to_disk:
             self.custom_agents_dir.mkdir(parents=True, exist_ok=True)
             out_path = self.custom_agents_dir / f"{spec.agent_id}.yaml"
-            out_path.write_text(yaml.safe_dump(spec.model_dump(), sort_keys=False), encoding="utf-8")
+            out_path.write_text(yaml.safe_dump(spec.model_dump(), sort_keys=False, allow_unicode=True), encoding="utf-8")
         return spec
 
     def get_agent(self, agent_id: str) -> AgentSpec | None:

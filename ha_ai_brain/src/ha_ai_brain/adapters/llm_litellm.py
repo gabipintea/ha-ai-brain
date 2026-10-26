@@ -7,11 +7,57 @@ import logging
 import re
 from typing import Any
 
+from ha_ai_brain.domain.privacy import PrivacyScrubber
 from ha_ai_brain.adapters.quota_monitor import BaseQuotaMonitorAdapter, create_quota_monitor_for_model
 from ha_ai_brain.ports.billing import LicensePort
-from ha_ai_brain.ports.llm import LLMProviderPort, LLMQuotaAndUsageSnapshot
+from ha_ai_brain.ports.llm import REASONING_DEFAULT, REASONING_LOW, REASONING_OFF, LLMProviderPort, LLMQuotaAndUsageSnapshot, ResearchResult
 
 logger = logging.getLogger(__name__)
+
+LLM_REQUEST_TIMEOUT_SECONDS = 90.0
+
+# Gemini's native transport can bound hidden "thinking" tokens; the generic `reasoning` hint maps to a budget here.
+# Other providers keep their own defaults (their reported completion tokens already include any reasoning).
+GEMINI_THINKING_BUDGET = {REASONING_OFF: 0, REASONING_LOW: 256, REASONING_DEFAULT: 1024}
+
+
+def _output_tokens(usage_meta: dict[str, Any]) -> int:
+    """Billable output = visible answer + hidden thinking tokens (the latter used to be missing from spend and budgets)."""
+    return int(usage_meta.get("candidatesTokenCount", 0)) + int(usage_meta.get("thoughtsTokenCount", 0))
+
+
+def parse_grounded_response(data: dict[str, Any]) -> ResearchResult:
+    """Extract answer text, cited web sources and how much of the answer they back from a grounded Gemini response."""
+    candidates = data.get("candidates") or []
+    if not candidates:
+        return ResearchResult()
+    cand = candidates[0]
+    parts = (cand.get("content") or {}).get("parts") or []
+    text = "".join(str(p.get("text", "")) for p in parts if isinstance(p, dict) and not p.get("thought"))
+    meta = cand.get("groundingMetadata") or {}
+
+    citations: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for chunk in meta.get("groundingChunks") or []:
+        web = chunk.get("web") if isinstance(chunk, dict) else None
+        url = str((web or {}).get("uri") or "")
+        if url.startswith(("http://", "https://")) and url not in seen:
+            seen.add(url)
+            citations.append({"url": url, "title": str((web or {}).get("title") or "")})
+
+    covered: set[int] = set()
+    for support in meta.get("groundingSupports") or []:
+        seg = support.get("segment") or {}
+        covered.update(range(int(seg.get("startIndex", 0) or 0), int(seg.get("endIndex", 0) or 0)))
+    total = max(1, len(text.encode("utf-8")))
+    return ResearchResult(
+        grounded=bool(citations),
+        text=text,
+        parsed=LiteLLMAdapter._parse_json_safely(text),
+        citations=citations[:10],
+        coverage=min(1.0, len(covered) / total),
+        queries=[str(q) for q in (meta.get("webSearchQueries") or [])][:8],
+    )
 
 
 class LiteLLMAdapter(LLMProviderPort):
@@ -34,11 +80,14 @@ class LiteLLMAdapter(LLMProviderPort):
         license_port: LicensePort | None = None,
         fallback_models: list[str] | None = None,
         fallback_policy: str = "auto",
+        privacy_scrub: bool = True,
     ) -> None:
         import asyncio
 
+        self.privacy_scrub = privacy_scrub
         self.model = model
         self.fast_model = fast_model
+        self._fallback_models = list(fallback_models or [])
         self.api_key = api_key.strip()
         self.managed_proxy_url = managed_proxy_url
         self.license_port = license_port
@@ -70,12 +119,22 @@ class LiteLLMAdapter(LLMProviderPort):
             self.fast_model = fast_model.strip()
         if api_key is not None:
             self.api_key = api_key.strip()
-        current_policy = fallback_policy or getattr(self.quota_monitor, "_snapshot", None) and self.quota_monitor._snapshot.fallback_policy or "auto"
+        previous = self.quota_monitor._snapshot
         self.quota_monitor = create_quota_monitor_for_model(
             model=self.model,
             api_key=self.api_key,
-            fallback_policy=current_policy,
+            fallback_models=self._fallback_models,
+            fallback_policy=fallback_policy or previous.fallback_policy or "auto",
         )
+        # Reconfiguring must not reset the session usage counters shown in the dashboard.
+        for counter in (
+            "requests_succeeded_session",
+            "requests_rate_limited_session",
+            "prompt_tokens_session",
+            "completion_tokens_session",
+            "estimated_spend_usd_session",
+        ):
+            setattr(self.quota_monitor._snapshot, counter, getattr(previous, counter))
         logger.info("LiteLLMAdapter reconfigured to model=%s, fast_model=%s (has_key=%s)", self.model, self.fast_model, bool(self.api_key))
 
     def approve_fallback_model(self, model: str | None = None) -> str | None:
@@ -111,6 +170,26 @@ class LiteLLMAdapter(LLMProviderPort):
         use_fast_tier: bool = False,
         context_hint: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        """Invoke the configured LLM; personal identifiers are aliased on the way out and restored on the way back."""
+        if not self.privacy_scrub:
+            return await self._generate_json_raw(system_prompt, user_prompt, use_fast_tier, context_hint)
+        scrubber = PrivacyScrubber()
+        result = await self._generate_json_raw(
+            scrubber.scrub_text(system_prompt),
+            scrubber.scrub_prompt(user_prompt),
+            use_fast_tier,
+            context_hint,
+        )
+        restored = scrubber.restore(result)
+        return restored if isinstance(restored, dict) else {}
+
+    async def _generate_json_raw(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        use_fast_tier: bool = False,
+        context_hint: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """Invoke the configured LLM and parse its structured JSON response."""
         if not (self.api_key or self.managed_proxy_url or self.model.startswith("ollama/")):
             logger.warning(
@@ -131,6 +210,7 @@ class LiteLLMAdapter(LLMProviderPort):
                 user_prompt=user_prompt,
                 agent_id=agent_id,
                 task_name=task_name,
+                reasoning=str((context_hint or {}).get("reasoning", REASONING_DEFAULT)),
             )
 
         available_models = self.quota_monitor.select_execution_candidates(chosen_model)
@@ -167,6 +247,8 @@ class LiteLLMAdapter(LLMProviderPort):
                 ],
                 "response_format": {"type": "json_object"},
                 "temperature": 0.1,
+                "timeout": LLM_REQUEST_TIMEOUT_SECONDS,
+                "drop_params": True,
             }
             if self.api_key:
                 kwargs["api_key"] = self.api_key
@@ -232,6 +314,84 @@ class LiteLLMAdapter(LLMProviderPort):
         logger.error("LiteLLM call failed on all candidate models for %s: %s", chosen_model, last_err)
         return {}
 
+    @property
+    def is_available(self) -> bool:
+        return bool(self.api_key or self.managed_proxy_url or self.model.startswith("ollama/"))
+
+    @property
+    def supports_web_search(self) -> bool:
+        """Optional extra: Google Search grounding (Gemini) for cited, deeper research."""
+        return not self.managed_proxy_url and bool(self.api_key) and (
+            self.model.startswith(("gemini/", "vertex_ai/")) or self.api_key.startswith(("AQ.", "AIza"))
+        )
+
+    async def generate_research(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        context_hint: dict[str, Any] | None = None,
+    ) -> ResearchResult:
+        if not self.supports_web_search:
+            return ResearchResult()
+        scrubber = PrivacyScrubber() if self.privacy_scrub else None
+        system = scrubber.scrub_text(system_prompt) if scrubber else system_prompt
+        user = scrubber.scrub_prompt(user_prompt) if scrubber else user_prompt
+        agent_id = str((context_hint or {}).get("agent_id", "research"))
+        result = await self._call_gemini_grounded(self.model.split("/", 1)[-1], system, user, agent_id)
+        if scrubber and result.parsed:
+            restored = scrubber.restore(result.parsed)
+            result.parsed = restored if isinstance(restored, dict) else {}
+        return result
+
+    async def _call_gemini_grounded(self, model_id: str, system_prompt: str, user_prompt: str, agent_id: str) -> ResearchResult:
+        import asyncio
+        import httpx
+
+        # Search grounding cannot be combined with a forced JSON mime type, so JSON is requested in the prompt instead.
+        payload = {
+            "systemInstruction": {"parts": [{"text": system_prompt}]},
+            "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
+            "tools": [{"google_search": {}}],
+            "generationConfig": {"temperature": 0.2},
+        }
+        candidates = self.quota_monitor.select_execution_candidates(model_id)
+        if not candidates:
+            logger.warning("[GEMINI research] skipped: no eligible model (quota cooldown).")
+            return ResearchResult()
+        async with httpx.AsyncClient(timeout=150.0) as client:
+            for m_id in candidates:
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/{m_id}:generateContent"
+                for attempt in range(2):
+                    try:
+                        resp = await client.post(url, headers={"x-goog-api-key": self.api_key, "Content-Type": "application/json"}, json=payload)
+                    except httpx.HTTPError as exc:
+                        logger.warning("[GEMINI research %s] HTTP error: %s", m_id, exc)
+                        break
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        usage = data.get("usageMetadata", {})
+                        p_tok, c_tok = int(usage.get("promptTokenCount", 0)), _output_tokens(usage)
+                        self.quota_monitor.record_success(model=m_id, prompt_tokens=p_tok, completion_tokens=c_tok, headers=dict(resp.headers))
+                        if self.license_port:
+                            await self.license_port.record_token_usage(agent_id=agent_id, prompt_tokens=p_tok, completion_tokens=c_tok)
+                        result = parse_grounded_response(data)
+                        logger.info(
+                            "[GEMINI research %s] tokens=%d sources=%d coverage=%.0f%%",
+                            m_id, p_tok + c_tok, len(result.citations), result.coverage * 100,
+                        )
+                        return result
+                    if resp.status_code == 429:
+                        self.quota_monitor.record_quota_or_rate_limit_error(model=m_id, status_code=429, error_body=resp.text, headers=dict(resp.headers))
+                        break
+                    if resp.status_code == 503 and attempt == 0:
+                        await asyncio.sleep(3.5)
+                        continue
+                    logger.warning("[GEMINI research %s] %s: %s", m_id, resp.status_code, resp.text[:200])
+                    if resp.status_code in (401, 403, 400):
+                        return ResearchResult()
+                    break
+        return ResearchResult()
+
     async def _call_google_gemini(
         self,
         chosen_model: str,
@@ -239,6 +399,7 @@ class LiteLLMAdapter(LLMProviderPort):
         user_prompt: str,
         agent_id: str,
         task_name: str,
+        reasoning: str = REASONING_DEFAULT,
     ) -> dict[str, Any]:
         import asyncio
         import httpx
@@ -251,7 +412,7 @@ class LiteLLMAdapter(LLMProviderPort):
             "generationConfig": {
                 "temperature": 0.1,
                 "responseMimeType": "application/json",
-                "thinkingConfig": {"thinkingBudget": 1024},
+                "thinkingConfig": {"thinkingBudget": GEMINI_THINKING_BUDGET.get(reasoning, GEMINI_THINKING_BUDGET[REASONING_DEFAULT])},
             },
         }
 
@@ -277,7 +438,7 @@ class LiteLLMAdapter(LLMProviderPort):
                     )
                 return {}
 
-            async with httpx.AsyncClient(timeout=90.0) as client:
+            async with httpx.AsyncClient(timeout=LLM_REQUEST_TIMEOUT_SECONDS) as client:
                 for m_id in available_models:
                     aistudio_url = f"https://generativelanguage.googleapis.com/v1beta/models/{m_id}:generateContent"
                     resp = None
@@ -299,7 +460,7 @@ class LiteLLMAdapter(LLMProviderPort):
                             data = resp.json()
                             usage_meta = data.get("usageMetadata", {})
                             p_tok = int(usage_meta.get("promptTokenCount", 0))
-                            c_tok = int(usage_meta.get("candidatesTokenCount", 0))
+                            c_tok = _output_tokens(usage_meta)
                             self.quota_monitor.record_success(
                                 model=m_id,
                                 prompt_tokens=p_tok,
@@ -347,7 +508,7 @@ class LiteLLMAdapter(LLMProviderPort):
                         if resp.status_code == 503 and attempt == 0:
                             await asyncio.sleep(3.5)
                             continue
-                        if resp.status_code == 400 and "thinkingConfig" in resp.text and attempt == 0:
+                        if resp.status_code == 400 and "thinking" in resp.text.lower() and attempt == 0:
                             payload["generationConfig"].pop("thinkingConfig", None)
                             continue
                         break

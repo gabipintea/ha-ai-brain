@@ -21,6 +21,7 @@ class TestControlPlaneAPI(unittest.IsolatedAsyncioTestCase):
             default_autonomy=AutonomyLevel.COPILOT,
             notifications_enabled=True,
             db_path=db_file,
+            realtime_coalesce_seconds=0,  # these tests fire rapid event sequences on purpose
         )
         self.app = create_app(settings=settings)
 

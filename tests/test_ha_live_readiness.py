@@ -183,7 +183,7 @@ class TestLiveHomeAssistantReadiness(unittest.IsolatedAsyncioTestCase):
     async def test_6_live_mode_uses_unscripted_litellm_adapter(self) -> None:
         """Verify that when `use_simulator=False`, `build_orchestrator` wires pure `LiteLLMAdapter`."""
         live_settings = BrainSettings(
-            ha_url="http://192.168.1.50:8123",
+            ha_url="http://homeassistant.local:8123",
             ha_token="real_token",
             use_simulator=False,
             db_path=self.db_file,
@@ -358,6 +358,7 @@ class TestLiveHomeAssistantReadiness(unittest.IsolatedAsyncioTestCase):
         # 1. Add ignore pattern for master_bedroom_humidity
         ig = IgnoredTarget(pattern="sensor.master_bedroom_*", reason="Ignore master bedroom sensors")
         await orchestrator.memory.save_ignored_target(ig)
+        orchestrator.invalidate_context_caches()  # what the API endpoint does after every ignore-list change
         self.assertEqual(len(await orchestrator.memory.get_ignored_targets()), 1)
 
         # Emitting an event on an ignored entity must produce 0 agent runs
@@ -367,6 +368,7 @@ class TestLiveHomeAssistantReadiness(unittest.IsolatedAsyncioTestCase):
 
         # 2. Remove from ignore list -> event now triggers agent run and uses only the chosen notify service
         await orchestrator.memory.delete_ignored_target(ig.ignore_id)
+        orchestrator.invalidate_context_caches()
         ev2 = sim.emit_simulated_state_change("sensor.master_bedroom_humidity", "79.0")
         logs2 = await orchestrator.process_state_changed_event(ev2)
         self.assertGreaterEqual(len(logs2), 1)
@@ -660,9 +662,6 @@ class TestLiveHomeAssistantReadiness(unittest.IsolatedAsyncioTestCase):
         from pathlib import Path
 
         forbidden_tokens = [
-            "gabis_mac",
-            "andrada_s_iphone",
-            "gabriels_iphone",
             "lenovo_",
             "_energy_returned",
             "_perception",
@@ -671,6 +670,16 @@ class TestLiveHomeAssistantReadiness(unittest.IsolatedAsyncioTestCase):
         ]
         src_dir = Path(__file__).resolve().parent.parent / "ha_ai_brain" / "src" / "ha_ai_brain"
         self.assertTrue(src_dir.exists())
+
+        import re
+
+        # Generic leak patterns: private LAN addresses, MAC addresses, e-mail addresses, absolute home paths.
+        forbidden_patterns = {
+            "private IPv4 address": re.compile(r"\b(?:10\.\d{1,3}|192\.168|172\.(?:1[6-9]|2\d|3[01]))\.\d{1,3}\.\d{1,3}\b(?<!172\.30\.32\.2)"),  # 172.30.32.2 = documented HA Supervisor proxy
+            "MAC address": re.compile(r"\b[0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5}\b"),
+            "e-mail address": re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+"),
+            "absolute home path": re.compile(r"/(?:Users|home)/[A-Za-z0-9._-]+/"),
+        }
 
         for root, _, files in os.walk(src_dir):
             for file in files:
@@ -683,6 +692,9 @@ class TestLiveHomeAssistantReadiness(unittest.IsolatedAsyncioTestCase):
                             content,
                             f"Forbidden personal token '{token}' found in {full_p.name}",
                         )
+                    for label, pattern in forbidden_patterns.items():
+                        match = pattern.search(content)
+                        self.assertIsNone(match, f"Possible {label} '{match and match.group(0)}' hardcoded in {full_p.name}")
 
     def test_14_sqlite_migration_from_v019_without_status_column(self) -> None:
         """

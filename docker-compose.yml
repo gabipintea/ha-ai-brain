@@ -4,9 +4,14 @@ services:
     container_name: ha-ai-brain
     restart: unless-stopped
     ports:
-      - "8099:8099"
+      # The dashboard/API has no login of its own: publish it on the loopback interface only.
+      - "127.0.0.1:8099:8099"
     env_file:
       - .env
+    environment:
+      # Persist the database on the mounted volume regardless of the (relative) path used in .env.
+      BRAIN_DB_PATH: /data/ha_ai_brain.db
+      BRAIN_CUSTOM_AGENTS_DIR: /data/agents
+      BRAIN_BUNDLED_AGENTS_DIR: /app/agents
     volumes:
       - ./data:/data
-      - ./ha_ai_brain/agents:/app/agents

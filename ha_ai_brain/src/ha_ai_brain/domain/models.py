@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
-import hashlib
+import fnmatch
+import math
+import re
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 def utc_now() -> datetime:
@@ -82,9 +85,11 @@ class EntityState(BaseModel):
     @property
     def numeric_value(self) -> float | None:
         try:
-            return float(self.state)
+            value = float(self.state)
         except (ValueError, TypeError):
             return None
+        # "nan" / "inf" parse as floats but are never meaningful sensor readings.
+        return value if math.isfinite(value) else None
 
 
 class StateChangedEvent(BaseModel):
@@ -149,6 +154,39 @@ class ExpectedOutcome(BaseModel):
     status: str = "pending"
 
 
+@dataclass(frozen=True)
+class Transition:
+    """A discrete state transition recorded in the telemetry store (timestamps are timezone-aware UTC)."""
+
+    entity_id: str
+    ts: datetime
+    old_state: str
+    new_state: str
+    origin: str = "unknown"  # sensor_telemetry | human_or_physical | ha_automation | ai_brain | unknown
+    user_id: str | None = None
+
+    @property
+    def domain(self) -> str:
+        return self.entity_id.split(".", 1)[0]
+
+
+class BacktestResult(BaseModel):
+    """Deterministic replay of a proposed automation against recorded history."""
+
+    verdict: str = "unverifiable"  # supported | partial | weak | unverifiable
+    days_observed: float = 0.0
+    fires: int = 0
+    aligned: int = 0       # fires that match what the household did by hand around that time
+    redundant: int = 0     # fires where the target was already in the desired state
+    contradicted: int = 0  # fires followed by the opposite manual action
+    observed_manual: int = 0  # manual occurrences of the target behaviour in the window
+    covered_manual: int = 0   # ... that the automation would have covered
+    quality: float | None = None
+    approximate: bool = False
+    summary: str = ""
+    notes: list[str] = Field(default_factory=list)
+
+
 class NativeAutomationProposal(BaseModel):
     """A native Home Assistant automation synthesized by an agent to crystallize a pattern with 0 ongoing tokens."""
 
@@ -160,6 +198,7 @@ class NativeAutomationProposal(BaseModel):
     condition: list[dict[str, Any]] = Field(default_factory=list)
     action: list[dict[str, Any]]
     discovered_pattern_rationale: str = ""
+    source_pattern_id: str | None = None  # id of the mined statistical pattern this automation implements
 
     def extract_target_entities(self) -> list[str]:
         """Extract all physical entity IDs targeted by this automation's actions."""
@@ -232,6 +271,7 @@ class ActionIntent(BaseModel):
     native_automation: NativeAutomationProposal | None = None
     run_id: str | None = None
     approval_id: str | None = None
+    backtest: BacktestResult | None = None
     created_at: datetime = Field(default_factory=utc_now)
 
     def repeatable_signature(self) -> str:
@@ -249,29 +289,22 @@ class ActionIntent(BaseModel):
                 alias = self.native_automation.alias
             elif "alias" in self.service_data:
                 alias = str(self.service_data["alias"])
-            import re
             slug = re.sub(r"[^a-z0-9]+", "_", alias.lower()).strip("_") if alias else "native_automation"
-            controlled: list[str] = []
-            auto_actions = []
+            auto_actions: list[Any] = []
             if self.native_automation and self.native_automation.action:
                 auto_actions = self.native_automation.action
             elif isinstance(self.service_data.get("action"), list):
                 auto_actions = self.service_data["action"]
+            controlled: list[str] = []
             for act in auto_actions:
-                if isinstance(act, dict):
-                    t = act.get("target", {})
-                    if isinstance(t, dict) and "entity_id" in t:
-                        e = t["entity_id"]
-                        if isinstance(e, list):
-                            controlled.extend(str(x) for x in e)
-                        elif e:
-                            controlled.append(str(e))
-                    elif "entity_id" in act:
-                        e = act["entity_id"]
-                        if isinstance(e, list):
-                            controlled.extend(str(x) for x in e)
-                        elif e:
-                            controlled.append(str(e))
+                if not isinstance(act, dict):
+                    continue
+                tgt = act.get("target")
+                raw = tgt.get("entity_id") if isinstance(tgt, dict) and "entity_id" in tgt else act.get("entity_id")
+                if isinstance(raw, list):
+                    controlled.extend(str(x) for x in raw if x)
+                elif raw:
+                    controlled.append(str(raw))
             targets = ",".join(sorted(set(controlled))) if controlled else slug
             return f"sig:{self.agent_id}:automation.upsert_native_automation:{slug}:{targets}"
 
@@ -351,8 +384,6 @@ class IgnoredTarget(BaseModel):
     created_at: datetime = Field(default_factory=utc_now)
 
     def matches(self, entity_id: str) -> bool:
-        import fnmatch
-
         pat = self.pattern.strip().lower()
         eid = entity_id.strip().lower()
         if not pat:
@@ -378,6 +409,17 @@ class AgentSpec(BaseModel):
     custom_domain_rules_prompt: str = ""
     enabled: bool = True
     is_custom: bool = False
+    # When the scheduled analysis is worthwhile: "auto" (the home has devices this agent operates / enough to advise on),
+    # "unavailable_only" (diagnostic agents) or "always".
+    batch_trigger: str = "auto"
+
+    @field_validator("agent_id")
+    @classmethod
+    def _validate_agent_id(cls, value: str) -> str:
+        """agent_id doubles as a file name on disk, so only a safe identifier alphabet is accepted."""
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}", value):
+            raise ValueError("agent_id must be 1-64 chars of letters, digits, '_' or '-' and start with a letter/digit")
+        return value
 
 
 class AgentRunLog(BaseModel):

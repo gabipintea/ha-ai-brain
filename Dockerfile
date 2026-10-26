@@ -15,7 +15,7 @@ COPY src/ ./src/
 COPY agents/ ./agents/
 COPY run.sh /run.sh
 
-RUN pip install --no-cache-dir --break-system-packages -e . 2>/dev/null || pip install --no-cache-dir -e .
+RUN pip install --no-cache-dir --break-system-packages . || pip install --no-cache-dir .
 RUN chmod a+x /run.sh
 
 EXPOSE 8099

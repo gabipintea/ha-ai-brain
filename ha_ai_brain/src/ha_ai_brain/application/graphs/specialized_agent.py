@@ -2,12 +2,21 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import logging
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, TypedDict
 
 from ha_ai_brain.application.graphs.state_graph_engine import END, START, StateGraph
-from ha_ai_brain.application.graphs.subagents import ComputationSubAgent, ResearchSubAgent, compact_attrs
+from ha_ai_brain.application.graphs.subagents import (
+    MAX_PROMPT_ENTITIES,
+    ComputationSubAgent,
+    ResearchSubAgent,
+    compact_attrs,
+    research_digest,
+)
 from ha_ai_brain.domain.models import (
     ActionIntent,
     ActionPriority,
@@ -23,10 +32,23 @@ from ha_ai_brain.domain.models import (
     ResearchFinding,
     UserContextNote,
 )
+from ha_ai_brain.domain.automation_rules import find_equivalent_rule
+from ha_ai_brain.application.research_agenda import approved_knowledge_for
+from ha_ai_brain.domain.knowledge import KNOWLEDGE_VERSION, select_knowledge
+from ha_ai_brain.domain.promptfmt import dumps
+from ha_ai_brain.domain.series import summarize_history
 from ha_ai_brain.domain.service_resolver import normalize_automation_proposal, resolve_notification_service
-from ha_ai_brain.ports.llm import LLMProviderPort
+from ha_ai_brain.ports.llm import REASONING_DEFAULT, REASONING_LOW, LLMProviderPort
 from ha_ai_brain.ports.memory import MemoryStorePort
 from ha_ai_brain.ports.smart_home import SmartHomePort
+from ha_ai_brain.ports.telemetry import TelemetryStorePort
+
+logger = logging.getLogger(__name__)
+
+RESEARCH_CACHE_DAYS = 14
+
+# LLM-proposed actions may never claim the top priority tiers: those are reserved for human overrides and life safety.
+MAX_LLM_ACTION_PRIORITY = ActionPriority.EQUIPMENT_AND_STRUCTURAL_PROTECTION
 
 
 class AgentGraphState(TypedDict, total=False):
@@ -53,6 +75,14 @@ class AgentGraphState(TypedDict, total=False):
     available_services: dict[str, list[str]]
     available_notify_services: list[str]
     configured_notify_service: str
+    # --- learned context supplied by the orchestrator / gathered locally (no LLM tokens) ---
+    household_context: dict[str, Any]
+    mined_patterns: list[dict[str, Any]]
+    automation_rules: list[Any]
+    history_summaries: dict[str, dict[str, Any]]
+    recent_activity: list[dict[str, Any]]
+    reference_knowledge: list[dict[str, Any]]
+    patterns_handled_by_system: bool
 
 
 # Backward compatibility alias
@@ -79,7 +109,11 @@ class SpecializedAgentGraph:
         memory: MemoryStorePort,
         research_subagent: ResearchSubAgent,
         computation_subagent: ComputationSubAgent,
+        telemetry: TelemetryStorePort | None = None,
+        knowledge_dir: str = "",
     ) -> None:
+        self.telemetry = telemetry
+        self.knowledge_dir = knowledge_dir
         self.smart_home = smart_home
         self.llm = llm
         self.memory = memory
@@ -167,9 +201,29 @@ class SpecializedAgentGraph:
                 if not any(t.matches(eid) for t in ignored_targets)
             }
 
+        recent_activity: list[dict[str, Any]] = []
+        if self.telemetry is not None and state.get("mode", "realtime_stream") == "realtime_stream":
+            try:
+                recent = await self.telemetry.get_transitions(
+                    since=now - timedelta(hours=3),
+                    entity_ids=[e for e, st in corroborated.items() if st.domain not in ("sensor", "weather", "sun", "automation")][:60] or None,
+                )
+                recent_activity = [
+                    {"entity_id": t.entity_id, "from": t.old_state, "to": t.new_state, "at": t.ts.isoformat(timespec="minutes"), "by": t.origin}
+                    for t in recent[-25:]
+                ]
+            except Exception as exc:
+                logger.debug("recent activity unavailable: %s", exc)
+
         return {
             "corroborated_states": corroborated,
             "history_series": history_series,
+            "history_summaries": summarize_history(history_series),
+            "recent_activity": recent_activity,
+            "reference_knowledge": (
+                await approved_knowledge_for(self.memory, agent_spec.agent_id)
+                + select_knowledge(agent_spec, corroborated, user_dir=self.knowledge_dir)
+            )[:10],
             "past_feedback": past_feedback,
             "user_context_notes": user_notes,
             "rejected_insights": rejected_insights,
@@ -177,6 +231,10 @@ class SpecializedAgentGraph:
             "accepted_automations": accepted_automations,
             "pending_approvals": pending_approvals,
         }
+
+    @staticmethod
+    def _research_digest(findings: list[ResearchFinding]) -> list[dict[str, Any]]:
+        return research_digest(findings)
 
     @staticmethod
     def _compose_effective_site_context(state: AgentGraphState) -> str:
@@ -195,7 +253,7 @@ class SpecializedAgentGraph:
         )
 
     async def _delegate_research_node(self, state: AgentGraphState) -> dict[str, Any]:
-        """Delegate scientific & domain discovery to the Research Sub-Agent."""
+        """Delegate scientific & domain discovery to the Research Sub-Agent (with a persistent, signature-keyed cache)."""
         agent_spec = state["agent_spec"]
         mode = state.get("mode", "realtime_stream")
         cache_key = f"{agent_spec.agent_id}:{state.get('area_id') or 'global'}"
@@ -207,14 +265,50 @@ class SpecializedAgentGraph:
             if (now - cached_t).total_seconds() < 21600.0 and cached_findings:
                 return {"research_findings": cached_findings}
 
+        # Persistent cache keyed by the *kinds* of devices the agent looks at (not their ids or values): adding one more
+        # sensor of an existing kind never triggers new research. Edits to the site context / notes do.
+        observed = state.get("corroborated_states", {})
+        type_signature = sorted(
+            {(s_.domain, s_.device_class or "", s_.unit_of_measurement or "") for s_ in observed.values() if s_.domain != "automation"}
+        )
+        signature = hashlib.sha1(
+            json.dumps(
+                [KNOWLEDGE_VERSION, agent_spec.agent_id, agent_spec.specialty, agent_spec.custom_domain_rules_prompt,
+                 type_signature, self._compose_effective_site_context(state)],
+                default=str,
+            ).encode()
+        ).hexdigest()[:16]
+        kv_key = f"rcache:{agent_spec.agent_id}:{signature}"
+        ttl_seconds = RESEARCH_CACHE_DAYS * 86400
+        try:
+            cached_raw = await self.memory.get_kv(kv_key)
+            if cached_raw:
+                payload = json.loads(cached_raw)
+                saved_at = datetime.fromisoformat(payload["saved_at"])
+                if (now - saved_at).total_seconds() < ttl_seconds:
+                    findings = [ResearchFinding.model_validate(f) for f in payload["findings"]]
+                    if findings:
+                        self._cached_findings[cache_key] = (saved_at, findings)
+                        return {"research_findings": findings}
+        except Exception as exc:
+            logger.debug("research cache read failed: %s", exc)
+
         findings = await self.research_subagent.investigate(
             agent_specialty=f"{agent_spec.name}: {agent_spec.specialty}. {agent_spec.custom_domain_rules_prompt}",
             site_context=self._compose_effective_site_context(state),
-            observed_states=state.get("corroborated_states", {}),
+            observed_states=observed,
             mode=mode,
+            reference_knowledge=state.get("reference_knowledge", []),
         )
         if findings:
             self._cached_findings[cache_key] = (now, findings)
+            try:
+                await self.memory.set_kv(
+                    kv_key,
+                    json.dumps({"saved_at": now.isoformat(), "findings": [f.model_dump() for f in findings]}),
+                )
+            except Exception as exc:
+                logger.debug("research cache write failed: %s", exc)
         return {"research_findings": findings}
 
     async def _delegate_computation_node(self, state: AgentGraphState) -> dict[str, Any]:
@@ -231,6 +325,7 @@ class SpecializedAgentGraph:
                 for n in state.get("user_context_notes", [])
             ],
             cache_key=cache_key,
+            history_summaries=state.get("history_summaries", {}),
         )
         return {"derived_signals": signals}
 
@@ -283,10 +378,11 @@ class SpecializedAgentGraph:
         available_services = state.get("available_services", {})
         available_notify = state.get("available_notify_services", [])
         configured_notify = state.get("configured_notify_service", "notify.notify")
+        present_domains = {st.domain for st in corroborated.values()}
         relevant_services = {
             dom: svcs
             for dom, svcs in available_services.items()
-            if dom in agent_spec.controllable_domains or dom in ("notify", "homeassistant")
+            if (dom in agent_spec.controllable_domains and dom in present_domains) or dom in ("notify", "homeassistant")
         }
 
         llm_response = await self.llm.generate_json(
@@ -296,8 +392,8 @@ class SpecializedAgentGraph:
                 f"{agent_spec.custom_domain_rules_prompt}\n"
                 "Analyze the current sensor states, the Research Sub-Agent's scientific findings, "
                 "and the Computation Sub-Agent's derived numerical signals from an expert domain perspective. "
-                "STRICTLY OBEY all `user_context_notes` (e.g. broken device sub-features, physical constraints, or user preferences) "
-                "and never propose actions or notifications that violate them. "
+                "STRICTLY OBEY the 'CRITICAL USER-PROVIDED CONTEXT' section of `site_context` (e.g. broken device sub-features, physical constraints, or user preferences) "
+                "and never propose actions or notifications that violate it. "
                 "Also respect past human feedback (never repeat actions marked rejected_explicit or overridden_implicit). "
                 "Propose concrete Home Assistant service reactions using available actuators (e.g. `lock.lock`, "
                 "`cover.close_cover`, `climate.set_temperature`, `light.turn_on`).\n"
@@ -307,26 +403,23 @@ class SpecializedAgentGraph:
                 "The deterministic Guardrail Engine automatically intercepts device service calls in Co-Pilot mode "
                 "and sends an actionable notification with interactive 'Approve Once', 'Always Allow', and 'Reject' buttons! "
                 "Only use `notify.notify` for pure physical advisories where NO smart actuator exists (e.g., manually closing an un-motorized window).\n"
+                "If `trigger_summary` starts with 'Exception:', it reports a deviation from a learned household routine or from an existing "
+                "automation. Judge from `household` (who is home, time of day) and `recent_activity` whether it is genuinely abnormal; if it is, "
+                "propose the single most appropriate corrective device action, otherwise return an empty `actions` list. Do not duplicate what "
+                "an existing automation already does and never act on routine, expected behaviour.\n"
                 "Return JSON with key `actions` (list of objects with `domain`, `service`, `target_entity_ids`, "
                 "`service_data`, `cause_category`, `rationale`, `derived_signals_used`, `priority`, `risk_level`, "
                 "and optional `expected_outcome`)."
             ),
-            user_prompt=json.dumps(
+            # Stable parts first and volatile parts last: providers that cache prompt prefixes can then reuse the stable head.
+            user_prompt=dumps(
                 {
                     "site_context": self._compose_effective_site_context(state),
-                    "user_context_notes": [
-                        {"scope": n.scope, "content": n.content, "related_entities": n.related_entities}
-                        for n in state.get("user_context_notes", [])
-                    ],
-                    "area_id": trigger_area,
-                    "trigger_summary": trigger_summary,
-                    "sensor_states": relevant_sensors,
-                    "available_actuators": actuators,
+                    "reference_knowledge": state.get("reference_knowledge", [])[:5],
+                    "research_findings": self._research_digest(research_findings),
                     "available_ha_services": relevant_services,
                     "available_notification_services": available_notify,
                     "preferred_notification_service": configured_notify,
-                    "research_findings": [f.model_dump() for f in research_findings],
-                    "derived_signals": [d.model_dump(exclude={"python_code_executed"}) for d in derived_signals],
                     "past_feedback": [
                         {
                             "signature": fb.action_signature,
@@ -336,11 +429,19 @@ class SpecializedAgentGraph:
                         }
                         for fb in past_feedback[:5]
                     ],
+                    "household": state.get("household_context", {}),
+                    "area_id": trigger_area,
+                    "trigger_summary": trigger_summary,
+                    "recent_activity": state.get("recent_activity", []),
+                    "sensor_states": relevant_sensors,
+                    "available_actuators": actuators,
+                    "derived_signals": [d.model_dump(exclude={"python_code_executed"}) for d in derived_signals],
                 }
             ),
             use_fast_tier=True,
             context_hint={
                 "task": "synthesize_realtime_reactions",
+                "reasoning": REASONING_LOW,
                 "agent_id": agent_spec.agent_id,
                 "area_id": trigger_area,
                 "corroborated": {eid: s.model_dump(mode="json") for eid, s in corroborated.items()},
@@ -384,93 +485,72 @@ class SpecializedAgentGraph:
             if p.intent.domain == "automation" or p.intent.native_automation is not None
         ]
 
+        rules_by_id = {r.automation_id: r for r in state.get("automation_rules", []) if r.automation_id}
         existing_automations = {
             eid: {
                 "state": st.state,
                 "friendly_name": st.attributes.get("friendly_name", eid),
                 "last_triggered": st.attributes.get("last_triggered"),
+                **({"definition": rules_by_id[st.attributes["id"]].summary()} if st.attributes.get("id") in rules_by_id else {}),
             }
             for eid, st in corroborated.items()
             if st.domain == "automation"
         }
-
-        deployed_lines = []
-        for ep in accepted_automations:
-            data = ep.service_data or {}
-            alias = data.get("alias") or ep.cause_category
-            desc = data.get("description", "")
-            targets = ep.target_entity_ids or []
-            deployed_lines.append(f"- Deployed Automation: '{alias}' | Target devices: {targets}" + (f" | Details: '{desc}'" if desc else ""))
-
-        for p in pending_automations:
-            nat = p.intent.native_automation
-            alias = (nat.alias if nat else None) or (p.intent.service_data or {}).get("alias") or p.intent.cause_category
-            desc = nat.description if nat else p.intent.rationale
-            targets = p.intent.target_entity_ids or []
-            deployed_lines.append(f"- Pending Approval Automation (ID: {p.approval_id[:8]}): '{alias}' | Target devices: {targets}" + (f" | Details: '{desc}'" if desc else ""))
-
-        deployed_auto_instruction = ""
-        if deployed_lines:
-            deployed_text = "\n".join(deployed_lines)
-            deployed_auto_instruction = (
-                "\nCRITICAL RULES FOR ALREADY DEPLOYED OR PENDING AUTOMATIONS (DO NOT DUPLICATE):\n"
-                "The following automations are ALREADY DEPLOYED in Home Assistant or are CURRENTLY PENDING homeowner decision:\n"
-                f"{deployed_text}\n"
-                "You MUST NOT propose any native_automation that duplicates these automations, controls the same target devices for similar conditions, or accomplishes the same goal.\n"
-            )
-
-        rej_instruction = ""
-        if rejected_insights:
-            rej_lines = "\n".join(
-                f"- Category: {r.category} | Title: '{r.title}'"
-                + (f" | Homeowner rejection note: '{r.rejection_reason}'" if r.rejection_reason else "")
-                for r in rejected_insights
-            )
-            rej_instruction = (
-                "\nCRITICAL RULES FOR REJECTED ADVISORY INSIGHTS (DO NOT SUGGEST AGAIN):\n"
-                "The homeowner has explicitly REJECTED the following insight topics/recommendations. "
-                "You MUST NOT suggest these insights or similar recommendations again under any circumstances:\n"
-                f"{rej_lines}\n"
-            )
-
-        rej_auto_instruction = ""
-        if rejected_automations:
-            auto_lines = "\n".join(
-                f"- Alias: '{(ep.service_data or {}).get('alias') or ep.cause_category}'"
-                + (f" | Target: {ep.target_entity_ids}" if ep.target_entity_ids else "")
-                + (f" | Homeowner rejection note: '{ep.human_note}'" if ep.human_note and not ep.human_note.startswith("Rejected by user") else "")
-                for ep in rejected_automations
-            )
-            rej_auto_instruction = (
-                "\nCRITICAL RULES FOR REJECTED NATIVE AUTOMATIONS (DO NOT PROPOSE AGAIN):\n"
-                "The homeowner has explicitly REJECTED the following native automation proposals. "
-                "You MUST NOT propose these automations, similar logic, or automations controlling these devices again:\n"
-                f"{auto_lines}\n"
-            )
+        mined_patterns = state.get("mined_patterns", [])
+        pattern_policy = (
+            "Routine time-based or sequence habits are handled by the system itself - do not turn them into automations; "
+            "focus on insights, tuning and non-trivial cross-entity logic."
+            if state.get("patterns_handled_by_system", True)
+            else "You MAY turn the strongest patterns into native automations (set `pattern_id`), preferring simple, predictable triggers."
+        )
 
         available_services = state.get("available_services", {})
         available_notify = state.get("available_notify_services", [])
         configured_notify = state.get("configured_notify_service", "notify.notify")
+        present_domains = {st.domain for st in corroborated.values()}
         relevant_services = {
             dom: svcs
             for dom, svcs in available_services.items()
-            if dom in agent_spec.controllable_domains or dom in ("notify", "homeassistant")
+            if (dom in agent_spec.controllable_domains and dom in present_domains) or dom in ("notify", "homeassistant")
         }
+        histories = state.get("history_summaries", {})
+        deployed_or_pending = [
+            {
+                "alias": (ep.service_data or {}).get("alias") or ep.cause_category,
+                "targets": ep.target_entity_ids,
+                "status": "deployed",
+            }
+            for ep in accepted_automations
+        ] + [
+            {
+                "alias": (p.intent.native_automation.alias if p.intent.native_automation else (p.intent.service_data or {}).get("alias") or p.intent.cause_category),
+                "targets": p.intent.target_entity_ids,
+                "status": "pending_approval",
+            }
+            for p in pending_automations
+        ]
 
         llm_response = await self.llm.generate_json(
             system_prompt=(
                 f"You are the {agent_spec.name} ({agent_spec.specialty}) running in Periodic Deep Batch Analysis Mode. "
-                f"You are analyzing historical entity trajectories over the past {state.get('lookback_hours', 24)} hours. "
-                "Examine the historical entity trajectories, the Research Sub-Agent's findings, the Computation "
+                "You are analyzing the historical entity trajectories over the past `lookback_hours` hours. "
+                "Examine the entity trajectories (`entities[*].stats`), the Research Sub-Agent's findings, the Computation "
                 "Sub-Agent's derived signals, and the `existing_automations` already configured in Home Assistant.\n"
-                f"{rej_instruction}"
-                f"{rej_auto_instruction}"
-                f"{deployed_auto_instruction}"
+                "CRITICAL RULES FOR WHAT THE HOMEOWNER ALREADY DECIDED:\n"
+                "- `rejected_insights` and `rejected_automations` were explicitly REJECTED: never suggest those topics, similar logic, or automations controlling those devices again.\n"
+                "- `deployed_or_pending_automations` are already deployed or awaiting a decision: never propose a duplicate, nor one that controls the same devices for similar conditions or accomplishes the same goal.\n"
                 "CRITICAL RULES FOR EXISTING AUTOMATIONS & USER CONTEXT NOTES:\n"
-                "- Strictly obey `user_context_notes` (e.g., mechanically broken features, devices used only in specific modes, or user directives). Never suggest actions or insights that contradict `user_context_notes`.\n"
+                "- Strictly obey the 'CRITICAL USER-PROVIDED CONTEXT' section of `site_context` (e.g., mechanically broken features, devices used only in specific modes, or user directives). Never suggest actions or insights that contradict it.\n"
                 "- Do NOT mistake repetitive device state changes driven by `existing_automations` for un-automated manual human habits.\n"
                 "- Do NOT propose a `native_automation` that duplicates an automation already listed in `existing_automations` or `deployed_or_pending_automations`.\n"
                 "- If an existing automation can be improved based on physical telemetry, emit an `advisory_insight` explaining how.\n"
+                "- `existing_automations[*].definition` shows the real triggers/actions of each automation; never propose something an existing automation already does.\n"
+                "CRITICAL RULES FOR LEARNED PATTERNS & EVIDENCE:\n"
+                "- `mined_patterns` are statistically verified recurring behaviours from the household's own history (with support and confidence) that are NOT yet automated. "
+                f"{pattern_policy}\n"
+                "- Ground every recommendation in `entities[*].stats`, `derived_signals`, `household` and `reference_knowledge` (cite the reference id in `finding_details`). "
+                "Do not invent sources, standards or URLs; do not claim patterns that are not in the data.\n"
+                "- Use `household.weather.forecast_next_hours`, `household.energy_prices` and `household.solar_forecast` when proposing load-shifting or pre-conditioning.\n"
                 "CRITICAL RULES FOR NATIVE AUTOMATIONS (Triggers, Conditions & Actions):\n"
                 "- ONLY use entity IDs that exist in the provided `entities` dictionary. Never hallucinate or assume non-existent entities.\n"
                 "- ONLY use valid Home Assistant services that exist in the provided `available_ha_services`.\n"
@@ -481,16 +561,18 @@ class SpecializedAgentGraph:
                 "1) `advisory_insights`: list of objects (`category`, `title` (concise 4-8 words), `finding_details` (deep technical analysis with sensor readings and psychrometric context), `evidence_metrics`, "
                 "`recommended_human_action` (direct actionable step for homeowner), `estimated_impact`).\n"
                 "2) `native_automations`: list of new, non-duplicate Home Assistant automation objects (`alias`, `description`, "
-                "`trigger`, `condition`, `action`, `cause_category`, `discovered_pattern_rationale`).\n"
+                "`trigger`, `condition`, `action`, `cause_category`, `discovered_pattern_rationale`, optional `pattern_id` when implementing a listed pattern).\n"
                 "3) `actions`: optional list of immediate parameter adjustments."
             ),
-            user_prompt=json.dumps(
+            # Stable / slowly changing parts first, volatile parts last (prefix caching); each entity carries its own stats.
+            user_prompt=dumps(
                 {
                     "site_context": self._compose_effective_site_context(state),
-                    "user_context_notes": [
-                        {"scope": n.scope, "content": n.content, "related_entities": n.related_entities}
-                        for n in state.get("user_context_notes", [])
-                    ],
+                    "reference_knowledge": state.get("reference_knowledge", []),
+                    "research_findings": self._research_digest(research_findings),
+                    "available_ha_services": relevant_services,
+                    "available_notification_services": available_notify,
+                    "preferred_notification_service": configured_notify,
                     "rejected_insights": [
                         {"category": r.category, "title": r.title, "reason": r.rejection_reason}
                         for r in rejected_insights
@@ -499,41 +581,35 @@ class SpecializedAgentGraph:
                         {
                             "alias": (ep.service_data or {}).get("alias") or ep.cause_category,
                             "targets": ep.target_entity_ids,
-                            "note": ep.human_note,
+                            "note": ep.human_note if not ep.human_note.startswith("Rejected by user") else "",
                         }
                         for ep in rejected_automations
                     ],
-                    "deployed_or_pending_automations": [
-                        {
-                            "alias": (ep.service_data or {}).get("alias") or ep.cause_category,
-                            "targets": ep.target_entity_ids,
-                            "status": "deployed",
-                        }
-                        for ep in accepted_automations
-                    ] + [
-                        {
-                            "alias": (p.intent.native_automation.alias if p.intent.native_automation else (p.intent.service_data or {}).get("alias") or p.intent.cause_category),
-                            "targets": p.intent.target_entity_ids,
-                            "status": "pending_approval",
-                        }
-                        for p in pending_automations
-                    ],
+                    "deployed_or_pending_automations": deployed_or_pending,
                     "existing_automations": existing_automations,
-                    "available_ha_services": relevant_services,
-                    "available_notification_services": available_notify,
-                    "preferred_notification_service": configured_notify,
+                    "lookback_hours": state.get("lookback_hours", 24),
+                    "household": state.get("household_context", {}),
+                    "mined_patterns": mined_patterns[:12],
                     "derived_signals": [d.model_dump(exclude={"python_code_executed"}) for d in derived_signals],
-                    "research_findings": [f.model_dump() for f in research_findings],
                     "entities": {
-                        eid: {"state": s.state, "unit": s.unit_of_measurement, "area": s.area_id, "domain": s.domain, "attrs": compact_attrs(s.attributes)}
-                        for eid, s in corroborated.items()
-                        if s.domain != "automation" and "_real_feel_" not in eid
+                        eid: {
+                            "state": s.state,
+                            "unit": s.unit_of_measurement,
+                            "area": s.area_id,
+                            "domain": s.domain,
+                            "attrs": compact_attrs(s.attributes),
+                            "stats": histories.get(eid),
+                        }
+                        for eid, s in list(
+                            (e, st) for e, st in corroborated.items() if st.domain != "automation" and "_real_feel_" not in e
+                        )[:MAX_PROMPT_ENTITIES]
                     },
                 }
             ),
             use_fast_tier=False,
             context_hint={
                 "task": "synthesize_batch_analysis",
+                "reasoning": REASONING_DEFAULT,
                 "agent_id": agent_spec.agent_id,
                 "corroborated": {eid: s.model_dump(mode="json") for eid, s in corroborated.items()},
                 "existing_automations": existing_automations,
@@ -558,8 +634,6 @@ class SpecializedAgentGraph:
                 "rejected_automations": [ep.model_dump(mode="json") for ep in rejected_automations],
             },
         )
-
-        import re
 
         def _is_rejected_insight(cand_title: str, cand_category: str) -> bool:
             ct = cand_title.lower().strip()
@@ -694,6 +768,15 @@ class SpecializedAgentGraph:
                 cand_targets = proposal.extract_target_entities()
                 if _is_duplicate_automation(cand_alias, cand_targets):
                     continue
+                equivalent = find_equivalent_rule(
+                    state.get("automation_rules", []),
+                    {"alias": proposal.alias, "trigger": proposal.trigger, "condition": proposal.condition, "action": proposal.action},
+                )
+                if equivalent:
+                    logger.info("Dropping proposal '%s': existing automation '%s' already does this.", cand_alias, equivalent)
+                    continue
+                if auto.get("pattern_id"):
+                    proposal.source_pattern_id = str(auto["pattern_id"])
                 all_targets = [f"automation.{proposal.automation_id}"] + cand_targets
                 intents.append(
                     ActionIntent(
@@ -740,6 +823,8 @@ class SpecializedAgentGraph:
 
             priority_str = str(item.get("priority", "COMFORT_ENHANCEMENT")).upper()
             priority = ActionPriority.__members__.get(priority_str, ActionPriority.COMFORT_ENHANCEMENT)
+            if priority > MAX_LLM_ACTION_PRIORITY:
+                priority = MAX_LLM_ACTION_PRIORITY
 
             risk_str = str(item.get("risk_level", "low")).lower()
             try:
@@ -784,14 +869,18 @@ class SpecializedAgentGraph:
 
             exp_raw = item.get("expected_outcome")
             if isinstance(exp_raw, dict) and "monitored_entity_id" in exp_raw:
-                intent.expected_outcome = ExpectedOutcome(
-                    action_id=intent.intent_id,
-                    agent_id=agent_id,
-                    monitored_entity_id=str(exp_raw["monitored_entity_id"]),
-                    baseline_value=exp_raw.get("baseline_value", ""),
-                    expected_direction_or_target=str(exp_raw.get("expected_direction_or_target", "")),
-                    check_after_minutes=int(exp_raw.get("check_after_minutes", 30)),
-                )
+                try:
+                    intent.expected_outcome = ExpectedOutcome(
+                        action_id=intent.intent_id,
+                        agent_id=agent_id,
+                        monitored_entity_id=str(exp_raw["monitored_entity_id"]),
+                        baseline_value=exp_raw.get("baseline_value", ""),
+                        expected_direction_or_target=str(exp_raw.get("expected_direction_or_target", "")),
+                        check_after_minutes=max(1, int(exp_raw.get("check_after_minutes", 30))),
+                    )
+                except (TypeError, ValueError) as exc:
+                    # A malformed optional field must not discard the whole proposed action.
+                    logger.debug("Ignoring malformed expected_outcome %r: %s", exp_raw, exc)
 
             intents.append(intent)
         return intents

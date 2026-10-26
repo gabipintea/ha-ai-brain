@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import OrderedDict
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -78,11 +79,14 @@ class EdgeSignalTriage:
         "carbon_dioxide": 50.0,
     }
 
+    MAX_TRACKED_CONTEXT_IDS = 5000
+
     ACTUATOR_DOMAINS = {"light", "switch", "climate", "cover", "fan", "humidifier", "lock", "valve", "water_heater"}
 
     def __init__(self, manual_override_cooldown_seconds: int = 900) -> None:
         self.manual_override_cooldown_seconds = manual_override_cooldown_seconds
-        self._ai_context_ids: set[str] = set()
+        # Bounded (insertion-ordered) so long-running instances do not leak one entry per AI action.
+        self._ai_context_ids: OrderedDict[str, None] = OrderedDict()
         # context_id -> automation_entity_id (e.g. "automation.morning_heating")
         self._automation_context_map: dict[str, str] = {}
         # entity_id -> {timestamp, agent_id, cause_category, signature, expected_state, service_called}
@@ -107,7 +111,9 @@ class EdgeSignalTriage:
         service_data: dict[str, Any],
     ) -> None:
         """Record an outgoing AI action to recognize self-caused events and detect subsequent human overrides."""
-        self._ai_context_ids.add(context_id)
+        self._ai_context_ids[context_id] = None
+        while len(self._ai_context_ids) > self.MAX_TRACKED_CONTEXT_IDS:
+            self._ai_context_ids.popitem(last=False)
         now = datetime.now(timezone.utc)
         for entity_id in entity_ids:
             self._recent_ai_actions[entity_id] = {
@@ -157,6 +163,20 @@ class EdgeSignalTriage:
 
         event.origin = EventOrigin.HUMAN_OR_PHYSICAL
         return EventOrigin.HUMAN_OR_PHYSICAL
+
+    def mark_manual_override(self, entity_id: str) -> None:
+        """Start the manual-override cooldown for an entity (used when the human undoes an AI action)."""
+        self._manual_override_until[entity_id] = datetime.now(timezone.utc) + timedelta(seconds=self.manual_override_cooldown_seconds)
+
+    def build_context(
+        self,
+        trigger_state: EntityState,
+        all_states: dict[str, EntityState],
+        agent: AgentSpec,
+        ignored_targets: list[IgnoredTarget] | None = None,
+    ) -> dict[str, EntityState]:
+        """Public wrapper: sibling / outdoor / automation states relevant to a trigger entity."""
+        return self._corroborate_context(trigger_state, all_states, agent, ignored_targets=ignored_targets)
 
     def is_entity_in_manual_override(self, entity_id: str) -> bool:
         """Check whether an entity is currently locked out because a human manually overrode the AI."""
@@ -301,7 +321,7 @@ class EdgeSignalTriage:
 
                 # Dwell / Debounce guard for high-frequency noisy telemetry (illuminance, power):
                 # if this sensor triggered an agent < 10m ago, require >= 2x deadband
-                if dev_class in ("illuminance", "power") or any(k in event.entity_id for k in ("illuminance", "power", "_lux", "_w")):
+                if dev_class in ("illuminance", "power") or any(k in event.entity_id for k in ("illuminance", "power", "_lux")) or event.entity_id.endswith("_w"):
                     if now is not None and last_t is not None:
                         elapsed = (now - last_t).total_seconds()
                         if elapsed < 600.0 and delta < (effective_deadband * 2.0):

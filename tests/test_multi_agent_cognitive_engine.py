@@ -24,6 +24,7 @@ class TestMultiAgentCognitiveEngine(unittest.IsolatedAsyncioTestCase):
             notifications_enabled=True,
             db_path=db_file,
             custom_agents_dir="agents",
+            realtime_coalesce_seconds=0,  # these tests fire rapid event sequences on purpose
         )
         self.orchestrator = build_orchestrator(self.settings)
         assert isinstance(self.orchestrator.smart_home, SmartHomeSimulatorAdapter)

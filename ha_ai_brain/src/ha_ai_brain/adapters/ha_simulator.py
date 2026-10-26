@@ -17,6 +17,8 @@ class SmartHomeSimulatorAdapter(SmartHomePort):
     illuminance, UFH thermostats, HRV ventilation, dehumidifiers, and motorized windows/blinds.
     """
 
+    supports_history_backfill = False  # the simulator's history is synthetic and must not pollute the learning store
+
     def __init__(self) -> None:
         self._states: dict[str, EntityState] = self._build_initial_states()
         self._event_queue: asyncio.Queue[StateChangedEvent] = asyncio.Queue()
@@ -348,12 +350,24 @@ class SmartHomeSimulatorAdapter(SmartHomePort):
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "level": "WARNING",
                 "source": "components/esphome",
-                "message": "Device 'bedroom_air_monitor' (192.168.1.142) connection timed out; DHCP lease may have changed.",
+                "message": "Device 'bedroom_air_monitor' (192.0.2.42) connection timed out; DHCP lease may have changed.",
             }
         ][:limit]
 
     async def get_addon_panel_path(self) -> str:
         return "/ha_ai_brain"
+
+    async def get_automation_configs(self) -> list[dict[str, Any]]:
+        return [
+            {
+                "id": p.automation_id,
+                "alias": f"[AI Brain] {p.alias}",
+                "trigger": p.trigger,
+                "condition": p.condition,
+                "action": p.action,
+            }
+            for p in self._created_automations.values()
+        ]
 
     async def get_available_services(self) -> dict[str, list[str]]:
         return {

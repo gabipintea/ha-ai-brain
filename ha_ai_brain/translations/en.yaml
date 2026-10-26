@@ -29,3 +29,45 @@ configuration:
   batch_lookback_hours:
     name: "Batch History Lookback Window (Hours)"
     description: "Number of past hours of historical telemetry analyzed by agents during batch audits (e.g. 24 = 1 day, 72 = 3 days, 168 = 1 week)."
+  managed_cloud_proxy_url:
+    name: "Managed AI Proxy URL"
+    description: "Optional managed AI proxy endpoint. Leave empty to call your configured provider directly with your own API key."
+  license_key:
+    name: "License Key"
+    description: "Optional commercial license key. Leave empty to run in evaluation mode."
+  realtime_gating:
+    name: "Smart AI Wake-ups"
+    description: "Once routines are learned, only call the AI for genuinely unusual events instead of every change (saves tokens)."
+  exception_detection:
+    name: "Detect Unusual Situations"
+    description: "Alert when something deviates from your learned routines or from what an automation promised (for example a door left unlocked while everyone is away)."
+  deterministic_automations:
+    name: "Automations From Habits"
+    description: "Propose native automations for strong recurring habits straight from statistics, without spending AI tokens."
+  privacy_scrub:
+    name: "Hide Personal Identifiers From Cloud AI"
+    description: "Replace people, phone and network identifiers with aliases before data is sent to a cloud AI provider."
+  daily_token_budget:
+    name: "Daily AI Token Budget"
+    description: "Maximum AI tokens per day (0 = unlimited). Real-time runs and scheduled batches pause when the budget is reached."
+  quiet_hours_start:
+    name: "Quiet Hours Start"
+    description: "HH:MM local time. Low-priority push notifications are held until quiet hours end; urgent security alerts still come through."
+  quiet_hours_end:
+    name: "Quiet Hours End"
+    description: "HH:MM local time."
+  timezone:
+    name: "Timezone Override"
+    description: "IANA timezone (for example Europe/Berlin). Leave empty to use your Home Assistant timezone."
+  research_enabled:
+    name: "Agent Research"
+    description: "Each agent periodically thinks like an expert in its field and proposes practical knowledge about your setup. Works with any AI provider; nothing is used until you approve it."
+  research_web_search:
+    name: "Deep Research With Web Search (Optional)"
+    description: "Google Gemini only. Adds web search with cited sources to the research. More informed, but uses noticeably more tokens. Off by default."
+  research_interval_days:
+    name: "Research Interval (Days)"
+    description: "Days between research runs. The first run happens one day after start."
+  log_level:
+    name: "Log Level"
+    description: "info (default), warning (quietest) or debug (logs every single state change - only for troubleshooting)."

@@ -1,5 +1,7 @@
 """Self-contained Home Assistant Ingress Web UI Dashboard for HA AI Brain."""
 
+from __future__ import annotations
+
 DASHBOARD_HTML = """<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -288,6 +290,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         <span class="pill" id="modeBadge">Loading...</span>
         <span class="pill ok" id="llmBadge"><span class="dot"></span><span id="llmBadgeText">AI ready</span></span>
         <button onclick="triggerBatch()" id="batchBtn">Run analysis now</button>
+        <button class="icon" onclick="togglePause()" id="pauseBtn" title="Kill switch: keep learning but never act or call the AI in real time">Pause brain</button>
       </div>
       <div id="nextBatchHeader" class="muted" style="font-size:11px; white-space:nowrap; display:none;"></div>
     </div>
@@ -306,6 +309,13 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     <button class="tab-btn" role="tab" id="tabBtn-memory" onclick="switchTab('memory')">
       Memory & Rules
     </button>
+    <button class="tab-btn" role="tab" id="tabBtn-learned" onclick="switchTab('learned')">
+      Learned
+    </button>
+    <button class="tab-btn" role="tab" id="tabBtn-research" onclick="switchTab('research')">
+      Research
+      <span class="tab-badge" id="tabBadge-research" style="display:none;">0</span>
+    </button>
     <button class="tab-btn" role="tab" id="tabBtn-settings" onclick="switchTab('settings')">
       Settings
     </button>
@@ -320,6 +330,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   </div>
 
   <div id="quotaBanner" class="banner"></div>
+  <div id="pausedBanner" class="banner">
+    <strong class="t">Brain paused</strong>
+    <div class="muted">It keeps learning from events but will not act on devices or call the AI in real time. Manual approvals still work.</div>
+  </div>
 
   <!-- TAB 1: Approvals -->
   <div id="pane-approvals" class="tab-pane active">
@@ -409,6 +423,20 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
     <div class="grid" style="margin-top:16px;">
       <div class="card">
+        <div class="card-head"><h2>Watches</h2><span class="pill" id="watchCount">0</span></div>
+        <div class="hint">Describe in your own words what you want to be told about. The AI interprets it once; from then on it is checked every minute without using any AI tokens.</div>
+        <textarea id="watchText" rows="2" maxlength="1000" style="width:100%; box-sizing:border-box; margin-top:8px; background:var(--bg); color:var(--text); border:1px solid var(--border); border-radius:6px; padding:8px 10px; font-family:inherit; font-size:13px;" placeholder="What should trigger an alert, for how long, and when does it apply?"></textarea>
+        <div class="btn-row" style="align-items:center;">
+          <button class="primary" id="watchCompileBtn" onclick="compileWatch()">Interpret</button>
+          <span id="watchMsg" class="muted"></span>
+        </div>
+        <div id="watchDraft"></div>
+        <div id="watchList" class="scroll" style="margin-top:12px;"></div>
+      </div>
+    </div>
+
+    <div class="grid" style="margin-top:16px;">
+      <div class="card">
         <div class="card-head">
           <h2>Context for the Brain</h2>
           <span class="pill info" id="contextNotesCountBadge" style="display:none;">0</span>
@@ -438,6 +466,92 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           <button class="primary" onclick="addIgnoredTarget()">Add to ignore list</button>
         </div>
         <div id="ignoredTargetsList" class="scroll" style="margin-top:14px;"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- TAB: Learned -->
+  <div id="pane-learned" class="tab-pane">
+    <div class="grid two">
+      <div class="card">
+        <div class="card-head"><h2>Learning progress</h2><span class="pill" id="learnedStatePill">-</span></div>
+        <div style="height:8px; background:rgba(255,255,255,0.08); border-radius:6px; overflow:hidden; margin:8px 0 12px;">
+          <div id="learnedBar" style="height:100%; width:0%; background:var(--accent);"></div>
+        </div>
+        <div id="learnedKv" class="kv"></div>
+      </div>
+      <div class="card">
+        <div class="card-head"><h2>Last 7 days</h2></div>
+        <div class="hint">What local learning did for you without spending AI tokens.</div>
+        <div id="learnedStats" class="kv" style="margin-top:8px;"></div>
+      </div>
+    </div>
+    <div class="grid" style="margin-top:16px;">
+      <div class="card">
+        <div class="card-head"><h2>Recent autonomous actions</h2></div>
+        <div class="hint">Anything the brain did on its own in the last 24 hours can be reverted here.</div>
+        <div id="undoList" class="scroll" style="margin-top:8px;"></div>
+      </div>
+    </div>
+    <div class="grid" style="margin-top:16px;">
+      <div class="card">
+        <div class="card-head"><h2>Habits found in your history</h2><span class="pill" id="patternsCount">0</span></div>
+        <div class="hint">Recurring behaviour measured from your own usage. Strong habits that no automation covers yet are proposed as native automations (see Approvals).</div>
+        <div id="patternsList" class="scroll" style="margin-top:8px;"></div>
+      </div>
+    </div>
+    <div class="grid" style="margin-top:16px;">
+      <div class="card">
+        <div class="card-head"><h2>Muted alerts</h2></div>
+        <div class="hint">Unusual-situation alerts you rejected. Dismissing an alert makes the brain wait longer before repeating it; rejecting mutes it until you unmute it here.</div>
+        <div id="mutedList" style="margin-top:8px;"></div>
+      </div>
+    </div>
+    <div class="grid" style="margin-top:16px;">
+      <div class="card">
+        <div class="card-head"><h2>Deployed automation health</h2></div>
+        <div class="hint">Checked daily: do the automations the brain created run, and do you keep reverting them?</div>
+        <div id="reviewsList" class="scroll" style="margin-top:8px;"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- TAB: Research -->
+  <div id="pane-research" class="tab-pane">
+    <div class="grid">
+      <div class="card">
+        <div class="card-head"><h2>Research agenda</h2><span class="pill" id="researchStatePill">-</span></div>
+        <div class="hint">Each specialised agent thinks like an expert in its field and proposes practical knowledge about your equipment and setup. Works with any AI provider. Nothing influences the agents until you approve it.</div>
+        <div id="researchKv" class="kv" style="margin-top:8px;"></div>
+        <div id="researchNote" class="muted" style="font-size:0.82rem; margin-top:8px;"></div>
+        <div class="btn-row" style="align-items:center; margin-top:10px;">
+          <label class="check"><input type="checkbox" id="researchCheck" onchange="setRuntime('research_enabled', this.checked)" /> Research automatically</label>
+          <label class="field" style="flex-direction:row; align-items:center; gap:6px;">every
+            <input type="number" min="1" max="90" id="researchIntervalInput" style="width:70px;" onchange="setRuntime('research_interval_days', parseInt(this.value || '7', 10))" /> days
+          </label>
+          <button class="primary" id="researchRunBtn" onclick="runResearchNow()">Research now</button>
+        </div>
+        <label class="check" style="margin-top:8px;"><input type="checkbox" id="researchWebCheck" onchange="setRuntime('research_web_search', this.checked)" /> Optional deep research with web search and cited sources (Google Gemini only, uses noticeably more tokens)</label>
+      </div>
+    </div>
+    <div class="grid" style="margin-top:16px;">
+      <div class="card">
+        <div class="card-head"><h2>Waiting for your review</h2><span class="pill warn" id="researchProposedCount">0</span></div>
+        <div class="hint">Keep what looks useful and reject the rest. Rejected topics are never researched again. Items based on general AI knowledge are not checked against sources; judge them like advice from a knowledgeable friend.</div>
+        <div id="researchProposed" style="margin-top:8px;"></div>
+      </div>
+    </div>
+    <div class="grid" style="margin-top:16px;">
+      <div class="card">
+        <div class="card-head"><h2>Approved knowledge</h2><span class="pill ok" id="researchApprovedCount">0</span></div>
+        <div class="hint">Used by the matching agent in its reasoning.</div>
+        <div id="researchApproved" style="margin-top:8px;"></div>
+      </div>
+    </div>
+    <div class="grid" style="margin-top:16px;">
+      <div class="card">
+        <div class="card-head"><h2>Upcoming topics</h2></div>
+        <div id="researchBacklog" style="margin-top:8px;"></div>
       </div>
     </div>
   </div>
@@ -531,6 +645,57 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           <div style="margin-top:8px;">
             <button class="primary" id="saveAiBtn" onclick="saveAiConfig()">Save & Apply AI Settings</button>
             <span id="saveAiMsg" class="muted" style="margin-left:12px;"></span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="grid">
+      <div class="card">
+        <div class="card-head"><h2>Learning &amp; Safety</h2></div>
+        <div class="hint">Local learning runs without AI tokens. Safety limits apply to everything the brain does on its own.</div>
+        <div class="fields" style="margin-top:12px;">
+          <label class="check"><input type="checkbox" id="gatingCheck" onchange="setRuntime('realtime_gating', this.checked)" /> Only wake the AI for unusual events once routines are learned</label>
+          <label class="check"><input type="checkbox" id="exceptionCheck" onchange="setRuntime('exception_detection', this.checked)" /> Detect unusual situations (unlocked while away, broken routine, automation did not run)</label>
+          <label class="check"><input type="checkbox" id="habitCheck" onchange="setRuntime('deterministic_automations', this.checked)" /> Propose automations for strong habits straight from statistics (no AI tokens)</label>
+          <label class="check"><input type="checkbox" id="announceCheck" onchange="setRuntime('notify_autonomous_actions', this.checked)" /> Tell me, with an Undo button, when the brain acts on its own</label>
+          <label class="check"><input type="checkbox" id="privacyCheck" onchange="setRuntime('privacy_scrub', this.checked)" /> Hide people, phones and network identifiers from cloud AI providers</label>
+          <div class="grid two" style="gap:12px; margin:0;">
+            <label class="field">Daily AI token budget (0 = unlimited)
+              <input type="number" min="0" step="1000" id="tokenBudgetInput" onchange="setRuntime('daily_token_budget', parseInt(this.value || '0', 10))" />
+            </label>
+            <label class="field">Max autonomous actions per hour
+              <input type="number" min="1" max="1000" id="maxActionsInput" onchange="setRuntime('max_actions_per_hour', parseInt(this.value || '30', 10))" />
+            </label>
+          </div>
+          <div class="grid two" style="gap:12px; margin:0;">
+            <label class="field">Merge events in the same area for (seconds, 0 = off)
+              <input type="number" min="0" max="3600" id="coalesceInput" onchange="setRuntime('realtime_coalesce_seconds', parseInt(this.value || '0', 10))" />
+            </label>
+            <label class="field">Max real-time AI wake-ups per agent per hour (0 = unlimited)
+              <input type="number" min="0" max="1000" id="wakeCapInput" onchange="setRuntime('max_agent_wakeups_per_hour', parseInt(this.value || '0', 10))" />
+            </label>
+          </div>
+          <div class="grid two" style="gap:12px; margin:0;">
+            <label class="field">Quiet hours start (low-priority pushes are held)
+              <input type="time" id="quietStartInput" onchange="saveQuietHours()" />
+            </label>
+            <label class="field">Quiet hours end
+              <input type="time" id="quietEndInput" onchange="saveQuietHours()" />
+            </label>
+          </div>
+          <div class="field">Autonomy per device type
+            <div class="hint" style="margin:4px 0 6px;">Override the global autonomy for one domain, for example lights autonomous while locks stay co-pilot. Critical security actions always need approval.</div>
+            <div style="display:flex; gap:8px; flex-wrap:wrap;">
+              <input type="text" id="domainAutoName" placeholder="domain, e.g. light" style="flex:1 1 140px;" />
+              <select id="domainAutoLevel">
+                <option value="shadow">Shadow</option>
+                <option value="copilot">Co-pilot</option>
+                <option value="autonomous">Autonomous</option>
+              </select>
+              <button class="primary" onclick="addDomainAutonomy()">Set</button>
+            </div>
+            <div id="domainAutonomyList" style="margin-top:8px;"></div>
           </div>
         </div>
       </div>
@@ -685,7 +850,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   function handleHashNav() {
     const rawHash = getActiveHash();
     if (!rawHash) return;
-    if (['approvals', 'activity', 'memory', 'settings'].includes(rawHash)) {
+    if (['approvals', 'activity', 'memory', 'learned', 'research', 'settings'].includes(rawHash)) {
       switchTab(rawHash);
       return;
     }
@@ -699,7 +864,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   }
 
   function switchTab(tabName) {
-    const tabs = ['approvals', 'activity', 'memory', 'settings'];
+    const tabs = ['approvals', 'activity', 'memory', 'learned', 'research', 'settings'];
     if (!tabs.includes(tabName)) tabName = 'approvals';
     tabs.forEach(t => {
       const btn = $('tabBtn-' + t);
@@ -707,9 +872,12 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       if (btn) btn.classList.toggle('active', t === tabName);
       if (pane) pane.classList.toggle('active', t === tabName);
     });
+    if (tabName === 'learned') refreshLearned();
+    if (tabName === 'memory') refreshWatches();
+    if (tabName === 'research') refreshResearch();
     if (window.history && window.history.replaceState) {
       const curHash = getActiveHash();
-      if (['approvals', 'activity', 'memory', 'settings'].includes(curHash)) {
+      if (['approvals', 'activity', 'memory', 'learned', 'research', 'settings'].includes(curHash)) {
         window.history.replaceState(null, null, '#' + tabName);
         try {
           if (window.parent && window.parent !== window && window.parent.history && window.parent.history.replaceState) {
@@ -722,7 +890,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
   function initTabs() {
     const hash = getActiveHash();
-    if (['approvals', 'activity', 'memory', 'settings'].includes(hash)) {
+    if (['approvals', 'activity', 'memory', 'learned', 'research', 'settings'].includes(hash)) {
       switchTab(hash);
     } else if (hash) {
       handleHashNav();
@@ -854,6 +1022,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           </div>
         </div>
         <div class="muted" style="margin:8px 0; white-space:pre-wrap; line-height:1.45;">${esc(p.intent.rationale || auto.description || '')}</div>
+        ${renderBacktest(p.intent.backtest)}
         <details style="margin:8px 0 12px; background:rgba(0,0,0,0.3); border:1px solid var(--border); border-radius:8px; padding:8px 12px;">
           <summary style="cursor:pointer; font-size:0.82rem; font-weight:600; color:var(--accent); user-select:none;">📋 View Automation Triggers, Conditions &amp; Actions</summary>
           <div style="margin-top:8px;">
@@ -941,7 +1110,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       banner.className = 'banner'; banner.style.display = 'block';
       banner.innerHTML = `<strong class="t">Primary model quota reached</strong>
         <div class="muted"><code>${esc(q.primary_model)}</code> is cooling down until <strong>${esc(primUntil)}</strong>. Switch to a fallback model in the meantime?</div>
-        <div class="btn-row">${avail.map(m => `<button class="primary" onclick="decideFallback('approve_fallback', '${esc(m)}')">Use ${esc(m)}</button>`).join('')}
+        <div class="btn-row">${avail.map(m => `<button class="primary" data-model="${esc(m)}" onclick="decideFallback('approve_fallback', this.dataset.model)">Use ${esc(m)}</button>`).join('')}
         <button onclick="decideFallback('wait_for_primary', null)">Wait for primary</button></div>`;
       pill.className = 'pill warn'; pill.textContent = 'Awaiting confirmation';
       llmBadge.className = 'pill warn'; llmText.textContent = 'Quota reached';
@@ -1003,6 +1172,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         ns.value = cur;
       }
       $('notifyCheck').checked = !!data.settings.notifications_enabled;
+      syncSafetyControls(data.settings);
 
       const mi = $('llmModelInput');
       if (mi && document.activeElement !== mi) mi.value = data.settings.llm_model || '';
@@ -1025,6 +1195,14 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       }
     }
     $('licenseBox').textContent = `Plan: ${data.license.plan_tier} | Tokens used: ${data.license.tokens_used_this_period} (current container session)`;
+
+    pausedState = !!(data.settings && data.settings.paused);
+    $('pausedBanner').style.display = pausedState ? 'block' : 'none';
+    $('pauseBtn').textContent = pausedState ? 'Resume brain' : 'Pause brain';
+    const rb = $('tabBadge-research');
+    if (rb) { const n = data.research_pending_review || 0; rb.textContent = n; rb.style.display = n > 0 ? 'inline-block' : 'none'; }
+    latestUndo = data.undo_records || [];
+    renderUndo();
 
     latestApprovalStatuses = data.approval_statuses || {};
     activePendingApprovalIds = new Set((data.pending_approvals || []).map(p => p.approval_id));
@@ -1382,6 +1560,335 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
   }
 
+  let pausedState = false;
+  let latestUndo = [];
+
+  function renderBacktest(bt) {
+    if (!bt || !bt.summary) return '';
+    const colors = {supported: 'var(--ok)', partial: 'var(--warn)', weak: '#e74c3c', unverifiable: 'var(--muted)'};
+    const labels = {supported: 'Matches your history', partial: 'Partly matches your history', weak: 'Does not match your history', unverifiable: 'Not verifiable from history'};
+    const color = colors[bt.verdict] || 'var(--muted)';
+    const quality = (bt.quality !== null && bt.quality !== undefined) ? ' (' + Math.round(bt.quality * 100) + '% aligned)' : '';
+    return `<div style="margin:8px 0; padding:8px 12px; border:1px solid var(--border); border-left:3px solid ${color}; border-radius:8px; background:rgba(0,0,0,0.25);">
+      <div style="font-size:0.78rem; font-weight:700; color:${color};">🧪 Backtest: ${esc(labels[bt.verdict] || bt.verdict)}${esc(quality)}</div>
+      <div class="muted" style="font-size:0.8rem; margin-top:3px;">${esc(bt.summary)}</div></div>`;
+  }
+
+  function renderUndo() {
+    const box = $('undoList');
+    if (!box) return;
+    box.innerHTML = latestUndo.length ? latestUndo.map(u => `<div class="item"><div style="display:flex; justify-content:space-between; gap:8px; align-items:center;">
+        <span>${esc(u.summary)} <span class="muted">${esc(new Date(u.created_at).toLocaleString())}</span></span>
+        <button class="icon" data-id="${esc(u.undo_id)}" onclick="undoAction(this.dataset.id)">Undo</button></div></div>`).join('')
+      : '<div class="empty">Nothing to undo. Autonomous actions appear here for 24 hours.</div>';
+  }
+
+  async function undoAction(id) {
+    const res = await fetch('./api/undo/' + encodeURIComponent(id), {method: 'POST'});
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      alert(err.detail || 'Undo failed');
+    }
+    await refreshAll();
+  }
+
+  async function setRuntime(field, value) {
+    settingsMutationSeq++;
+    const res = await post('./api/settings', {[field]: value});
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      alert(typeof err.detail === 'string' ? err.detail : 'Could not save this setting');
+    }
+    await refreshAll();
+  }
+
+  async function togglePause() { await setRuntime('paused', !pausedState); }
+
+  async function saveQuietHours() {
+    settingsMutationSeq++;
+    await post('./api/settings', {quiet_hours_start: $('quietStartInput').value || '', quiet_hours_end: $('quietEndInput').value || ''});
+    await refreshAll();
+  }
+
+  let currentDomainAutonomy = {};
+  function renderDomainAutonomy() {
+    const entries = Object.entries(currentDomainAutonomy);
+    $('domainAutonomyList').innerHTML = entries.length ? entries.map(([d, lvl]) => `<div class="item" style="display:flex; justify-content:space-between; align-items:center; gap:8px;">
+        <span><code>${esc(d)}</code> &rarr; ${esc(lvl)}</span>
+        <button class="icon" data-d="${esc(d)}" onclick="removeDomainAutonomy(this.dataset.d)">Remove</button></div>`).join('')
+      : '<div class="muted" style="font-size:0.8rem;">No overrides: the global autonomy applies to every device type.</div>';
+  }
+  async function addDomainAutonomy() {
+    const name = ($('domainAutoName').value || '').trim().toLowerCase();
+    if (!name) return;
+    currentDomainAutonomy = Object.assign({}, currentDomainAutonomy, {[name]: $('domainAutoLevel').value});
+    $('domainAutoName').value = '';
+    await setRuntime('domain_autonomy', currentDomainAutonomy);
+  }
+  async function removeDomainAutonomy(domain) {
+    const next = Object.assign({}, currentDomainAutonomy);
+    delete next[domain];
+    currentDomainAutonomy = next;
+    await setRuntime('domain_autonomy', next);
+  }
+
+  function syncSafetyControls(st) {
+    const setChk = (id, v) => { const el = $(id); if (el && document.activeElement !== el) el.checked = !!v; };
+    const setVal = (id, v) => { const el = $(id); if (el && document.activeElement !== el) el.value = v === null || v === undefined ? '' : v; };
+    setChk('gatingCheck', st.realtime_gating);
+    setChk('exceptionCheck', st.exception_detection);
+    setChk('habitCheck', st.deterministic_automations);
+    setChk('announceCheck', st.notify_autonomous_actions);
+    setChk('privacyCheck', st.privacy_scrub);
+    setVal('tokenBudgetInput', st.daily_token_budget);
+    setVal('maxActionsInput', st.max_actions_per_hour);
+    setVal('coalesceInput', st.realtime_coalesce_seconds);
+    setVal('wakeCapInput', st.max_agent_wakeups_per_hour);
+    setVal('quietStartInput', st.quiet_hours_start);
+    setVal('quietEndInput', st.quiet_hours_end);
+    currentDomainAutonomy = st.domain_autonomy || {};
+    renderDomainAutonomy();
+  }
+
+  const STAT_LABELS = {
+    llm_calls_avoided: 'AI calls avoided (routine / typical events)',
+    batch_skipped_unchanged: 'Batch analyses skipped (nothing changed)',
+    habit_automations_proposed: 'Automations proposed from your habits',
+    exceptions_detected: 'Unusual situations detected',
+    undone: 'Actions you undid',
+    outcomes_success: 'Predictions confirmed by sensors',
+    outcomes_failure: 'Predictions that did not work',
+    rate_limited: 'Actions held back by safety limits',
+    budget_skipped: 'Runs skipped by the token budget',
+    batch_skipped_no_scope: 'Analyses skipped (no matching devices)',
+    events_coalesced: 'Events merged into one AI run',
+    wakeups_skipped_no_actuator: 'AI wake-ups skipped (nothing to operate)',
+    wakeups_capped: 'AI wake-ups held back by the hourly cap',
+  };
+  const VERDICT_PILL = {healthy: 'ok', too_new: '', never_fired: 'warn', overridden: 'warn', disabled: 'warn', missing: 'danger'};
+
+  function renderResearchItem(it, names, reviewable) {
+    const confClass = {high: 'ok', medium: 'warn', low: 'danger'}[it.confidence] || '';
+    const web = it.basis === 'web_sources';
+    const src = (it.sources || []).map(s => `<a href="${esc(s.url)}" target="_blank" rel="noopener noreferrer">${esc(s.title || s.url)}</a>${s.trust === 'low' ? ' <span class="muted">(user-generated)</span>' : ''}`).join('<br>');
+    const points = (it.key_points || []).map(p => `<li>${esc(p)}</li>`).join('');
+    const refs = (it.references || []).length ? `<div class="muted" style="margin-top:4px; font-size:0.8rem;">The AI says it draws on: ${esc(it.references.join('; '))} (not verified)</div>` : '';
+    return `<div class="item">
+      <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
+        <strong>${esc(it.title)}</strong>
+        <span class="pill">${esc(names[it.agent_id] || it.agent_id)}</span>
+        <span class="pill ${confClass}">${esc(it.confidence)} confidence</span>
+        <span class="pill ${web ? 'ok' : ''}">${web ? 'web sources' : 'AI knowledge'}</span>
+        ${web ? `<span class="pill" title="Share of the answer backed by the cited sources">${Math.round((it.grounding_coverage || 0) * 100)}% sourced</span>` : ''}
+      </div>
+      <div style="margin-top:6px; line-height:1.45;">${esc(it.summary)}</div>
+      ${points ? `<ul style="margin:6px 0 0 18px; padding:0; font-size:0.86rem;">${points}</ul>` : ''}
+      ${it.how_to_apply ? `<div style="margin-top:6px; font-size:0.86rem;"><strong>Apply it:</strong> ${esc(it.how_to_apply)}</div>` : ''}
+      ${it.caveats ? `<div class="muted" style="margin-top:4px; font-size:0.82rem;">Caveats: ${esc(it.caveats)}</div>` : ''}
+      ${refs}
+      ${src ? `<div style="margin-top:6px; font-size:0.82rem;">${src}</div>` : ''}
+      <div class="btn-row">
+        ${reviewable
+          ? `<button class="success" data-id="${esc(it.item_id)}" onclick="decideResearch(this.dataset.id, 'approve')">Keep</button>
+             <button class="danger" data-id="${esc(it.item_id)}" onclick="decideResearch(this.dataset.id, 'reject')">Reject</button>`
+          : `<button class="danger icon" data-id="${esc(it.item_id)}" onclick="removeResearch(this.dataset.id)">Remove</button>`}
+      </div></div>`;
+  }
+
+  async function refreshResearch() {
+    let d;
+    try { d = await (await fetch('./api/research', {cache: 'no-store'})).json(); } catch (e) { return; }
+    const names = d.agent_names || {};
+    const pill = $('researchStatePill');
+    pill.textContent = d.running ? 'Researching...' : (!d.can_research ? 'Needs an AI provider' : (d.enabled ? 'Active' : 'Off'));
+    pill.className = 'pill ' + (d.running ? 'warn' : (d.can_research && d.enabled ? 'ok' : ''));
+    const fmt = v => v ? new Date(v).toLocaleString() : '-';
+    const sum = d.last_summary;
+    $('researchKv').innerHTML = [
+      ['Last run', fmt(d.last_run)],
+      ['Next run', d.enabled ? fmt(d.next_run) : 'automatic research is off'],
+      ['Topics per agent per run', d.topics_per_agent],
+      ['Topics researched so far', d.researched_topics],
+      ['Last run result', sum ? (sum.findings + ' finding(s) from ' + sum.topics_researched + ' topic(s)') : '-'],
+    ].map(([k, v]) => `<span>${esc(k)}</span><span>${esc(v)}</span>`).join('');
+    let note = '';
+    if (!d.can_research) note = 'Research needs an AI provider. Add an API key in Settings; any provider works.';
+    else if (d.web_search_enabled && !d.supports_web_search) note = 'Web search is only available with Google Gemini; research uses the general knowledge of the AI model instead.';
+    $('researchNote').textContent = note;
+    $('researchRunBtn').disabled = !!d.running || !d.can_research;
+    const chk = $('researchCheck'); if (document.activeElement !== chk) chk.checked = !!d.enabled;
+    const web = $('researchWebCheck'); if (document.activeElement !== web) { web.checked = !!d.web_search_enabled; web.disabled = !d.supports_web_search; }
+    const iv = $('researchIntervalInput'); if (document.activeElement !== iv) iv.value = d.interval_days;
+
+    $('researchProposedCount').textContent = (d.proposed || []).length;
+    $('researchProposed').innerHTML = (d.proposed || []).length ? d.proposed.map(i => renderResearchItem(i, names, true)).join('') : '<div class="empty">Nothing waiting for review.</div>';
+    $('researchApprovedCount').textContent = (d.approved || []).length;
+    $('researchApproved').innerHTML = (d.approved || []).length ? d.approved.map(i => renderResearchItem(i, names, false)).join('') : '<div class="empty">No approved knowledge yet.</div>';
+    $('researchBacklog').innerHTML = (d.backlog || []).length ? d.backlog.map(t => `<div class="item"><strong>${esc(t.title)}</strong> <span class="pill">${esc(names[t.agent_id] || t.agent_id)}</span> <span class="muted" style="font-size:0.78rem;">${t.origin === 'device_seed' ? 'from your equipment' : 'planned by the agent'}</span></div>`).join('') : '<div class="empty">No topics queued. The agents plan new ones before each run.</div>';
+  }
+
+  async function runResearchNow() {
+    $('researchRunBtn').disabled = true;
+    const res = await post('./api/research/run', {});
+    const r = await res.json().catch(() => ({}));
+    if (r.status === 'unavailable') alert(r.message);
+    await refreshResearch();
+  }
+  async function decideResearch(id, decision) {
+    await post('./api/research/items/' + encodeURIComponent(id) + '/decision', {decision});
+    await refreshResearch(); await refreshAll();
+  }
+  async function removeResearch(id) {
+    await fetch('./api/research/items/' + encodeURIComponent(id), {method: 'DELETE'});
+    await refreshResearch();
+  }
+
+  let watchDraft = null;
+
+  function describeWatch(w) {
+    const c = w.condition;
+    let t;
+    if (c.kind === 'numeric') {
+      const parts = [];
+      if (c.above !== null && c.above !== undefined) parts.push('above ' + c.above);
+      if (c.below !== null && c.below !== undefined) parts.push('below ' + c.below);
+      t = parts.join(' or ');
+    } else if (c.kind === 'silence') {
+      t = 'no update for ' + c.for_minutes + ' min';
+    } else {
+      t = (c.negate ? 'is not ' : 'is ') + "'" + c.state + "'";
+    }
+    if (c.kind !== 'silence' && c.for_minutes) t += ' for ' + c.for_minutes + ' min';
+    const extra = [];
+    if (w.presence && w.presence !== 'any') extra.push(w.presence === 'home' ? 'only when someone is home' : 'only when nobody is home');
+    if (w.window_start) extra.push(w.window_start + '-' + w.window_end);
+    if ((w.weekdays || []).length) extra.push(w.weekdays.join(', '));
+    return (w.entity_ids || []).join(', ') + ' ' + t + (extra.length ? ' (' + extra.join('; ') + ')' : '');
+  }
+
+  async function compileWatch() {
+    const text = ($('watchText').value || '').trim();
+    if (!text) return;
+    $('watchMsg').textContent = 'Interpreting...';
+    $('watchCompileBtn').disabled = true;
+    let r;
+    try {
+      const res = await post('./api/watches/compile', {text});
+      r = await res.json();
+    } catch (e) { r = {errors: ['Request failed']}; }
+    $('watchCompileBtn').disabled = false;
+    $('watchMsg').textContent = '';
+    renderWatchDraft(r);
+  }
+
+  function renderWatchDraft(r) {
+    const errors = r.errors || [];
+    watchDraft = (r.draft && !errors.length) ? r.draft : null;
+    const bt = r.backtest;
+    let html = '';
+    if (errors.length) html += `<div class="banner" style="display:block; margin:10px 0;">${errors.map(e => esc(e)).join('<br>')}</div>`;
+    if (r.draft) {
+      html += `<div class="item" style="margin-top:10px;"><strong>${esc(r.draft.name)}</strong> <span class="pill ${r.draft.severity === 'critical' ? 'danger' : (r.draft.severity === 'warning' ? 'warn' : '')}">${esc(r.draft.severity)}</span>
+        <div class="muted" style="font-size:0.84rem; margin-top:4px;">${esc(describeWatch(r.draft))}</div>
+        ${r.explanation ? `<div style="font-size:0.84rem; margin-top:6px;">${esc(r.explanation)}</div>` : ''}
+        ${bt && bt.episodes !== null && bt.episodes !== undefined ? `<div class="muted" style="font-size:0.8rem; margin-top:6px;">🧪 On your last ${esc(bt.days)} days it would have alerted ${esc(bt.episodes)} time(s)${bt.approximate ? ' (approximate)' : ''}. ${esc(bt.note || '')}</div>` : (bt && bt.note ? `<div class="muted" style="font-size:0.8rem; margin-top:6px;">${esc(bt.note)}</div>` : '')}
+        ${(r.warnings || []).map(w => `<div class="muted" style="font-size:0.8rem; margin-top:4px;">⚠ ${esc(w)}</div>`).join('')}
+        ${watchDraft ? '<div class="btn-row"><button class="primary" onclick="saveWatchDraft()">Save watch</button><button class="icon" onclick="discardWatchDraft()">Discard</button></div>' : '<div class="btn-row"><button class="icon" onclick="discardWatchDraft()">Discard</button></div>'}
+      </div>`;
+    }
+    $('watchDraft').innerHTML = html;
+  }
+
+  function discardWatchDraft() { watchDraft = null; $('watchDraft').innerHTML = ''; }
+
+  async function saveWatchDraft() {
+    if (!watchDraft) return;
+    const res = await post('./api/watches', watchDraft);
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      alert(typeof err.detail === 'string' ? err.detail : 'Could not save this watch');
+      return;
+    }
+    $('watchText').value = '';
+    discardWatchDraft();
+    await refreshWatches();
+  }
+
+  async function refreshWatches() {
+    let d;
+    try { d = await (await fetch('./api/watches', {cache: 'no-store'})).json(); } catch (e) { return; }
+    const list = d.watches || [];
+    $('watchCount').textContent = list.length;
+    $('watchList').innerHTML = list.length ? list.map(w => `<div class="item">
+        <div style="display:flex; justify-content:space-between; gap:8px; align-items:center; flex-wrap:wrap;">
+          <span><strong>${esc(w.name)}</strong> <span class="pill ${w.enabled ? 'ok' : ''}">${w.enabled ? 'active' : 'paused'}</span></span>
+          <span>
+            <button class="icon" data-id="${esc(w.watch_id)}" onclick="toggleWatch(this.dataset.id)">${w.enabled ? 'Pause' : 'Resume'}</button>
+            <button class="danger icon" data-id="${esc(w.watch_id)}" onclick="deleteWatch(this.dataset.id)">Remove</button>
+          </span>
+        </div>
+        <div class="muted" style="font-size:0.82rem; margin-top:3px;">${esc(describeWatch(w))}</div>
+        <div class="muted" style="font-size:0.78rem;">Alerted ${esc(w.fire_count)} time(s)${w.last_fired ? ', last ' + esc(new Date(w.last_fired).toLocaleString()) : ''}</div></div>`).join('')
+      : '<div class="empty">No watches yet.</div>';
+  }
+
+  async function toggleWatch(id) { await fetch('./api/watches/' + encodeURIComponent(id) + '/toggle', {method: 'POST'}); await refreshWatches(); }
+  async function deleteWatch(id) { await fetch('./api/watches/' + encodeURIComponent(id), {method: 'DELETE'}); await refreshWatches(); }
+
+  async function unmuteException(key) {
+    await post('./api/exceptions/unmute', {key});
+    await refreshLearned();
+  }
+
+  async function refreshLearned() {
+    let d;
+    try {
+      const res = await fetch('./api/learned', {cache: 'no-store'});
+      d = await res.json();
+    } catch (e) { return; }
+    const pct = Math.min(100, Math.round(100 * d.days_of_data / Math.max(1, d.baseline_min_days)));
+    $('learnedBar').style.width = pct + '%';
+    const pill = $('learnedStatePill');
+    pill.textContent = d.baseline_ready ? 'Routines learned' : 'Learning...';
+    pill.className = 'pill ' + (d.baseline_ready ? 'ok' : 'warn');
+    const store = d.store || {};
+    $('learnedKv').innerHTML = [
+      ['History recorded', d.days_of_data + ' days (needs ' + d.baseline_min_days + ')'],
+      ['State changes stored', store.transitions || 0],
+      ['Devices tracked', (store.entities_with_transitions || 0) + ' switchable, ' + (store.entities_with_numeric || 0) + ' sensors'],
+      ['Existing HA automations known', d.existing_automations],
+      ['Smart AI wake-ups', d.gating_active ? 'Only for unusual events' : 'Every significant event (still learning)'],
+      ['AI tokens today', d.tokens_today + (d.daily_token_budget ? ' / ' + d.daily_token_budget : ' (no budget)')],
+      ['Timezone', d.timezone],
+    ].map(([k, v]) => `<span>${esc(k)}</span><span>${esc(v)}</span>`).join('');
+    const stats = d.stats_7d || {};
+    const keys = Object.keys(STAT_LABELS).filter(k => stats[k]);
+    $('learnedStats').innerHTML = keys.length ? keys.map(k => `<span>${esc(STAT_LABELS[k])}</span><span>${esc(stats[k])}</span>`).join('')
+      : '<span class="muted">Nothing yet</span><span></span>';
+
+    const patterns = d.patterns || [];
+    $('patternsCount').textContent = patterns.length;
+    $('patternsList').innerHTML = patterns.length ? patterns.map(p => `<div class="item">
+        <div>${esc(p.description)}</div>
+        <div style="margin-top:4px; display:flex; gap:6px; flex-wrap:wrap;">
+          <span class="pill">${Math.round(p.confidence * 100)}% confidence</span>
+          ${p.covered_by ? `<span class="pill ok">already automated: ${esc(p.covered_by)}</span>` : '<span class="pill warn">not automated yet</span>'}
+        </div></div>`).join('')
+      : '<div class="empty">No recurring habits found yet. They appear after a few days of recorded history.</div>';
+
+    const muted = d.muted_exceptions || [];
+    $('mutedList').innerHTML = muted.length ? muted.map(k => `<div class="item" style="display:flex; justify-content:space-between; align-items:center; gap:8px;">
+        <code>${esc(k)}</code><button class="icon" data-k="${esc(k)}" onclick="unmuteException(this.dataset.k)">Unmute</button></div>`).join('')
+      : '<div class="muted" style="font-size:0.8rem;">Nothing muted.</div>';
+
+    const reviews = d.automation_reviews || [];
+    $('reviewsList').innerHTML = reviews.length ? reviews.map(r => `<div class="item">
+        <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;"><strong>${esc(r.alias)}</strong>
+          <span class="pill ${VERDICT_PILL[r.verdict] || ''}">${esc(String(r.verdict).replace('_', ' '))}</span></div>
+        <div class="muted" style="font-size:0.82rem; margin-top:3px;">${esc(r.details)}</div></div>`).join('')
+      : '<div class="empty">No automations deployed by the brain yet.</div>';
+  }
+
   async function updateSetting(field, value) {
     settingsMutationSeq++;
     $('modeBadge').textContent = $('modeSelect').value.replace('_', ' ') + ' / ' + $('autonomySelect').value;
@@ -1533,6 +2040,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   } catch (e) {}
   refreshAll();
   setInterval(refreshAll, 5000);
+  setInterval(() => { const pane = $('pane-learned'); if (pane && pane.classList.contains('active')) refreshLearned(); }, 15000);
+  setInterval(() => { const pane = $('pane-research'); if (pane && pane.classList.contains('active')) refreshResearch(); }, 10000);
+  setInterval(() => { const pane = $('pane-memory'); if (pane && pane.classList.contains('active')) refreshWatches(); }, 30000);
 </script>
 </body>
 </html>

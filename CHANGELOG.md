@@ -2,6 +2,80 @@
 
 All notable changes to **HA AI Brain** are documented in this file.
 
+## 0.2.0 - 2026-10-26
+
+### Added — performance (tokens, database, CPU)
+- **Tokens**: agents with nothing to look at or operate in your home are skipped; batches are skipped when nothing relevant changed, with back-off when recent runs produced nothing; real-time bursts are coalesced (`realtime_coalesce_seconds`) and capped per agent (`max_agent_wakeups_per_hour`); calculation code is cached (7 days) and reused; research is cached by equipment types (14 days); leaner prompts with the static part first (provider prefix caching); provider-neutral `reasoning` hint (only mapped by the Gemini transport) and hidden thinking tokens counted in usage.
+- **Database**: compact telemetry layout with automatic in-place migration, auto-vacuum + WAL checkpointing, compressed run logs without duplicated code, daily retention for approvals, insights, feedback, outcomes and caches.
+- **CPU**: habit clustering is O(n log n) (90k transitions: 8.7 s to 0.3 s), buffered telemetry writes, cached ignore list, per-event logs at DEBUG; new `log_level` option.
+
+### Added — local learning (no AI tokens)
+- **Telemetry store** (SQLite, WAL): state transitions + hourly sensor aggregates, 90-day retention, recorder history imported at startup (switchables 240 h, sensors 96 h as hourly aggregates). History queries are no longer capped at 60 entities (default 300, configurable).
+- **Habit miner**: time-of-day habits (weekday/weekend aware, circular-time clustering) and "A then B" sequences (support, confidence, lift). Strong, un-automated habits become native-automation proposals **without any LLM call**; unlocking/disarming is never proposed.
+- **Automation understanding**: real triggers/actions of existing HA automations are parsed (old and new HA config syntax) and used for coverage, duplicate detection and expected-state rules.
+- **Backtesting** of every proposed automation against recorded history, shown on the approval card; automations contradicting the household's behaviour are dropped.
+- **Exception detection** every 5 min: open/unlocked house while away, broken learned routine, time-based automation that did not run. Alerts (urgent for security) and a targeted agent run only when something is off.
+- **Real-time gating**: once enough history exists, only unusual events wake an agent (z-score vs. hour-of-day baseline, routine/automated actuator changes are skipped). Security-relevant events always wake.
+- **Batch savings**: unchanged inputs skip the whole batch; research findings are cached persistently per entity-set signature; the code-writing step now receives locally computed statistics for every entity instead of 4 points of 15 entities.
+- **Household context & real data**: presence, part of day, sun, weather + hourly forecast, tariff and solar-forecast sensors; curated, versioned reference knowledge (user-extensible) replaces LLM recall.
+- **Closed loops**: expected outcomes are verified (feedback written), deployed automations reviewed daily (never fired / overridden / disabled / missing), trust-promotion suggestions after repeated approvals, weekly digest.
+
+### Added — safety & control
+- Per-domain autonomy, kill switch ("Pause brain"), hourly action caps (global + per entity, excess goes to approval), quiet hours (security alerts exempt), daily token budget, **Undo** for autonomous actions (notification button + dashboard, 24 h), reversible privacy scrubbing of people/phones/network identifiers for cloud LLMs.
+- Dashboard: **Learned** tab (progress, habits, automation health, savings, undo list), **Learning & Safety** settings card, backtest box on approvals, pause banner. New `GET /api/learned`, `POST /api/undo/{id}`, `POST /api/exceptions/check`.
+
+### Added — generic exception detection, watches and research (0.2.0)
+- **Exceptions are learned, not enumerated.** The fixed list of checks is gone. Every tracked entity gets a profile from its own history (how long it stays in each state, how often it changes, what range a sensor has at each hour) and these generic detectors run for *all* of them: broken routine, abnormally long dwell in a non-resting state, a normally busy entity gone silent, flapping, a sensor far out of range for two consecutive readings, a sensor that stopped reporting, entities stuck unavailable (collapsed into one finding on mass outages), automations that did not run, and the perimeter-open-while-away safety net. Safety relevance (Home Assistant's own domains / device classes) and presence only change the *severity*. Cumulative counters are ignored; alerts are capped per check and per day, and calm findings are suppressed while the home is empty.
+- **The brain learns from your reactions to alerts.** Dismissing an alert doubles that entity's quiet period (up to 14 days); rejecting mutes it until you unmute it in the Learned tab.
+- **Watches**: describe any condition in your own words (Memory & Rules tab). The AI interprets it once into a structured rule (state / numeric / silence, duration, presence, time window, weekdays, severity) that is validated against your real entities, replayed over your history ("would have alerted 3 times in the last 12 days"), and then evaluated locally every minute at zero token cost.
+- **Research agenda (works with any AI provider)**: each agent thinks like a specialist in its field and proposes practical knowledge for *your* setup, using the normal chat completion of whatever model you configured — no search feature, citations or special API required. Topics come from your real equipment (manufacturer + model from the device registry) and from the agent planning what a specialist would investigate for this home; topics already researched or rejected are never repeated. Findings are labelled "AI knowledge" (with the model's own honest confidence and any standards it says it relies on, flagged as unverified). **Nothing reaches an agent until you approve it** (new Research tab). Weekly by default, first run one day after upgrade, respects the daily token budget.
+- **Optional deep research (Gemini only, off by default)**: a switch adds Google Search grounding with cited sources, a "% sourced" figure and evidence-capped confidence. It costs noticeably more tokens; if the search returns nothing, the normal knowledge-based research answers instead.
+- Built-in reference guidance is now labelled as unverified seed guidance; approved research is listed ahead of it in agent prompts.
+- New API: `/api/watches*`, `/api/research*`, `/api/exceptions/unmute`.
+
+- **User-editable files moved to the Home Assistant config folder**: custom agents and extra reference knowledge now live in `/config/ha_ai_brain/agents/` and `/config/ha_ai_brain/knowledge/` (reachable with the File editor, Samba or SSH add-ons and included in config backups) instead of the add-on's private `/data`.
+- **Documentation rewritten**: `DOCS.md` is now the complete user manual (how it works, every feature, dashboard tour, settings reference, rollout plan, privacy, costs, troubleshooting, limitations and a 30-question FAQ); the README is a concise overview.
+
+- **Critical unusual situations** now also push their corrective-action approval ("lock it now?") through quiet hours, and every autonomous action is announced — also those that cannot be undone, such as locks (without an Undo button).
+
+### Changed
+- Batch lookback maximum raised from 168 h to 720 h. Real `last_changed` timestamps are now read from Home Assistant (needed to know how long a state has persisted).
+- Two different automations may now target the same device (e.g. "on at 18:00" and "off at 23:00"); only equivalent ones are treated as duplicates.
+- Habit automations fire slightly *before* the typical manual action so they get there first.
+
+## 0.1.26 - 2026-10-26
+
+### Security
+- **Ingress-only access inside the add-on**: when running under the Supervisor, requests from anything other than the Supervisor proxy are rejected (override with `BRAIN_TRUSTED_PROXIES` / `BRAIN_ALLOW_ANY_CLIENT`). `/api/health` stays open for the watchdog.
+- **Settings API no longer leaks secrets**: `ha_token` and `license_key` were previously returned by `/api/status`; short API keys are now fully masked.
+- **Arbitrary-code domains blocked**: `shell_command`, `python_script`, `pyscript`, `command_line`, `rest_command`, `hassio`, `script`, `recorder` can never be called from an LLM proposal.
+- **Agents are confined to their declared `controllable_domains`**; proposals targeting unknown (hallucinated) entities are rejected before execution.
+- LLM-proposed priorities are capped below human-override / life-safety tiers, so an agent cannot out-rank the Conflict Arbiter.
+- Custom `agent_id` is validated (no path traversal when persisted to disk); request bodies have length limits.
+- Computation sandbox runs with a scrubbed environment and CPU/memory limits; failed generated code is no longer cached.
+- `docker-compose` publishes the unauthenticated dashboard on `127.0.0.1` only.
+
+### Fixed
+- Boolean add-on options (`enable_actionable_notifications: false`) were silently turned back into `true` by `jq '// default'`; `batch_lookback_hours` was never passed to the app.
+- Environment parsing is tolerant (invalid ints/enums fall back to defaults, ranges are clamped, `BRAIN_USE_SIMULATOR=1` works, empty site context uses the default).
+- Approvals could be executed twice (e.g. notification button + dashboard); they now resolve exactly once. Unanswered approvals expire after 24 h (previously they suppressed identical proposals forever).
+- Guardrail rejection matching used substring checks (`light.kitchen` also blocked `light.kitchen_ceiling`); now exact. Closing a garage door/gate no longer requires approval; opening still does.
+- `light.turn_on` with brightness/colour on an already-on light was dropped as "redundant".
+- Fallback model list defaulted to Gemini models even for OpenAI/Anthropic/OpenRouter keys, and OpenRouter defaults lost their vendor segment. Auth errors (401/403) no longer start a fake "quota cooldown". Changing the model in the UI no longer resets usage counters or the fallback list.
+- Event stream: reconnect no longer spins when the socket closes cleanly; one malformed frame no longer drops the connection; notification-button tasks are no longer garbage collected mid-flight.
+- `nan`/`inf` sensor states are no longer treated as numeric readings; `_w` substring matched any entity containing `_w`.
+- `clear_notification` is only sent to Companion App targets (it showed up as text on other notify services).
+- Malformed `expected_outcome` from the LLM dropped the whole proposed action.
+- Custom agents persisted by the UI were written inside the container image and lost on every add-on update; they now live in `/data/agents`.
+- MCP adapter returned fabricated device data; it now reports `unavailable` unless a connector is registered.
+- Removed a personal device name from the changelog and personal tokens from the leakage test (replaced by generic IP/MAC/e-mail/home-path pattern checks).
+
+### Improved
+- Shared pooled HTTP client for Home Assistant REST calls; WebSocket subscribes only to the 4 event types it consumes instead of every event on the bus; bounded memory for AI context ids and sent-notification history.
+- Scheduled batches honor the previous run after a restart (no token spend on every restart) and are skipped during a quota cooldown.
+- SQLite runs in WAL mode; prompts cap the number of entities sent to the LLM; LLM calls have a request timeout.
+- Added `/api/health` + Supervisor watchdog; exposed `managed_cloud_proxy_url` / `license_key` options; declared the `python-dotenv` dependency.
+
 ## 0.1.25 - 2026-10-25
 
 ### Added & Improved
@@ -237,7 +311,7 @@ All notable changes to **HA AI Brain** are documented in this file.
 
 ### Fixed & Improved
 - **Smart Notification Service Resolution & Fallback**:
-  - Automatically resolves notification service names (e.g. `notify.gabriels_iphone` $\rightarrow$ `notify.mobile_app_gabriels_iphone`) using discovered Home Assistant notify services, eliminating 400 Bad Request errors when users omit the `mobile_app_` prefix.
+  - Automatically resolves notification service names (e.g. `notify.my_phone` $\rightarrow$ `notify.mobile_app_my_phone`) using discovered Home Assistant notify services, eliminating 400 Bad Request errors when users omit the `mobile_app_` prefix.
   - Automatically falls back to `notify.notify` if an invalid, unregistered, or renamed device target is encountered.
   - Hardened periodic batch scheduler and alert dispatch in `orchestrator.py`: notification delivery failures (e.g. 400 Bad Request or unreachable mobile clients) are logged gracefully and will never halt background audits or prevent insights and automations from persisting into episodic memory.
   - Clarified Home Assistant Add-on configuration documentation and translations for `notification_service`.

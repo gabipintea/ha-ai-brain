@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ha-ai-brain"
-version = "0.1.25"
+version = "0.2.0"
 description = "Autonomous Multi-Agent Cognitive Brain for Home Assistant (Hexagonal Architecture + LangGraph)"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -21,6 +21,8 @@ dependencies = [
     "langchain-core>=0.2.0",
     "litellm>=1.40.0",
     "pyyaml>=6.0.1",
+    "python-dotenv>=1.0.0",
+    "tzdata>=2024.1",
 ]
 
 [project.optional-dependencies]

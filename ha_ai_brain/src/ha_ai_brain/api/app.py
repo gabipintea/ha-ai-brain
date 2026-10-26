@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
-from typing import Any
-from pydantic import BaseModel
+import logging
+import os
+from pathlib import Path
+from typing import Any, ClassVar
+
+from pydantic import BaseModel, Field
 
 from ha_ai_brain.adapters.billing_license import CommercialLicenseAdapter
 from ha_ai_brain.adapters.ha_simulator import SmartHomeSimulatorAdapter
@@ -15,9 +19,11 @@ from ha_ai_brain.adapters.memory_sqlite import SQLiteMemoryAdapter
 from ha_ai_brain.adapters.notification_ha import HomeAssistantNotificationAdapter
 from ha_ai_brain.adapters.research_scientific import ScientificResearchAdapter
 from ha_ai_brain.adapters.sandbox_python import PythonSandboxAdapter
+from ha_ai_brain.adapters.telemetry_sqlite import SQLiteTelemetryStore
 from ha_ai_brain.api.dashboard_html import DASHBOARD_HTML, render_dashboard_html
 from ha_ai_brain.application.orchestrator import BrainOrchestrator
 from ha_ai_brain.config import AutonomyLevel, BrainSettings, FallbackPolicy, OperatingMode
+from ha_ai_brain.domain.watches import WatchRule
 from ha_ai_brain.domain.models import AgentSpec, FeedbackEpisode, FeedbackPolarity, IgnoredTarget, UserContextNote
 from ha_ai_brain.ports.llm import LLMProviderPort
 
@@ -28,10 +34,37 @@ class SettingsUpdateRequest(BaseModel):
     llm_fallback_policy: FallbackPolicy | None = None
     notification_service: str | None = None
     notifications_enabled: bool | None = None
-    site_context: str | None = None
-    llm_model: str | None = None
-    llm_fast_model: str | None = None
-    llm_api_key: str | None = None
+    site_context: str | None = Field(default=None, max_length=4000)
+    llm_model: str | None = Field(default=None, max_length=200)
+    llm_fast_model: str | None = Field(default=None, max_length=200)
+    llm_api_key: str | None = Field(default=None, max_length=500)
+    # learning / safety
+    paused: bool | None = None
+    realtime_gating: bool | None = None
+    exception_detection: bool | None = None
+    deterministic_automations: bool | None = None
+    notify_autonomous_actions: bool | None = None
+    privacy_scrub: bool | None = None
+    daily_token_budget: int | None = Field(default=None, ge=0, le=1_000_000_000)
+    max_actions_per_hour: int | None = Field(default=None, ge=1, le=1000)
+    max_actions_per_entity_per_hour: int | None = Field(default=None, ge=1, le=100)
+    realtime_coalesce_seconds: int | None = Field(default=None, ge=0, le=3600)
+    max_agent_wakeups_per_hour: int | None = Field(default=None, ge=0, le=1000)
+    quiet_hours_start: str | None = Field(default=None, max_length=5)
+    quiet_hours_end: str | None = Field(default=None, max_length=5)
+    domain_autonomy: dict[str, AutonomyLevel] | None = None
+    research_enabled: bool | None = None
+    research_web_search: bool | None = None
+    research_interval_days: int | None = Field(default=None, ge=1, le=90)
+    research_topics_per_agent: int | None = Field(default=None, ge=1, le=5)
+
+    RUNTIME_FIELDS: ClassVar[tuple[str, ...]] = (
+        "paused", "realtime_gating", "exception_detection", "deterministic_automations", "notify_autonomous_actions",
+        "privacy_scrub", "daily_token_budget", "max_actions_per_hour", "max_actions_per_entity_per_hour",
+        "quiet_hours_start", "quiet_hours_end", "domain_autonomy",
+        "research_enabled", "research_web_search", "research_interval_days", "research_topics_per_agent",
+        "realtime_coalesce_seconds", "max_agent_wakeups_per_hour",
+    )
 
 
 class FallbackDecisionRequest(BaseModel):
@@ -59,26 +92,47 @@ class ApprovalDecisionRequest(BaseModel):
 
 
 class UserContextNoteRequest(BaseModel):
-    content: str
-    scope: str = "global"
-    related_entities: list[str] = []
+    content: str = Field(max_length=2000)
+    scope: str = Field(default="global", max_length=200)
+    related_entities: list[str] = Field(default_factory=list, max_length=50)
 
 
 class IgnoredTargetRequest(BaseModel):
-    pattern: str
-    reason: str = ""
+    pattern: str = Field(max_length=200)
+    reason: str = Field(default="", max_length=500)
+
+
+class WatchCompileRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=1000)
+
+
+class ResearchDecisionRequest(BaseModel):
+    decision: str = Field(pattern="^(approve|reject)$")
+
+
+class UnmuteRequest(BaseModel):
+    key: str = Field(max_length=300)
+
+
+class InsightRejectionRequest(BaseModel):
+    reason: str = Field(default="", max_length=1000)
+
+
+def _package_version() -> str:
+    try:
+        from importlib.metadata import PackageNotFoundError, version
+
+        return version("ha-ai-brain")
+    except Exception:
+        return "0.0.0"
 
 
 def build_orchestrator(settings: BrainSettings | None = None) -> BrainOrchestrator:
     """Assemble the Hexagonal Architecture ports and adapters into a BrainOrchestrator."""
-    import logging
-    from pathlib import Path
-
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    )
     cfg = settings or BrainSettings.from_env()
+    level = getattr(logging, cfg.log_level.upper(), logging.INFO)
+    logging.basicConfig(level=level, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+    logging.getLogger().setLevel(level)
     if cfg.db_path and "/" in cfg.db_path:
         Path(cfg.db_path).parent.mkdir(parents=True, exist_ok=True)
 
@@ -89,6 +143,7 @@ def build_orchestrator(settings: BrainSettings | None = None) -> BrainOrchestrat
             base_url=cfg.ha_url,
             ws_url=cfg.ha_ws_url,
             token=cfg.ha_token,
+            history_max_entities=cfg.history_max_entities,
         )
 
     license_adapter = CommercialLicenseAdapter(initial_license_key=cfg.license_key)
@@ -105,6 +160,7 @@ def build_orchestrator(settings: BrainSettings | None = None) -> BrainOrchestrat
             license_port=license_adapter,
             fallback_models=cfg.llm_fallback_models,
             fallback_policy=cfg.llm_fallback_policy.value,
+            privacy_scrub=cfg.privacy_scrub,
         )
 
     sandbox_adapter = PythonSandboxAdapter()
@@ -126,6 +182,7 @@ def build_orchestrator(settings: BrainSettings | None = None) -> BrainOrchestrat
         notification=notification_adapter,
         mcp_client=mcp_adapter,
         license_port=license_adapter,
+        telemetry=SQLiteTelemetryStore(cfg.db_path),
     )
 
 
@@ -133,8 +190,8 @@ def create_app(settings: BrainSettings | None = None) -> Any:
     """Create the FastAPI application with HA Ingress dashboard, REST API, and background stream/scheduler workers."""
     from contextlib import asynccontextmanager
     from collections.abc import AsyncIterator
-    from fastapi import FastAPI, HTTPException
-    from fastapi.responses import HTMLResponse
+    from fastapi import FastAPI, HTTPException, Request
+    from fastapi.responses import HTMLResponse, JSONResponse
 
     orchestrator = build_orchestrator(settings=settings)
 
@@ -145,14 +202,30 @@ def create_app(settings: BrainSettings | None = None) -> Any:
             yield
         finally:
             await orchestrator.stop_background_workers()
+            if hasattr(orchestrator.smart_home, "aclose"):
+                await orchestrator.smart_home.aclose()
 
     app = FastAPI(
         title="HA AI Brain",
-        version="0.1.0",
+        version=_package_version(),
         description="Autonomous Multi-Agent Cognitive Layer for Home Assistant (Hexagonal Architecture + LangGraph)",
         lifespan=lifespan,
     )
     app.state.orchestrator = orchestrator
+
+    # Inside the add-on, the dashboard/API must only be reachable through HA Ingress (Supervisor proxy) so that
+    # nobody on the LAN can approve actions or read settings when a host port is mapped by mistake.
+    if os.getenv("SUPERVISOR_TOKEN") and os.getenv("BRAIN_ALLOW_ANY_CLIENT", "").lower() not in ("1", "true", "yes"):
+        trusted_clients = {
+            c.strip() for c in os.getenv("BRAIN_TRUSTED_PROXIES", "172.30.32.2,127.0.0.1,::1").split(",") if c.strip()
+        }
+
+        @app.middleware("http")
+        async def ingress_only(request: Request, call_next: Any) -> Any:
+            client_host = request.client.host if request.client else ""
+            if client_host not in trusted_clients and request.url.path != "/api/health":
+                return JSONResponse({"detail": "Access is only allowed through Home Assistant Ingress."}, status_code=403)
+            return await call_next(request)
 
     @app.get("/", response_class=HTMLResponse)
     async def index() -> HTMLResponse:
@@ -165,6 +238,91 @@ def create_app(settings: BrainSettings | None = None) -> Any:
             content=html,
             headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"},
         )
+
+    @app.get("/api/health")
+    async def health() -> dict[str, str]:
+        """Lightweight liveness probe used by the Home Assistant Supervisor watchdog."""
+        return {"status": "ok"}
+
+    async def _learn_from_exception_feedback(insight: Any, *, rejected: bool) -> None:
+        """Dismissing an unusual-situation alert quiets that entity for longer; rejecting mutes it."""
+        if insight.category != "exception":
+            return
+        metrics = insight.evidence_metrics or {}
+        if metrics.get("kind") and metrics.get("entity_id"):
+            await orchestrator.learning.record_exception_feedback(f"{metrics['kind']}:{metrics['entity_id']}", rejected=rejected)
+
+    @app.get("/api/watches")
+    async def list_watches() -> dict[str, Any]:
+        return {"watches": [w.model_dump(mode="json") for w in await orchestrator.watches.list()]}
+
+    @app.post("/api/watches/compile")
+    async def compile_watch(req: WatchCompileRequest) -> dict[str, Any]:
+        """One AI call turns a plain-language request into a validated, backtested draft rule (nothing is saved yet)."""
+        return await orchestrator.compile_watch(req.text)
+
+    @app.post("/api/watches")
+    async def save_watch(rule: WatchRule) -> dict[str, Any]:
+        try:
+            saved = await orchestrator.save_watch(rule)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"status": "saved", "watch": saved.model_dump(mode="json")}
+
+    @app.post("/api/watches/{watch_id}/toggle")
+    async def toggle_watch(watch_id: str) -> dict[str, Any]:
+        rule = await orchestrator.watches.get(watch_id)
+        if rule is None:
+            raise HTTPException(status_code=404, detail="Watch not found")
+        rule.enabled = not rule.enabled
+        await orchestrator.watches.save(rule)
+        return {"status": "ok", "watch": rule.model_dump(mode="json")}
+
+    @app.delete("/api/watches/{watch_id}")
+    async def delete_watch(watch_id: str) -> dict[str, Any]:
+        if not await orchestrator.watches.delete(watch_id):
+            raise HTTPException(status_code=404, detail="Watch not found")
+        return {"status": "deleted", "watch_id": watch_id}
+
+    @app.get("/api/research")
+    async def get_research() -> dict[str, Any]:
+        """Research agenda status plus findings waiting for review and the approved knowledge base."""
+        status = await orchestrator.research.status()
+        proposed = await orchestrator.research.store.items(status="proposed")
+        approved = await orchestrator.research.store.items(status="approved")
+        rejected = await orchestrator.research.store.items(status="rejected")
+        agents = {a.agent_id: a.name for a in orchestrator.registry.list_agents()}
+        return {
+            **status,
+            "agent_names": agents,
+            "proposed": [i.model_dump(mode="json") for i in proposed],
+            "approved": [i.model_dump(mode="json") for i in approved],
+            "rejected_count": len(rejected),
+        }
+
+    @app.post("/api/research/run")
+    async def run_research() -> dict[str, Any]:
+        return await orchestrator.start_research_now()
+
+    @app.post("/api/research/items/{item_id}/decision")
+    async def decide_research_item(item_id: str, req: ResearchDecisionRequest) -> dict[str, Any]:
+        item = await orchestrator.research.decide(item_id, req.decision)
+        if item is None:
+            raise HTTPException(status_code=404, detail="Research item not found")
+        orchestrator.invalidate_context_caches()
+        return {"status": item.status, "item": item.model_dump(mode="json")}
+
+    @app.delete("/api/research/items/{item_id}")
+    async def delete_research_item(item_id: str) -> dict[str, Any]:
+        if not await orchestrator.research.store.delete_item(item_id):
+            raise HTTPException(status_code=404, detail="Research item not found")
+        orchestrator.invalidate_context_caches()
+        return {"status": "deleted", "item_id": item_id}
+
+    @app.post("/api/exceptions/unmute")
+    async def unmute_exception(req: UnmuteRequest) -> dict[str, Any]:
+        await orchestrator.learning.unmute_exception(req.key)
+        return {"status": "unmuted", "muted": orchestrator.learning.muted_exceptions()}
 
     @app.get("/api/status")
     async def get_status() -> dict[str, Any]:
@@ -191,18 +349,11 @@ def create_app(settings: BrainSettings | None = None) -> Any:
         next_batch = await orchestrator.get_next_batch_run_at()
         last_batch = await orchestrator.get_last_batch_run_at()
 
-        settings_dict = orchestrator.settings.model_dump()
-        raw_key = settings_dict.pop("llm_api_key", "")
-        settings_dict["has_api_key"] = bool(raw_key)
-        if raw_key:
-            prefix = raw_key[:4]
-            suffix = raw_key[-4:] if len(raw_key) >= 8 else ""
-            settings_dict["masked_api_key"] = f"{prefix}••••••••{suffix}"
-        else:
-            settings_dict["masked_api_key"] = ""
-
+        undo_records = await orchestrator.list_undo_records()
         return {
-            "settings": settings_dict,
+            "undo_records": undo_records,
+            "research_pending_review": len(await orchestrator.research.store.items(status="proposed")),
+            "settings": orchestrator.settings.public_dict(),
             "available_notify_services": notify_services,
             "license": lic.model_dump(),
             "llm_quota": quota.to_status_dict(),
@@ -282,6 +433,7 @@ def create_app(settings: BrainSettings | None = None) -> Any:
         resolved = await orchestrator.memory.resolve_advisory_insight(insight_id=insight_id, status="dismissed")
         if not resolved:
             raise HTTPException(status_code=404, detail="Insight not found")
+        await _learn_from_exception_feedback(resolved, rejected=False)
         return {"status": "dismissed", "insight": resolved.model_dump(mode="json")}
 
     @app.post("/api/insights/dismiss_all")
@@ -291,9 +443,9 @@ def create_app(settings: BrainSettings | None = None) -> Any:
         return {"status": "dismissed_all", "count": count}
 
     @app.post("/api/insights/{insight_id}/reject")
-    async def reject_insight(insight_id: str, req: dict[str, Any] | None = None) -> dict[str, Any]:
+    async def reject_insight(insight_id: str, req: InsightRejectionRequest | None = None) -> dict[str, Any]:
         """Reject an advisory insight with an optional reason note so agents never propose it again."""
-        reason = str((req or {}).get("reason", "")).strip()
+        reason = (req.reason if req else "").strip()
         resolved = await orchestrator.memory.resolve_advisory_insight(
             insight_id=insight_id,
             status="rejected",
@@ -311,6 +463,7 @@ def create_app(settings: BrainSettings | None = None) -> Any:
             human_note=reason or f"Homeowner rejected insight '{resolved.title}'",
         )
         await orchestrator.memory.save_feedback(episode)
+        await _learn_from_exception_feedback(resolved, rejected=True)
         return {"status": "rejected", "insight": resolved.model_dump(mode="json")}
 
     @app.delete("/api/insights/{insight_id}")
@@ -362,6 +515,12 @@ def create_app(settings: BrainSettings | None = None) -> Any:
         if req.site_context is not None:
             orchestrator.settings.site_context = req.site_context
             await orchestrator.memory.save_ui_preference("site_context", req.site_context)
+        runtime_changes = req.model_dump(include=set(SettingsUpdateRequest.RUNTIME_FIELDS), exclude_none=True)
+        if runtime_changes:
+            try:
+                await orchestrator.update_runtime_settings(runtime_changes)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
         llm_updated = False
         if req.llm_model is not None and req.llm_model.strip():
             orchestrator.settings.llm_model = req.llm_model.strip()
@@ -383,11 +542,28 @@ def create_app(settings: BrainSettings | None = None) -> Any:
                 fallback_policy=orchestrator.settings.llm_fallback_policy.value,
             )
 
-        resp_settings = orchestrator.settings.model_dump()
-        raw_key = resp_settings.pop("llm_api_key", "")
-        resp_settings["has_api_key"] = bool(raw_key)
-        resp_settings["masked_api_key"] = f"{raw_key[:4]}••••••••{raw_key[-4:]}" if len(raw_key) >= 8 else ("••••" if raw_key else "")
-        return {"status": "updated", "settings": resp_settings}
+        return {"status": "updated", "settings": orchestrator.settings.public_dict()}
+
+    @app.get("/api/learned")
+    async def get_learned() -> dict[str, Any]:
+        """What the brain has learned locally: habits, routines, deployed-automation health and token savings."""
+        return await orchestrator.get_learned_snapshot()
+
+    @app.post("/api/undo/{undo_id}")
+    async def undo_action(undo_id: str) -> dict[str, Any]:
+        """Revert an action the brain took on its own."""
+        try:
+            return await orchestrator.handle_undo(undo_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc).strip("'\"")) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/exceptions/check")
+    async def check_exceptions_now() -> dict[str, Any]:
+        """Run the exception detectors immediately instead of waiting for the 5-minute schedule."""
+        findings = await orchestrator.check_exceptions()
+        return {"count": len(findings), "findings": [vars(f) | {"since": f.since.isoformat() if f.since else None} for f in findings]}
 
     @app.post("/api/llm/fallback")
     async def decide_llm_fallback(req: FallbackDecisionRequest) -> dict[str, Any]:
@@ -408,18 +584,21 @@ def create_app(settings: BrainSettings | None = None) -> Any:
             raise HTTPException(status_code=400, detail="Event simulation requires SmartHomeSimulatorAdapter")
 
         sim = orchestrator.smart_home
-        if req.scenario == "condensation_risk":
-            event = sim.emit_simulated_state_change("sensor.master_bedroom_humidity", "68.5")
-        elif req.scenario == "solar_ufh_gain":
-            event = sim.emit_simulated_state_change("sensor.outdoor_south_illuminance", "48500")
-        elif req.entity_id and req.new_value is not None:
-            event = sim.emit_simulated_state_change(
-                req.entity_id,
-                req.new_value,
-                context_user_id=req.context_user_id,
-            )
-        else:
-            raise HTTPException(status_code=400, detail="Provide either scenario or entity_id + new_value")
+        try:
+            if req.scenario == "condensation_risk":
+                event = sim.emit_simulated_state_change("sensor.master_bedroom_humidity", "68.5")
+            elif req.scenario == "solar_ufh_gain":
+                event = sim.emit_simulated_state_change("sensor.outdoor_south_illuminance", "48500")
+            elif req.entity_id and req.new_value is not None:
+                event = sim.emit_simulated_state_change(
+                    req.entity_id,
+                    req.new_value,
+                    context_user_id=req.context_user_id,
+                )
+            else:
+                raise HTTPException(status_code=400, detail="Provide either scenario or entity_id + new_value")
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc).strip("'\"")) from exc
 
         logs = await orchestrator.process_state_changed_event(event)
         return {
@@ -468,6 +647,7 @@ def create_app(settings: BrainSettings | None = None) -> Any:
     @app.post("/api/agents/custom")
     async def register_custom_agent(spec: AgentSpec) -> dict[str, Any]:
         registered = orchestrator.registry.register_custom_agent(spec)
+        orchestrator.invalidate_context_caches()
         return {"status": "registered", "agent": registered.model_dump()}
 
     @app.post("/api/context-notes")
