@@ -101,6 +101,8 @@ def topic_id_for(agent_id: str, title: str) -> str:
 
 
 def _clip(text: Any, limit: int = MAX_ITEM_TEXT) -> str:
+    if isinstance(text, (list, tuple)):  # some models answer a text field with a list of steps
+        text = " ".join(f"{i}) {str(t).strip()}" for i, t in enumerate((t for t in text if str(t).strip()), 1))
     return str(text or "").strip()[:limit]
 
 
@@ -144,7 +146,7 @@ def parse_findings(
     Turn a model answer into reviewable findings.
 
     * Default (`grounded=False`): the AI's own expertise. No sources are required; the finding is labelled as such and the
-      model's own confidence is kept.
+      model's own confidence is kept, capped at "medium" (nothing was verified).
     * Web research (`grounded=True`): findings are kept only when real sources came back, and confidence is capped by the
       evidence (low grounding coverage or only user-generated sources can never yield 'high').
     """
@@ -163,6 +165,8 @@ def parse_findings(
             continue
         claimed = str(f.get("confidence") or "medium").lower()
         confidence = claimed if claimed in ("high", "medium", "low") else "medium"
+        if not grounded and confidence == "high":
+            confidence = "medium"  # nothing was checked against a source, so it never earns a 'high' badge
         if grounded:
             if not reliable or coverage < 0.3:
                 confidence = "low"

@@ -144,6 +144,7 @@ Good to know:
 * **Site & Building Context**: free text describing your home that is given to the agents.
 * **Context notes** (*Memory & Rules*): permanent instructions such as hardware limits or preferences. Agents must obey them.
 * **Ignore list** (*Memory & Rules*): patterns (`sensor.vendor_*`, `*device_name*`, exact IDs) that are removed from triage, learning and agent context entirely.
+* **Minimum change per sensor** (*Memory & Rules*): for a noisy numeric sensor you name (exact ID or a wildcard such as `sensor.*_voltage`), moves smaller than the value you set are not treated as significant live events, so they never wake an AI agent. They are still recorded for learning. Nothing is applied automatically: only the sensors you list. Slow drift still counts, because each new value is compared with the last one that mattered.
 * **Household context** built locally: who is home, part of day, weekday/weekend, sun, weather and hourly forecast, electricity price and solar-forecast sensors (found by their names/classes).
 
 ### 4.2 Learning without AI

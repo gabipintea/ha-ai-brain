@@ -102,6 +102,12 @@ class IgnoredTargetRequest(BaseModel):
     reason: str = Field(default="", max_length=500)
 
 
+class MinChangeRequest(BaseModel):
+    pattern: str = Field(max_length=200)
+    min_change: float = Field(gt=0, le=1_000_000)
+    reason: str = Field(default="", max_length=500)
+
+
 class WatchCompileRequest(BaseModel):
     text: str = Field(min_length=1, max_length=1000)
 
@@ -364,6 +370,7 @@ def create_app(settings: BrainSettings | None = None) -> Any:
             "rejected_suggestions": [e.model_dump(mode="json") for e in rejected],
             "user_context_notes": [n.model_dump(mode="json") for n in context_notes],
             "ignored_targets": [t.model_dump(mode="json") for t in ignored_targets],
+            "min_change_rules": [r.model_dump() for r in await orchestrator.get_min_change_rules()],
             "recent_logs": [l.model_dump(mode="json") for l in logs],
             "total_logs_count": total_logs,
             "advisory_insights": [i.model_dump(mode="json") for i in insights],
@@ -703,5 +710,24 @@ def create_app(settings: BrainSettings | None = None) -> Any:
             "status": "deleted" if deleted else "not_found",
             "ignored_targets": [t.model_dump(mode="json") for t in targets],
         }
+
+    @app.post("/api/min-change")
+    async def add_min_change(req: MinChangeRequest) -> dict[str, Any]:
+        from ha_ai_brain.domain.min_change import MinChangeRule
+
+        pattern = req.pattern.strip().lower()
+        if not pattern or "." not in pattern.replace("*", "."):
+            raise HTTPException(status_code=400, detail="Give an entity id (sensor.name) or a wildcard such as sensor.*_voltage")
+        rules = [r for r in await orchestrator.get_min_change_rules() if r.pattern.lower() != pattern]
+        rules.append(MinChangeRule(pattern=pattern, min_change=req.min_change, reason=req.reason.strip()))
+        await orchestrator.save_min_change_rules(rules)
+        return {"status": "saved", "min_change_rules": [r.model_dump() for r in rules]}
+
+    @app.delete("/api/min-change/{rule_id}")
+    async def delete_min_change(rule_id: str) -> dict[str, Any]:
+        current = await orchestrator.get_min_change_rules()
+        rules = [r for r in current if r.rule_id != rule_id]
+        await orchestrator.save_min_change_rules(rules)
+        return {"status": "deleted" if len(rules) != len(current) else "not_found", "min_change_rules": [r.model_dump() for r in rules]}
 
     return app

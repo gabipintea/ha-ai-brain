@@ -168,7 +168,7 @@ class TestResearchDomain(unittest.TestCase):
         topic = ResearchTopic(topic_id="t", agent_id="a", title="Topic")
         raw = {"findings": [{"title": "F", "summary": "S", "confidence": "high", "references": ["Some guideline", "Another"]}, {"summary": ""}, "junk"]}
         items = parse_findings(raw, topic)
-        self.assertEqual([(i.basis, i.confidence, i.status, i.sources) for i in items], [("model_knowledge", "high", "proposed", [])])
+        self.assertEqual([(i.basis, i.confidence, i.status, i.sources) for i in items], [("model_knowledge", "medium", "proposed", [])])
         self.assertEqual(items[0].references, ["Some guideline", "Another"])
         self.assertEqual(parse_findings({"findings": [{"summary": "x", "confidence": "bogus"}]}, topic)[0].confidence, "medium")
         self.assertEqual(parse_findings({}, topic), [])

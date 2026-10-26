@@ -4,6 +4,10 @@ All notable changes to **HA AI Brain** are documented in this file.
 
 ## 0.2.0 - 2026-10-26
 
+### Added — per-sensor minimum change
+- Optional, user-defined minimum change for named numeric sensors (Memory & Rules); smaller moves do not count as significant live events.
+- Fixed: false "has not reported" alerts for change-only sensors that are normally silent at that time of day; unverified research findings are capped at medium confidence.
+
 ### Added — performance (tokens, database, CPU)
 - **Tokens**: agents with nothing to look at or operate in your home are skipped; batches are skipped when nothing relevant changed, with back-off when recent runs produced nothing; real-time bursts are coalesced (`realtime_coalesce_seconds`) and capped per agent (`max_agent_wakeups_per_hour`); calculation code is cached (7 days) and reused; research is cached by equipment types (14 days); leaner prompts with the static part first (provider prefix caching); provider-neutral `reasoning` hint (only mapped by the Gemini transport) and hidden thinking tokens counted in usage.
 - **Database**: compact telemetry layout with automatic in-place migration, auto-vacuum + WAL checkpointing, compressed run logs without duplicated code, daily retention for approvals, insights, feedback, outcomes and caches.

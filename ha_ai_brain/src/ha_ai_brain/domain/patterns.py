@@ -209,7 +209,7 @@ def mine_time_habits(
                         spread_minutes=spread,
                         description=(
                             f"{entity_id} is set to '{state}' around {format_minute(centre)} {cls_text} "
-                            f"({support} of {denominators} days, +-{int(spread)} min)"
+                            f"({support} of {denominators} days, ±{int(spread)} min)"
                         ),
                     )
                 )
@@ -355,6 +355,8 @@ def automation_from_pattern(
         conditions.append(homes[0] if len(homes) == 1 else {"condition": "or", "conditions": homes})
 
     name = _nice_name(pattern.entity_id, names)
+    if names and sum(1 for n in names.values() if n and n == names.get(pattern.entity_id)) > 1:
+        name = f"{name} ({pattern.entity_id.split('.', 1)[1]})"  # several entities share this friendly name
     if pattern.kind == "time_habit" and pattern.minute_of_day is not None:
         # Fire slightly *before* the typical manual action (so the automation gets there first), on a 5-minute grid.
         lead = min(pattern.spread_minutes or 0.0, 5.0)

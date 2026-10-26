@@ -246,6 +246,14 @@ class ProviderNeutralTests(unittest.TestCase):
         self.assertEqual(_output_tokens({}), 0)
 
 
+class ResearchTextTests(unittest.TestCase):
+    def test_list_text_is_joined_not_repr(self):
+        from ha_ai_brain.domain.research import _clip
+        out = _clip(["Verify the sensor.", "Set up an automation."])
+        self.assertEqual(out, "1) Verify the sensor. 2) Set up an automation.")
+        self.assertNotIn("[", out)
+
+
 class ConfigTests(unittest.TestCase):
     def test_log_level_env(self):
         with patch.dict(os.environ, {"BRAIN_LOG_LEVEL": "debug"}):
@@ -261,3 +269,50 @@ class ConfigTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SilenceDetectorTests(unittest.TestCase):
+    def _rows(self, hours_with_data, days=6):
+        from datetime import datetime, timedelta, timezone
+        base = datetime(2026, 10, 20, tzinfo=timezone.utc)
+        return [
+            ((base + timedelta(days=d, hours=h)).isoformat(), 100, 1.0)
+            for d in range(days) for h in hours_with_data
+        ]
+
+    def test_night_quiet_is_not_flagged_but_daytime_silence_is(self):
+        from datetime import datetime, timezone
+        from ha_ai_brain.domain.anomaly import _usually_reports_during
+        rows = self._rows(range(7, 19))  # reports only 07:00-18:59 UTC
+        utc = timezone.utc
+        night = _usually_reports_during(rows, datetime(2026, 10, 26, 19, 30, tzinfo=utc), datetime(2026, 10, 26, 23, 0, tzinfo=utc), utc)
+        day = _usually_reports_during(rows, datetime(2026, 10, 26, 8, 0, tzinfo=utc), datetime(2026, 10, 26, 12, 0, tzinfo=utc), utc)
+        self.assertFalse(night)
+        self.assertTrue(day)
+
+
+class MinChangeTests(unittest.TestCase):
+    def test_rule_matching_and_threshold(self):
+        from ha_ai_brain.domain.min_change import MinChangeRule, find_rule, is_below_min_change
+        rules = [MinChangeRule(pattern="sensor.*_voltage", min_change=5), MinChangeRule(pattern="sensor.a_voltage", min_change=10)]
+        self.assertEqual(find_rule(rules, "sensor.a_voltage").min_change, 10)
+        self.assertEqual(find_rule(rules, "sensor.b_voltage").min_change, 5)
+        self.assertIsNone(find_rule(rules, "sensor.temperature"))
+        self.assertTrue(is_below_min_change(rules[0], 230.0, 233.9))
+        self.assertFalse(is_below_min_change(rules[0], 230.0, 235.0))
+
+    def test_orchestrator_tracks_last_accepted_value(self):
+        from types import SimpleNamespace as NS
+        from ha_ai_brain.application.orchestrator import BrainOrchestrator
+        from ha_ai_brain.domain.min_change import MinChangeRule
+        o = BrainOrchestrator.__new__(BrainOrchestrator)
+        o._min_change_ref = {}
+        rules = [MinChangeRule(pattern="sensor.v", min_change=5)]
+        ev = lambda old, new: NS(entity_id="sensor.v", old_state=NS(numeric_value=old), new_state=NS(numeric_value=new))
+        self.assertTrue(o._below_user_min_change(rules, ev(230, 232)))
+        self.assertTrue(o._below_user_min_change(rules, ev(232, 234)))   # slow drift measured from 230
+        self.assertFalse(o._below_user_min_change(rules, ev(234, 236)))  # 6 away from 230
+        self.assertTrue(o._below_user_min_change(rules, ev(236, 237)))
+        # entities without a rule, or non-numeric states, are never filtered
+        other = NS(entity_id="sensor.t", old_state=NS(numeric_value=1), new_state=NS(numeric_value=1.1))
+        self.assertFalse(o._below_user_min_change(rules, other))

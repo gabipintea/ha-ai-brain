@@ -58,6 +58,7 @@ class DiscreteProfile:
     dwell: dict[str, tuple[int, float, float]] = field(default_factory=dict)  # state -> (n, p50 s, p90 s)
     per_day: float = 0.0
     gap_p95: float | None = None  # seconds between consecutive changes
+    gap_max: float | None = None  # longest pause seen in the learned window
     hourly_mean: float = 0.0
     hourly_std: float = 0.0
 
@@ -102,6 +103,7 @@ def build_discrete_profiles(transitions: list[Transition], window_start: datetim
             dwell={s: (len(v), _percentile(v, 0.5), _percentile(v, 0.9)) for s, v in dwell_lists.items() if v},
             per_day=n / days,
             gap_p95=_percentile(gaps, 0.95) if gaps else None,
+            gap_max=max(gaps) if gaps else None,
             hourly_mean=mean,
             hourly_std=std,
         )
@@ -181,7 +183,8 @@ def find_silent_entities(
         if st is None or st.state in NON_STATES or prof.days_active < MIN_ACTIVE_DAYS or prof.per_day < 2 or not prof.gap_p95:
             continue
         silence = (now - st.last_changed).total_seconds()
-        if silence > max(3 * prof.gap_p95, 6 * 3600):
+        # Bursty entities (many changes in short clusters) look busy on average; only a pause longer than any seen is unusual.
+        if silence > max(3 * prof.gap_p95, 6 * 3600, prof.gap_max or 0.0):
             out.append(
                 _finding(
                     "silent_entity", st, household, local_now,
@@ -256,6 +259,34 @@ def find_stuck_unavailable(
     ]
 
 
+def _usually_reports_during(
+    rows: list[tuple[str, int, float]], since: datetime, now: datetime, tz: tzinfo
+) -> bool:
+    """False when the sensor is normally silent at some hour of day inside the quiet window.
+
+    Change-only sensors (light level at night, motion, a value that rests at 0) legitimately stay quiet for hours; judging
+    them against an all-day median would raise a false alarm every night.
+    """
+    seen: dict[int, set] = {}
+    days: set = set()
+    for hour_iso, _, _ in rows:
+        t = parse_iso(hour_iso)
+        if t is None:
+            continue
+        local = to_local(t, tz)
+        days.add(local.date())
+        seen.setdefault(local.hour, set()).add(local.date())
+    if not days:
+        return True
+    hours = min(24, int((now - since).total_seconds() // 3600) + 1)
+    start = to_local(since, tz)
+    for k in range(hours):
+        h = (start.hour + k) % 24
+        if len(seen.get(h, ())) < 0.5 * len(days):
+            return False
+    return True
+
+
 def find_numeric_anomalies(
     states: dict[str, EntityState],
     hourly_rows: dict[str, list[tuple[str, int, float]]],
@@ -281,7 +312,9 @@ def find_numeric_anomalies(
         per_hour = sorted(n for _, n, _ in rows)
         typical_n = per_hour[len(per_hour) // 2]
         silence = (now - st.last_updated).total_seconds()
-        if st.state not in NON_STATES and typical_n >= 2 and silence > 3 * 3600:
+        if st.state not in NON_STATES and typical_n >= 2 and silence > 3 * 3600 and _usually_reports_during(
+            rows, st.last_updated, now, tz
+        ):
             out.append(
                 _finding(
                     "stale_sensor", st, household, local_now,

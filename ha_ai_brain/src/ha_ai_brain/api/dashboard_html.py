@@ -468,6 +468,23 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         <div id="ignoredTargetsList" class="scroll" style="margin-top:14px;"></div>
       </div>
     </div>
+
+    <div class="grid" style="margin-top:16px;">
+      <div class="card">
+        <div class="card-head">
+          <h2>Minimum change per sensor</h2>
+          <span class="pill" id="minChangeCountBadge" style="display:none;">0</span>
+        </div>
+        <div class="hint">For noisy numeric sensors only: moves smaller than this are not treated as significant live events (they are still recorded). Applies only to what you list here; supports <code>*</code> wildcards, e.g. <code>sensor.*_voltage</code>. Use the sensor's own unit.</div>
+        <div class="inline-form">
+          <input type="text" id="minChangePatternInput" placeholder="e.g. sensor.mains_voltage" />
+          <input type="number" id="minChangeValueInput" min="0" step="any" placeholder="Minimum change, e.g. 5" />
+          <input type="text" id="minChangeReasonInput" placeholder="Reason (optional)" />
+          <button class="primary" onclick="addMinChange()">Add</button>
+        </div>
+        <div id="minChangeList" class="scroll" style="margin-top:14px;"></div>
+      </div>
+    </div>
   </div>
 
   <!-- TAB: Learned -->
@@ -1356,6 +1373,14 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         <button class="danger icon" title="Remove" onclick="deleteIgnoredTarget('${esc(t.ignore_id)}')">Remove</button></div>`).join('')
       : '<div class="empty">Nothing is ignored.</div>';
 
+    const minRules = data.min_change_rules || [];
+    const mcBadge = $('minChangeCountBadge');
+    if (mcBadge) { mcBadge.style.display = minRules.length ? 'inline-block' : 'none'; mcBadge.textContent = minRules.length; }
+    $('minChangeList').innerHTML = minRules.length ? minRules.map(r => `
+      <div class="item row"><div><code>${esc(r.pattern)}</code> <span class="muted">ignore moves smaller than ${esc(String(r.min_change))}${r.reason ? ' &middot; ' + esc(r.reason) : ''}</span></div>
+        <button class="danger icon" title="Remove" onclick="deleteMinChange('${esc(r.rule_id)}')">Remove</button></div>`).join('')
+      : '<div class="empty">No minimum changes set.</div>';
+
     const agents = data.agents || [];
     const aBadge = $('agentsCountBadge');
     if (aBadge) aBadge.textContent = agents.length;
@@ -1683,8 +1708,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       </div>
       <div style="margin-top:6px; line-height:1.45;">${esc(it.summary)}</div>
       ${points ? `<ul style="margin:6px 0 0 18px; padding:0; font-size:0.86rem;">${points}</ul>` : ''}
-      ${it.how_to_apply ? `<div style="margin-top:6px; font-size:0.86rem;"><strong>Apply it:</strong> ${esc(it.how_to_apply)}</div>` : ''}
-      ${it.caveats ? `<div class="muted" style="margin-top:4px; font-size:0.82rem;">Caveats: ${esc(it.caveats)}</div>` : ''}
+      ${it.how_to_apply ? `<div style="margin-top:6px; font-size:0.86rem;"><strong>Apply it:</strong> ${esc([].concat(it.how_to_apply).join(' '))}</div>` : ''}
+      ${it.caveats ? `<div class="muted" style="margin-top:4px; font-size:0.82rem;">Caveats: ${esc([].concat(it.caveats).join(' '))}</div>` : ''}
       ${refs}
       ${src ? `<div style="margin-top:6px; font-size:0.82rem;">${src}</div>` : ''}
       <div class="btn-row">
@@ -2006,6 +2031,17 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   }
 
   async function deleteIgnoredTarget(id) { await fetch('./api/ignore-list/' + id, {method: 'DELETE'}); await refreshAll(); }
+
+  async function addMinChange() {
+    const pattern = $('minChangePatternInput').value.trim();
+    const min_change = parseFloat($('minChangeValueInput').value);
+    if (!pattern || !(min_change > 0)) return;
+    await post('./api/min-change', {pattern, min_change, reason: $('minChangeReasonInput').value.trim()});
+    $('minChangePatternInput').value = ''; $('minChangeValueInput').value = ''; $('minChangeReasonInput').value = '';
+    await refreshAll();
+  }
+
+  async function deleteMinChange(id) { await fetch('./api/min-change/' + id, {method: 'DELETE'}); await refreshAll(); }
 
   async function loadMoreLogs() {
     if (isLoadingMoreLogs) return;

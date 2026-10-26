@@ -24,6 +24,7 @@ from ha_ai_brain.domain.agent_scope import agent_can_act, agent_has_scope
 from ha_ai_brain.domain.arbiter import ConflictArbiter
 from ha_ai_brain.domain.automation_rules import AutomationRule, RuleAction, _collect_actions, find_equivalent_rule, parse_automation_config
 from ha_ai_brain.domain.expectations import ExceptionFinding, is_safety_entity
+from ha_ai_brain.domain.min_change import MinChangeRule, find_rule, is_below_min_change
 from ha_ai_brain.domain.lifecycle import AutomationReview, review_deployed_automation
 from ha_ai_brain.domain.outcomes import evaluate_outcome
 from ha_ai_brain.domain.patterns import automation_from_pattern
@@ -60,6 +61,7 @@ from ha_ai_brain.ports.sandbox import ComputationSandboxPort
 from ha_ai_brain.ports.smart_home import SmartHomePort
 from ha_ai_brain.ports.telemetry import TelemetryStorePort
 
+MIN_CHANGE_KEY = "min_change_rules"
 logger = logging.getLogger(__name__)
 
 # True while handling a critical unusual situation: its approval requests must reach you even during quiet hours.
@@ -152,6 +154,9 @@ class BrainOrchestrator:
         self._wake_times: dict[str, deque[float]] = {}
         self._ignored_cache: list[Any] = []
         self._ignored_cache_at = float("-inf")
+        self._min_change_cache: list[MinChangeRule] = []
+        self._min_change_cache_at = float("-inf")
+        self._min_change_ref: dict[str, float] = {}
         if hasattr(self.memory, "get_ui_preferences_sync"):
             self._apply_ui_preferences_dict(self.memory.get_ui_preferences_sync())
 
@@ -185,9 +190,42 @@ class BrainOrchestrator:
             self._ignored_cache_at = time.monotonic()
         return self._ignored_cache
 
+    async def get_min_change_rules(self) -> list[MinChangeRule]:
+        if time.monotonic() - self._min_change_cache_at > 60.0:
+            try:
+                raw = json.loads(await self.memory.get_kv(MIN_CHANGE_KEY) or "[]")
+                self._min_change_cache = [MinChangeRule.model_validate(r) for r in raw]
+            except Exception as exc:
+                logger.warning("Could not read minimum-change rules: %s", exc)
+                self._min_change_cache = []
+            self._min_change_cache_at = time.monotonic()
+        return self._min_change_cache
+
+    async def save_min_change_rules(self, rules: list[MinChangeRule]) -> None:
+        await self.memory.set_kv(MIN_CHANGE_KEY, json.dumps([r.model_dump() for r in rules]))
+        self._min_change_cache = rules
+        self._min_change_cache_at = time.monotonic()
+        self._min_change_ref.clear()
+
+    def _below_user_min_change(self, rules: list[MinChangeRule], event: StateChangedEvent) -> bool:
+        """True when the user set a minimum change for this entity and the value has not moved that far from the last accepted one."""
+        rule = find_rule(rules, event.entity_id)
+        value = event.new_state.numeric_value
+        if rule is None or value is None:
+            return False
+        ref = self._min_change_ref.get(event.entity_id)
+        if ref is None:
+            ref = event.old_state.numeric_value if event.old_state is not None else None
+        if ref is None or not is_below_min_change(rule, ref, value):
+            self._min_change_ref[event.entity_id] = value
+            return False
+        self._min_change_ref[event.entity_id] = ref
+        return True
+
     def invalidate_context_caches(self) -> None:
         """Notify agent graph to clear cached research findings and computations upon context or rule updates."""
         self._ignored_cache_at = float("-inf")
+        self._min_change_cache_at = float("-inf")
         if hasattr(self.agent_graph, "invalidate_context_caches"):
             self.agent_graph.invalidate_context_caches()
 
@@ -408,7 +446,12 @@ class BrainOrchestrator:
                 else:
                     delay = max(60.0, self.settings.batch_interval_minutes * 60.0)
                 self._next_batch_run_at = now + timedelta(seconds=delay)
-                await asyncio.sleep(delay)
+                # Sleep towards the *current* target: a manual run moves it, and the loop must follow instead of firing on the old time.
+                while self._running:
+                    remaining = (self._next_batch_run_at - datetime.now(timezone.utc)).total_seconds()
+                    if remaining <= 0:
+                        break
+                    await asyncio.sleep(min(remaining, 30.0))
                 if not self._running:
                     break
                 await self._expire_stale_approvals()
@@ -482,9 +525,14 @@ class BrainOrchestrator:
             ignored_targets=ignored_targets,
         )
 
+        if frames:
+            min_rules = await self.get_min_change_rules()
+            if min_rules and self._below_user_min_change(min_rules, event):
+                frames = []
+
         old_val = event.old_state.state if event.old_state else "?"
         if frames:
-            logger.info(
+            logger.debug(
                 "[LIVE EVENT -> SIGNIFICANT] %s (area=%s, origin=%s): '%s' -> '%s' | Routed to: %s",
                 event.entity_id,
                 event.new_state.area_id or "unassigned",
