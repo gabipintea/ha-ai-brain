@@ -246,7 +246,7 @@ def backtest_automation(
 
     parts = [f"Replayed {days:.0f} days of your history: it would have fired {len(fires)} time(s)"]
     if targets and fires:
-        parts.append(f"{aligned} matched what you did by hand (+-{window_minutes} min)")
+        parts.append(f"{aligned} matched what you did by hand (±{window_minutes} min)")
         if redundant:
             parts.append(f"{redundant} found the device already in the desired state")
         if contradicted:

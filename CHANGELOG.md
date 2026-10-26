@@ -2,13 +2,23 @@
 
 All notable changes to **HA AI Brain** are documented in this file.
 
-## 0.2.1 - 2026-10-26
+## 0.2.2 - 2026-10-26
+
+### Fixed
+- The next scheduled batch now follows the time shown in the header: a manual "Run analysis now" really postpones it, and the countdown no longer drifts.
+- Habit proposals: one device is proposed once per scan (a light/switch pair sharing one id, or two same-named entities at the same time), and a habit is no longer reported as "already automated" by a threshold-triggered automation such as an overheat cut-off. Light/switch twins of an automated device now count as automated.
+- Automations created by the brain carry a single "[AI Brain]" prefix, even when the model wrote one itself; older doubled prefixes are collapsed when shown.
+- Research findings stored by older versions are repaired when read: list answers show as numbered steps and unsourced findings no longer carry a "high" badge.
+- Agents describe built-in guidance as a "built-in reference" and only say "research" for approved research.
+- Deployed-automation health says "too new" instead of "healthy" for automations under 3 days old that have not run yet.
+- Backtest text uses ± instead of +-.
+- Quiet hours show whether they are on or off, with a "Clear quiet hours" button.
+
+## 0.2.0 - 2026-10-26
 
 ### Added — per-sensor minimum change
 - Optional, user-defined minimum change for named numeric sensors (Memory & Rules); smaller moves do not count as significant live events.
 - Fixed: false "has not reported" alerts for change-only sensors that are normally silent at that time of day; unverified research findings are capped at medium confidence.
-
-## 0.2.0 - 2026-10-26
 
 ### Added — performance (tokens, database, CPU)
 - **Tokens**: agents with nothing to look at or operate in your home are skipped; batches are skipped when nothing relevant changed, with back-off when recent runs produced nothing; real-time bursts are coalesced (`realtime_coalesce_seconds`) and capped per agent (`max_agent_wakeups_per_hour`); calculation code is cached (7 days) and reused; research is cached by equipment types (14 days); leaner prompts with the static part first (provider prefix caching); provider-neutral `reasoning` hint (only mapped by the Gemini transport) and hidden thinking tokens counted in usage.

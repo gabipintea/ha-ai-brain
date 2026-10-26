@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 import re
@@ -79,6 +80,32 @@ class KnowledgeItem(BaseModel):
     status: str = "proposed"  # proposed | approved | rejected
     created_at: datetime = Field(default_factory=utc_now)
     decided_at: datetime | None = None
+
+
+def _unlist(text: str) -> str:
+    """Older findings stored a list answer as its Python repr, e.g. "['Do this', 'Then that']": turn it back into numbered steps."""
+    raw = text.strip()
+    if raw.startswith("[") and raw.endswith("]"):
+        try:
+            parsed = ast.literal_eval(raw)
+        except (ValueError, SyntaxError):
+            return text
+        if isinstance(parsed, list) and all(isinstance(p, str) for p in parsed):
+            return " ".join(f"{i}) {p.strip()}" for i, p in enumerate((p for p in parsed if p.strip()), 1))
+    return text
+
+
+def repair_item(item: KnowledgeItem) -> KnowledgeItem:
+    """Bring a finding stored by an older version up to the current rules (list text, no 'high' badge without sources)."""
+    update: dict[str, Any] = {}
+    for name in ("how_to_apply", "caveats"):
+        value = getattr(item, name)
+        fixed = _unlist(value) if value else value
+        if fixed != value:
+            update[name] = fixed
+    if item.basis != "web_sources" and item.confidence == "high":
+        update["confidence"] = "medium"
+    return item.model_copy(update=update) if update else item
 
 
 # ---------------------------------------------------------------------------------------------- titles

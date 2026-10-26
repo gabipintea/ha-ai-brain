@@ -27,7 +27,7 @@ from ha_ai_brain.domain.expectations import ExceptionFinding, is_safety_entity
 from ha_ai_brain.domain.min_change import MinChangeRule, find_rule, is_below_min_change
 from ha_ai_brain.domain.lifecycle import AutomationReview, review_deployed_automation
 from ha_ai_brain.domain.outcomes import evaluate_outcome
-from ha_ai_brain.domain.patterns import automation_from_pattern
+from ha_ai_brain.domain.patterns import automation_from_pattern, is_duplicate_habit
 from ha_ai_brain.domain.timeutil import is_quiet_hours, parse_hhmm, parse_iso
 from ha_ai_brain.domain.undo import build_undo_calls, capture_snapshot
 from ha_ai_brain.domain.watches import WatchRule, WatchTracker, backtest_watch, evaluate_watch, validate_watch
@@ -1651,12 +1651,15 @@ class BrainOrchestrator:
         persons = person_entities(states)
         rejected = await self.memory.get_rejected_signatures()
         intents: list[ActionIntent] = []
+        proposed_patterns: list[Any] = []
         for p in patterns:
             if len(intents) >= self.settings.max_new_automations_per_cycle:
                 break
             strong = p.confidence >= 0.75 and (p.support_days >= 4 if p.kind == "time_habit" else p.support_days >= 5)
             if p.covered_by or not strong:
                 continue
+            if any(is_duplicate_habit(p, q, names) for q in proposed_patterns):
+                continue  # same device (or same-named twin) at the same time was already proposed in this scan
             proposal = automation_from_pattern(p, names, persons)
             if proposal is None or self.learning.equivalent_rule(proposal):
                 continue
@@ -1676,6 +1679,7 @@ class BrainOrchestrator:
             if intent.repeatable_signature() in rejected:
                 continue
             intents.append(intent)
+            proposed_patterns.append(p)
         if not intents:
             return None
 

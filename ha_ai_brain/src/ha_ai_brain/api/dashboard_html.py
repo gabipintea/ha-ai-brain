@@ -701,6 +701,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
               <input type="time" id="quietEndInput" onchange="saveQuietHours()" />
             </label>
           </div>
+          <div class="hint" style="margin:4px 0 10px; display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+            <span id="quietHint">Quiet hours are off.</span>
+            <button class="icon" type="button" onclick="clearQuietHours()">Clear quiet hours</button>
+          </div>
           <div class="field">Autonomy per device type
             <div class="hint" style="margin:4px 0 6px;">Override the global autonomy for one domain, for example lights autonomous while locks stay co-pilot. Critical security actions always need approval.</div>
             <div style="display:flex; gap:8px; flex-wrap:wrap;">
@@ -1635,6 +1639,12 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     await refreshAll();
   }
 
+  async function clearQuietHours() {
+    $('quietStartInput').value = '';
+    $('quietEndInput').value = '';
+    await saveQuietHours();
+  }
+
   let currentDomainAutonomy = {};
   function renderDomainAutonomy() {
     const entries = Object.entries(currentDomainAutonomy);
@@ -1671,6 +1681,12 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     setVal('wakeCapInput', st.max_agent_wakeups_per_hour);
     setVal('quietStartInput', st.quiet_hours_start);
     setVal('quietEndInput', st.quiet_hours_end);
+    const quietHint = $('quietHint');
+    if (quietHint) {
+      quietHint.textContent = (st.quiet_hours_start && st.quiet_hours_end && st.quiet_hours_start !== st.quiet_hours_end)
+        ? `Quiet hours are on: ${st.quiet_hours_start} to ${st.quiet_hours_end}. Low-priority pushes are held.`
+        : 'Quiet hours are off (both fields empty, or start equals end). Browsers may show an empty time field as 12:30 PM.';
+    }
     currentDomainAutonomy = st.domain_autonomy || {};
     renderDomainAutonomy();
   }

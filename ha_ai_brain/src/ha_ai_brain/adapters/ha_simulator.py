@@ -332,7 +332,7 @@ class SmartHomeSimulatorAdapter(SmartHomePort):
             entity_id=auto_eid,
             state="on",
             attributes={
-                "friendly_name": f"[AI Brain] {proposal.alias}",
+                "friendly_name": proposal.branded_alias,
                 "last_triggered": None,
                 "mode": proposal.mode,
             },
@@ -341,7 +341,7 @@ class SmartHomeSimulatorAdapter(SmartHomePort):
         return {
             "status": "automation_upserted",
             "automation_id": proposal.automation_id,
-            "alias": f"[AI Brain] {proposal.alias}",
+            "alias": proposal.branded_alias,
         }
 
     async def get_system_logs(self, limit: int = 50) -> list[dict[str, Any]]:
@@ -361,7 +361,7 @@ class SmartHomeSimulatorAdapter(SmartHomePort):
         return [
             {
                 "id": p.automation_id,
-                "alias": f"[AI Brain] {p.alias}",
+                "alias": p.branded_alias,
                 "trigger": p.trigger,
                 "condition": p.condition,
                 "action": p.action,

@@ -67,6 +67,13 @@ def review_deployed_automation(
 
     if days < 1:
         return AutomationReview(verdict="too_new", details="Deployed less than a day ago.", entity_id=entity_id, **base)
+    if days < 3 and not fires_since and state is not None and state.state != "off":
+        return AutomationReview(
+            verdict="too_new",
+            details=f"Deployed {days:.0f} day(s) ago and has not run yet - too early to judge.",
+            entity_id=entity_id,
+            **base,
+        )
     if state is None:
         return AutomationReview(
             verdict="missing",

@@ -22,6 +22,7 @@ from ha_ai_brain.domain.research import (
     is_similar_title,
     parse_findings,
     parse_topics,
+    repair_item,
     utc_now,
 )
 from ha_ai_brain.ports.llm import REASONING_DEFAULT, REASONING_OFF, LLMProviderPort
@@ -47,7 +48,7 @@ class KnowledgeStore:
         out: list[KnowledgeItem] = []
         for raw in (await self.memory.list_kv(ITEM_PREFIX)).values():
             try:
-                item = KnowledgeItem.model_validate_json(raw)
+                item = repair_item(KnowledgeItem.model_validate_json(raw))
             except ValueError:
                 continue
             if (status is None or item.status == status) and (agent_id is None or item.agent_id == agent_id):
@@ -56,7 +57,7 @@ class KnowledgeStore:
 
     async def get_item(self, item_id: str) -> KnowledgeItem | None:
         raw = await self.memory.get_kv(ITEM_PREFIX + item_id)
-        return KnowledgeItem.model_validate_json(raw) if raw else None
+        return repair_item(KnowledgeItem.model_validate_json(raw)) if raw else None
 
     async def save_item(self, item: KnowledgeItem) -> None:
         await self.memory.set_kv(ITEM_PREFIX + item.item_id, item.model_dump_json())

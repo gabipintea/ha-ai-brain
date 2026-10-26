@@ -200,6 +200,14 @@ class NativeAutomationProposal(BaseModel):
     discovered_pattern_rationale: str = ""
     source_pattern_id: str | None = None  # id of the mined statistical pattern this automation implements
 
+    @property
+    def branded_alias(self) -> str:
+        """Alias as stored in Home Assistant: one '[AI Brain]' prefix, even if the model already wrote one."""
+        name = self.alias.strip()
+        while name.lower().startswith("[ai brain]"):
+            name = name[len("[ai brain]"):].strip()
+        return f"[AI Brain] {name or 'automation'}"
+
     def extract_target_entities(self) -> list[str]:
         """Extract all physical entity IDs targeted by this automation's actions."""
         targets: list[str] = []

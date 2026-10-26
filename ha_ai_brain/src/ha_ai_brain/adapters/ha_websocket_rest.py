@@ -399,7 +399,7 @@ class HomeAssistantAdapter(SmartHomePort):
     async def upsert_automation(self, proposal: NativeAutomationProposal) -> dict[str, Any]:
         payload = {
             "id": proposal.automation_id,
-            "alias": f"[AI Brain] {proposal.alias}",
+            "alias": proposal.branded_alias,
             "description": proposal.description,
             "mode": proposal.mode,
             "trigger": proposal.trigger,

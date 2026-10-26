@@ -333,6 +333,31 @@ def _nice_name(entity_id: str, names: dict[str, str] | None) -> str:
     return entity_id.split(".", 1)[-1].replace("_", " ").title()
 
 
+_SWITCHABLE_SIBLINGS = frozenset({"light", "switch"})
+
+
+def same_device(a: str, b: str) -> bool:
+    """True for the same entity, or a light/switch pair sharing one object id (one physical device exposed twice)."""
+    if a == b:
+        return True
+    da, _, oa = a.partition(".")
+    db, _, ob = b.partition(".")
+    return oa == ob and da in _SWITCHABLE_SIBLINGS and db in _SWITCHABLE_SIBLINGS
+
+
+def is_duplicate_habit(a: MinedPattern, b: MinedPattern, names: dict[str, str] | None = None, window: int = 10) -> bool:
+    """Two habits that would produce the same automation: one physical device (or two entities sharing a friendly name) set to the
+    same state at about the same time on the same days."""
+    if a.kind != "time_habit" or b.kind != "time_habit" or a.minute_of_day is None or b.minute_of_day is None:
+        return False
+    if a.to_state != b.to_state or a.day_class != b.day_class or circular_distance(a.minute_of_day, b.minute_of_day) > window:
+        return False
+    if same_device(a.entity_id, b.entity_id):
+        return True
+    na, nb = (names or {}).get(a.entity_id, "").strip().lower(), (names or {}).get(b.entity_id, "").strip().lower()
+    return bool(na) and na == nb and a.entity_id.split(".", 1)[0] == b.entity_id.split(".", 1)[0]
+
+
 def automation_from_pattern(
     pattern: MinedPattern,
     names: dict[str, str] | None = None,

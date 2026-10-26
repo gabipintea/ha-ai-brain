@@ -5,11 +5,23 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from ha_ai_brain.domain.patterns import MinedPattern
+from ha_ai_brain.domain.patterns import MinedPattern, same_device
 from ha_ai_brain.domain.service_semantics import state_after_service
 from ha_ai_brain.domain.timeutil import WEEKDAY_NAMES, circular_distance, parse_hhmm
 
 _SIMPLE_CONDITIONS = frozenset({"time"})
+# Trigger kinds that fire on a threshold or a template, not on a recurring routine: an automation driven only by these
+# (for example an overheat cut-off) does not make a "usually off around 07:30" habit automated.
+_NON_ROUTINE_TRIGGERS = frozenset({"numeric_state", "template"})
+
+
+def clean_alias(alias: str) -> str:
+    """Collapse a repeated '[AI Brain]' prefix (older proposals could carry it twice)."""
+    name = alias.strip()
+    prefix = "[AI Brain]"
+    while name.lower().startswith(prefix.lower() + " [ai brain]"):
+        name = prefix + name[len(prefix) * 2 + 1 :]
+    return name
 
 
 def _listify(value: Any) -> list[Any]:
@@ -99,7 +111,7 @@ def parse_automation_config(cfg: dict[str, Any]) -> AutomationRule:
     """Parse a Home Assistant automation config (old `trigger/condition/action` or new plural keys)."""
     rule = AutomationRule(
         automation_id=str(cfg.get("id") or ""),
-        alias=str(cfg.get("alias") or cfg.get("id") or "automation"),
+        alias=clean_alias(str(cfg.get("alias") or cfg.get("id") or "automation")),
     )
     for trig in _listify(cfg.get("trigger") if "trigger" in cfg else cfg.get("triggers")):
         if not isinstance(trig, dict):
@@ -150,7 +162,7 @@ def pattern_covered_by(rules: list[AutomationRule], pattern: MinedPattern, toler
         if not rule.enabled:
             continue
         for act in rule.actions:
-            if act.entity_id != pattern.entity_id or act.result_state != pattern.to_state:
+            if not same_device(act.entity_id, pattern.entity_id) or act.result_state != pattern.to_state:
                 continue
             if pattern.kind == "time_habit" and pattern.minute_of_day is not None:
                 if any(circular_distance(m, pattern.minute_of_day) <= tolerance for m in rule.time_triggers) and _weekday_overlap(
@@ -158,7 +170,8 @@ def pattern_covered_by(rules: list[AutomationRule], pattern: MinedPattern, toler
                 ):
                     return rule.alias
                 # Event-driven rules (motion, sun, presence ...) may well produce the same routine.
-                if not rule.time_triggers and (rule.state_triggers or rule.other_triggers):
+                routine_triggers = rule.state_triggers or [t for t in rule.other_triggers if t not in _NON_ROUTINE_TRIGGERS]
+                if not rule.time_triggers and routine_triggers:
                     return rule.alias
             elif pattern.kind == "sequence":
                 if any(e == pattern.trigger_entity for e, _ in rule.state_triggers):
