@@ -913,8 +913,6 @@ class BrainOrchestrator:
         except Exception as exc:
             logger.debug("could not persist batch fingerprint: %s", exc)
         self._last_batch_run_at = datetime.now(timezone.utc)
-        if self.settings.operating_mode != OperatingMode.REALTIME_STREAM:
-            self._next_batch_run_at = self._last_batch_run_at + timedelta(minutes=self.settings.batch_interval_minutes)
         return run_log
 
     async def run_all_periodic_batch_analyses(
@@ -924,6 +922,9 @@ class BrainOrchestrator:
     ) -> list[AgentRunLog]:
         """Run the learned-habit scan and then batch analysis sequentially across all active registered agents."""
         logs: list[AgentRunLog] = []
+        if self.settings.operating_mode != OperatingMode.REALTIME_STREAM:
+            # Fixed once per run (not per agent) so the displayed "Next batch" time stays put while the agents work.
+            self._next_batch_run_at = datetime.now(timezone.utc) + timedelta(minutes=self.settings.batch_interval_minutes)
         try:
             habit_log = await self.run_pattern_cycle()
             if habit_log is not None:

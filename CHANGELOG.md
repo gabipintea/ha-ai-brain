@@ -2,6 +2,11 @@
 
 All notable changes to **HA AI Brain** are documented in this file.
 
+## 0.2.4 - 2026-10-27
+
+### Fixed
+- The "Next batch" time no longer creeps forward while an analysis is running. It is now set once per run (24 hours after you press "Run analysis now", or after a scheduled batch finishes) instead of being reset every time an individual agent finished.
+
 ## 0.2.3 - 2026-10-27
 
 ### Fixed
