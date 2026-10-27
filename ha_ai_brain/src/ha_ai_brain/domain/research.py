@@ -116,6 +116,20 @@ def title_tokens(title: str) -> frozenset[str]:
     return frozenset(_WORD.findall(title.lower()))
 
 
+def is_same_open_insight(title: str, agent_id: str, active: list[Any]) -> bool:
+    """True when `active` (insights still in the homeowner's list) already holds the same finding from the same agent.
+
+    An insight left in the list works as a to-do item, so a new one saying the same thing is not added."""
+    t = title.strip().lower()
+    for other in active:
+        if other.agent_id != agent_id:
+            continue
+        o = other.title.strip().lower()
+        if o == t or (len(o) >= 12 and (o in t or t in o)) or is_similar_title(title, other.title):
+            return True
+    return False
+
+
 def is_similar_title(a: str, b: str) -> bool:
     ta, tb = title_tokens(a), title_tokens(b)
     if not ta or not tb:

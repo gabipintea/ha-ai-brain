@@ -28,6 +28,7 @@ from ha_ai_brain.domain.min_change import MinChangeRule, find_rule, is_below_min
 from ha_ai_brain.domain.lifecycle import AutomationReview, review_deployed_automation
 from ha_ai_brain.domain.outcomes import evaluate_outcome
 from ha_ai_brain.domain.patterns import automation_from_pattern, is_duplicate_habit
+from ha_ai_brain.domain.research import is_same_open_insight
 from ha_ai_brain.domain.timeutil import is_quiet_hours, parse_hhmm, parse_iso
 from ha_ai_brain.domain.undo import build_undo_calls, capture_snapshot
 from ha_ai_brain.domain.watches import WatchRule, WatchTracker, backtest_watch, evaluate_watch, validate_watch
@@ -875,9 +876,13 @@ class BrainOrchestrator:
         insights = final_state.get("advisory_insights", [])
         run_id = f"run_{uuid.uuid4().hex[:8]}"
 
+        open_insights = await self.memory.get_advisory_insights(limit=200, status="active") if insights else []
         for insight in insights:
+            if is_same_open_insight(insight.title, insight.agent_id, open_insights):
+                continue  # already in the homeowner's list: it acts as a to-do item, do not add or announce it again
             insight.run_id = run_id
             await self.memory.save_advisory_insight(insight)
+            open_insights.append(insight)
             await self._notify_insight(insight)
 
         for intent in intents:

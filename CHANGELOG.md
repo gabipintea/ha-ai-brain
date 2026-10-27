@@ -2,6 +2,11 @@
 
 All notable changes to **HA AI Brain** are documented in this file.
 
+## 0.2.3 - 2026-10-27
+
+### Fixed
+- Insights written by the AI agents are no longer added (or announced) again while the same finding from the same agent is still in your list, so an insight left there works as a reliable to-do item. Mark it read once it is fixed; reject it to stop it for good.
+
 ## 0.2.2 - 2026-10-26
 
 ### Fixed

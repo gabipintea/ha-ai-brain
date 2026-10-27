@@ -10,7 +10,8 @@ from ha_ai_brain.domain.backtest import Timeline
 from ha_ai_brain.domain.lifecycle import review_deployed_automation
 from ha_ai_brain.domain.models import EntityState, NativeAutomationProposal
 from ha_ai_brain.domain.patterns import MinedPattern, is_duplicate_habit, same_device
-from ha_ai_brain.domain.research import KnowledgeItem, repair_item
+from ha_ai_brain.domain.models import AdvisoryInsight
+from ha_ai_brain.domain.research import KnowledgeItem, is_same_open_insight, repair_item
 
 NOW = datetime(2026, 10, 26, 12, 0, tzinfo=timezone.utc)
 
@@ -98,6 +99,19 @@ class AutomationHealthTests(unittest.TestCase):
         self.assertEqual(ran.verdict, "healthy")
         older = review_deployed_automation(deployed_at=NOW - timedelta(days=4), fires=[], **kwargs)
         self.assertEqual(older.verdict, "healthy")
+
+
+class OpenInsightTests(unittest.TestCase):
+    def test_same_finding_from_same_agent_is_not_repeated(self) -> None:
+        def ins(agent: str, title: str) -> AdvisoryInsight:
+            return AdvisoryInsight(agent_id=agent, category="maintenance", title=title, finding_details="d", recommended_human_action="a")
+
+        active = [ins("repair", "Degraded RF Link on Kitchen Water Leak Sensor")]
+        self.assertTrue(is_same_open_insight("Degraded RF Link on Kitchen Water Leak Sensor", "repair", active))
+        self.assertTrue(is_same_open_insight("Kitchen Water Leak Sensor Degraded RF Link", "repair", active))
+        self.assertFalse(is_same_open_insight("Degraded RF Link on Kitchen Water Leak Sensor", "climate", active))
+        self.assertFalse(is_same_open_insight("Low battery on Zigbee blind motor", "repair", active))
+        self.assertFalse(is_same_open_insight("Anything", "repair", []))
 
 
 if __name__ == "__main__":
