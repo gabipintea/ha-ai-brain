@@ -156,6 +156,7 @@ Good to know:
 * **Coverage detection**: the real triggers and actions of your UI-created Home Assistant automations are parsed, so a habit that is already automated is recognised.
 * **Automations from habits without AI**: strong, un-automated habits (≥ 75 % reliable over at least 4 days; sequences ≥ 5 times) become native automation proposals — up to 3 per cycle. They fire slightly *before* your usual manual action, add a "someone is home" condition when switching things on, and never automate unlocking or disarming.
 * **Backtesting**: every proposed automation (from habits or from an AI agent) is replayed over your recorded history: how often it would have fired, how many times that matches what you did by hand, how often you did the opposite. Proposals that clearly contradict your behaviour are dropped; the rest show a **Backtest** box on the approval card. Supported for time and state triggers; other triggers are labelled "not verifiable".
+* **Habits list** (Learned tab): a live view of your *current* habits, recomputed at most every 30 minutes from the last 30 days and limited to the 40 strongest. A habit disappears by itself when your behaviour changes and its reliability drops below the threshold; nothing is stored or needs clearing. Light/switch twins and identically named devices count as one habit. Each habit shows whether an automation already covers it.
 * **Baselines**: for each numeric sensor, its usual value for each hour of weekday/weekend.
 
 ### 4.3 Reacting to events in real time
@@ -170,6 +171,8 @@ Each active agent analyses a longer window (default 24 h, up to 720 h) and retur
 * **Advisory insights** — findings with evidence, a recommended action and an estimated impact.
 * **Native automation proposals** — checked against your existing and pending automations (by meaning, not just by name), your rejected proposals, and the backtest.
 * **Immediate parameter tweaks** — optional actions through the normal safety pipeline.
+
+An insight that is still in your list is **not offered again** by the same agent (same or very similar title), so you can leave meaningful ones there as a to-do list (for example "replace the battery"). Mark it read once it is fixed, **Reject** it to stop it for good, or delete it (it may then come back at a later analysis).
 
 Cost savers: an agent is **skipped when its inputs are unchanged** since the last run and few new events happened; research results are **cached** per entity set for 72 h; sensor history is summarised locally (min/max/mean/trend per entity over the whole window) instead of being sent raw. Scheduled batches also pause while the AI provider is in a quota cool-down.
 
@@ -241,12 +244,19 @@ You can override the level for one device type, for example `light → autonomou
 ### 4.10 Transparency and lifecycle
 * **Activity log**: every agent run with its research, computed signals, proposed actions and what happened to each (executed, awaiting approval, blocked, suppressed, shadow-logged). Last 300 runs.
 * **Learned tab**: learning progress, habits found (and whether already automated), AI calls avoided, automations proposed from habits, unusual situations, tokens used, recent autonomous actions with Undo, muted alerts, and the health of automations the brain created.
-* **Automation health review (daily)**: for each automation the brain deployed — did it ever run, do you keep reversing it, was it disabled or deleted? Problems become insights; a constantly-overridden automation gets a suggestion to switch it off (needs your approval).
+* **Automation health review (daily)**: for each automation the brain created (approved proposals and automations you wrote with *Create an automation*) — not for your other automations. Statuses: *healthy*, *too new* (deployed under 3 days ago and has not run yet), *never fired*, *overridden* (at least 4 runs and half or more reverted by hand within 15 minutes, counted over its whole life), *disabled* and *missing* (no longer in Home Assistant). Statuses are recomputed from scratch every day, so an automation can return to healthy once clean runs outweigh the reverted ones. Problems become insights (at most one per automation per week); an overridden automation also gets a suggestion to switch it off (needs your approval). Each tracked automation that still exists has **Disable / Enable** and **Delete** buttons (Delete asks for confirmation, removes it from Home Assistant and stops tracking it; automations defined in YAML must be removed there). Unhealthy ones also offer **Stop tracking** (forget it; the brain may propose it again) and **Never propose again** (forget it and block that proposal; undo it under *Memory & Rules → rejected suggestions*). Names are read live from Home Assistant, so renaming is fine.
+* **Re-adopting automations**: automations in Home Assistant whose *id* starts with `ai_brain_` but that the brain does not track (for example after a reinstall) are listed in the Learned tab; tick the ones that are really the brain's and press *Track selected*. Matching is by id, never by name, and nothing is changed in Home Assistant.
 * **Trust suggestions**: after five approvals of the same kind of action with no objection, the brain suggests *Always allow* or a more autonomous setting for that device type.
 * **Weekly digest**: AI calls avoided, habits automated, exceptions, undone actions, tokens, research waiting for review.
 * **Quota and cost monitor**: live status per provider with rate-limit cool-downs, session token counts and an estimated spend.
 
-### 4.11 AI providers
+### 4.11 Your own automations in plain language
+In *Memory & Rules → Create an automation* describe what you want ("close the kitchen blind at sunset on weekdays, only when someone is home"). The AI writes a native Home Assistant automation using only entities that exist; you see its interpretation, a history check, any warnings (for example an equivalent automation already exists) and the **YAML** (triggers, conditions, actions), which you can edit freely. **Create automation** adds it to Home Assistant (named `[AI Brain] …`, id `ai_brain_…`); **Cancel** discards the draft. Pressing Create is your approval, so it does not pass through Approvals. Created automations appear in the automation health review like any other.
+
+### 4.12 Backup and restore
+*Settings → Backup & restore* exports one JSON file with everything you decided or wrote: dashboard settings, notes, ignore list, minimum-change rules, watches, muted and dismissed alerts, rejected suggestions and insights, always-allow rules, the list of tracked automations, and approved/rejected research with its topics. Recorded history, logs, pending approvals and your API key are never included. **Import** first shows what the file contains (and warns if it holds always-allow rules), then merges it into the current installation; nothing is deleted and importing twice does not duplicate anything. Export before uninstalling the add-on, because uninstalling erases its data.
+
+### 4.13 AI providers
 Any model supported by LiteLLM: Google Gemini, OpenAI, Anthropic, OpenRouter, local Ollama, or a managed proxy URL. Two model slots (a **deep** model for batch analysis, research and compilation; a **fast** model for real-time reactions), ordered **fallback models** per provider, and a fallback policy: switch automatically and return to the primary when it recovers, ask you first, or never switch.
 
 ---
@@ -258,10 +268,10 @@ Any model supported by LiteLLM: Google Gemini, OpenAI, Anthropic, OpenRouter, lo
 | **Header** | Mode/autonomy badge, AI status, **Run analysis now**, **Pause brain**, time of the next scheduled batch |
 | **Approvals** | Pending actions and automations with reasoning and backtest; Approve once / Always allow / Dismiss / Reject; *Dismiss all* |
 | **Activity & Insights** | Agent run history; active insights and recommendations (dismiss, reject so it is never suggested again, delete); unusual-situation and watch alerts |
-| **Memory & Rules** | Always-allow rules (revoke); rejected actions and insights (unblock); **Watches**; context notes; ignore list |
-| **Learned** | Learning progress and statistics; recent autonomous actions (Undo); habits found; muted alerts; automation health |
+| **Memory & Rules** | Always-allow rules (revoke); rejected actions and insights (unblock); **Create an automation**; **Watches**; context notes; ignore list; minimum-change rules |
+| **Learned** | Learning progress and statistics; recent autonomous actions (Undo); habits found; muted alerts; automations the brain does not track yet (adopt); automation health with Disable / Enable / Delete |
 | **Research** | Research status and controls; findings waiting for your review; approved knowledge; upcoming topics |
-| **Settings** | Operating mode, autonomy, quota fallback, notification target; AI provider and quota; site context; Learning & Safety; list of agents |
+| **Settings** | Operating mode, autonomy, quota fallback, notification target; AI provider and quota; site context; Learning & Safety; list of agents; **Backup & restore** |
 
 ---
 
@@ -297,7 +307,7 @@ Any model supported by LiteLLM: Google Gemini, OpenAI, Anthropic, OpenRouter, lo
 Settings you change in the dashboard are saved in the brain's database and **take precedence over the add-on options** afterwards.
 
 ### Dashboard-only settings
-Real-time coalescing (`realtime_coalesce_seconds`, default 90: a burst of events in one area becomes one AI call) · maximum wake-ups per agent per hour (`max_agent_wakeups_per_hour`, default 6; safety events are exempt) · Per-device-type autonomy · AI quota fallback policy and fallback models · maximum autonomous actions per hour · "tell me when the brain acts on its own" · provider presets · watches · context notes · ignore list.
+Real-time coalescing (`realtime_coalesce_seconds`, default 90: a burst of events in one area becomes one AI call) · maximum wake-ups per agent per hour (`max_agent_wakeups_per_hour`, default 6; safety events are exempt) · Per-device-type autonomy · AI quota fallback policy and fallback models · maximum autonomous actions per hour · "tell me when the brain acts on its own" · provider presets · watches · created automations · context notes · ignore list · backup & restore.
 
 ### Advanced environment variables (for Docker / development)
 `BRAIN_BASELINE_MIN_DAYS` (3), `BRAIN_STORE_RETENTION_DAYS` (90), `BRAIN_STORE_BACKFILL_HOURS` (240), `BRAIN_HISTORY_MAX_ENTITIES` (300), `BRAIN_MAX_NEW_AUTOMATIONS` (3), `BRAIN_MAX_EXCEPTIONS_PER_CYCLE` (5), `BRAIN_MAX_EXCEPTIONS_PER_DAY` (20), `BRAIN_RESEARCH_TOPICS_PER_AGENT` (1), `BRAIN_MAX_ACTIONS_PER_ENTITY_PER_HOUR` (3), `BRAIN_KNOWLEDGE_DIR`, `BRAIN_TRUSTED_PROXIES`. See `.env.example`.
@@ -329,11 +339,13 @@ Real-time coalescing (`realtime_coalesce_seconds`, default 90: a burst of events
 
 **What is stored, and where.** Everything is in the add-on's own `/data` folder (included in Home Assistant backups); your custom agents and extra knowledge files are in `/config/ha_ai_brain/` (part of your configuration backups): a SQLite database with feedback, rules, approvals, insights, run logs, learned telemetry (state changes and hourly sensor averages, 90 days), watches, research, undo records and your dashboard settings. Your API key is stored in the add-on options/database in clear text, like other add-on secrets.
 
+**Uninstalling and reinstalling.** Uninstalling the add-on deletes its `/data` (database, history, decisions, watches) and its options (including the API key). Automations it created stay in Home Assistant and keep running, and `/config/ha_ai_brain/` (custom agents, knowledge files) is kept. After a reinstall the brain re-imports about 10 days of recorder history, needs about 3 days before alerts start, recognises your existing automations (so it does not duplicate them) and offers to re-adopt the ones with the `ai_brain_` id prefix. Decisions such as rejections, watches and always-allow rules are lost unless you restore a Home Assistant backup that includes the add-on or import an export file made with *Backup & restore*.
+
 **What is sent to your AI provider.** Prompts contain entity IDs, friendly names, states, units, areas, computed statistics and recent history summaries, your site context, notes and feedback, and — for research — a profile of your home (device types, manufacturers and models; no room names). Nothing is sent when no AI call is made (most of the time). When `privacy_scrub` is on, people, trackers and phone/notify target names are replaced by aliases (and restored in the answer), and e-mail addresses, IP/MAC addresses, coordinates and similar attributes are removed. Free text *you* write (site context, notes, watch requests) is only scrubbed for e-mails and network addresses, so avoid putting names in it if that matters to you. Use a local Ollama model if no data may leave your network.
 
 **Access.** The dashboard and API are only reachable through Home Assistant's ingress (the Supervisor proxy); direct requests from the network are rejected. In Docker/development use bind to localhost.
 
-**What it can do in Home Assistant.** The add-on uses the Supervisor-provided access to read states, history and registries, call services (including notification services), and create/update automations through the configuration API. Automations it creates are named **`[AI Brain] …`** and have an ID starting with `ai_brain_`, so you can always find and delete them.
+**What it can do in Home Assistant.** The add-on uses the Supervisor-provided access to read states, history and registries, call services (including notification services), and create/update automations through the configuration API. Automations it creates are named **`[AI Brain] …`** and have an ID starting with `ai_brain_`, so you can always find and delete them. The brain recognises its own automations by that **id**, never by name, and the dashboard's Disable/Delete buttons only work on automations it tracks.
 
 **Sandbox.** Calculation code written by the AI runs in a separate, restricted Python process: no imports besides `math`/`statistics`, no file or network access, no access to your keys, CPU/memory/time limits.
 
@@ -412,6 +424,8 @@ Approved research and your own notes are used together with this file-based know
 * Routines need a few days of history; unusual-but-legitimate periods (holidays, guests, repairs) can cause false alerts until the brain has seen more.
 * The AI can be wrong. Safety rests on the deterministic guardrails, validation of entities and services, backtests and your approvals — not on the AI's judgement.
 * Optional cited web research is Gemini-only. Research without it is the AI's general knowledge and is not verified.
+* Automation health and the Disable/Delete buttons cover only automations the brain created (or adopted), not your other automations. An automation whose habit has faded is only noticed when you start reverting it.
+* The add-on's data is erased on uninstall; use *Backup & restore* or a Home Assistant backup to keep your decisions.
 * The `license_key` option is informational in this version; nothing is locked behind it.
 * Habit/exception learning covers switchable, binary and presence entities and numeric sensors. Text, enum and media states are not learned.
 
@@ -421,6 +435,15 @@ Approved research and your own notes are used together with this file-based know
 
 **Does the AI come up with ideas for my home, or does it only react to abnormal behaviour?**
 Both. The scheduled analysis looks at the current states and recent trends of everything in each agent's field and proposes insights, recommendations and automations even when nothing is wrong — for example a condensation-risk warning built from your indoor humidity, indoor temperature and outdoor temperature sensors. In between, the AI is only woken for unusual or non-routine events, and the local unusual-situation detectors and your watches run without any AI. See [3.5](#35-when-does-the-ai-look-at-my-entities-and-what-does-it-not-see).
+
+**Can I describe an automation and have the brain create it?**
+Yes: *Memory & Rules → Create an automation*. You review and can edit the generated YAML before anything is created.
+
+**What happens to my settings and rules if I uninstall the add-on?**
+They are erased with the add-on's data, but the automations it created stay in Home Assistant. Use *Settings → Backup & restore* to export first, or restore a Home Assistant backup. See section 9.
+
+**An automation is "overridden" or "missing" in the health list. What should I do?**
+Overridden: edit it in Home Assistant, switch it off (the brain offers this) or delete it; the Disable and Delete buttons are in the same list. Missing: you deleted it; *Stop tracking* removes it from the list (the brain may propose it again), *Never propose again* also blocks it.
 
 **I just added new sensors. When will it notice?**
 At the next scheduled analysis (adding a sensor counts as a change), or immediately when you press **Run analysis now**.

@@ -339,18 +339,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
   <!-- TAB 1: Approvals -->
   <div id="pane-approvals" class="tab-pane active">
-    <div class="grid" style="margin-bottom:16px;">
-      <div class="card">
-        <div class="card-head"><h2>Create an automation</h2></div>
-        <div class="hint">Describe it in your own words. The AI writes a native Home Assistant automation; you review and edit the YAML, then create or cancel. Nothing is created until you press Create.</div>
-        <textarea id="autoText" rows="2" maxlength="1500" style="width:100%; box-sizing:border-box; margin-top:8px; background:var(--bg); color:var(--text); border:1px solid var(--border); border-radius:6px; padding:8px 10px; font-family:inherit; font-size:13px;" placeholder="e.g. Close the kitchen blind at sunset on weekdays, but only when someone is home"></textarea>
-        <div class="btn-row" style="align-items:center;">
-          <button class="primary" id="autoDraftBtn" onclick="draftAutomation()">Write automation</button>
-          <span id="autoMsg" class="muted"></span>
-        </div>
-        <div id="autoDraft"></div>
-      </div>
-    </div>
     <div class="grid">
       <div class="card">
         <div class="card-head">
@@ -435,6 +423,18 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       </div>
     </div>
 
+    <div class="grid" style="margin-top:16px;">
+      <div class="card">
+        <div class="card-head"><h2>Create an automation</h2></div>
+        <div class="hint">Describe it in your own words. The AI writes a native Home Assistant automation; you review and edit the YAML, then create or cancel. Nothing is created until you press Create.</div>
+        <textarea id="autoText" rows="2" maxlength="1500" style="width:100%; box-sizing:border-box; margin-top:8px; background:var(--bg); color:var(--text); border:1px solid var(--border); border-radius:6px; padding:8px 10px; font-family:inherit; font-size:13px;" placeholder="e.g. Close the kitchen blind at sunset on weekdays, but only when someone is home"></textarea>
+        <div class="btn-row" style="align-items:center;">
+          <button class="primary" id="autoDraftBtn" onclick="draftAutomation()">Write automation</button>
+          <span id="autoMsg" class="muted"></span>
+        </div>
+        <div id="autoDraft"></div>
+      </div>
+    </div>
     <div class="grid" style="margin-top:16px;">
       <div class="card">
         <div class="card-head"><h2>Watches</h2><span class="pill" id="watchCount">0</span></div>

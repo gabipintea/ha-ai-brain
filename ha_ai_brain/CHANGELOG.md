@@ -2,6 +2,11 @@
 
 All notable changes to **HA AI Brain** are documented in this file.
 
+## 0.2.7 - 2026-10-28
+
+### Changed
+- README and the user manual (DOCS.md) brought up to date: creating automations in plain language, backup & restore, re-adopting the brain's automations, the automation health statuses and Disable/Enable/Delete buttons, how the habits list and repeated insights behave, and what an uninstall/reinstall does.
+
 ## 0.2.6 - 2026-10-28
 
 ### Added
@@ -12,7 +17,7 @@ All notable changes to **HA AI Brain** are documented in this file.
 ## 0.2.5 - 2026-10-28
 
 ### Added
-- **Create an automation in your own words** (Approvals tab). Describe it, the AI writes a native Home Assistant automation, you review and edit the YAML (triggers, conditions, actions) with a history check, then press Create or Cancel. Entities that do not exist are refused. Automations created this way show up under Deployed automation health like any other.
+- **Create an automation in your own words** (Memory & Rules tab). Describe it, the AI writes a native Home Assistant automation, you review and edit the YAML (triggers, conditions, actions) with a history check, then press Create or Cancel. Entities that do not exist are refused. Automations created this way show up under Deployed automation health like any other.
 - Deployed automation health: **Stop tracking** and **Never propose again** buttons on automations that are missing, disabled, overridden or never ran. The panel text now explains that it only lists automations created through the brain.
 
 ### Fixed

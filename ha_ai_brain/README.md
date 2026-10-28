@@ -30,6 +30,9 @@
 * Broken routines, states that last far too long, entities that went silent, flapping devices, sensors far out of range, sensors that stopped reporting, many entities unavailable at once, automations that did not run, and "the house is open while everyone is away".
 * Learns from your reactions: dismiss an alert and it waits longer, reject it and it stays muted.
 
+**Your own automations in plain language**
+* Describe an automation in a sentence; the AI writes a native Home Assistant automation, you review and edit the YAML, then create or cancel.
+
 **Your own alerts in plain language (Watches)**
 * Describe a condition in a sentence; the AI interprets it once, shows how it understood you and how often it would have fired on your history; from then on it runs locally for free.
 
@@ -50,7 +53,8 @@
 * Skips agents with nothing to do, skips unchanged batches, coalesces event bursts, caches calculations and research, compact database with automatic clean-up and batched writes. Works the same with any AI provider.
 
 **Transparent**
-* Dashboard with approvals, a full activity log with the agents' reasoning, what it has learned, automation health reviews, research waiting for your review, and a weekly digest.
+* Dashboard with approvals, a full activity log with the agents' reasoning, what it has learned, automation health reviews (with Disable / Enable / Delete for the automations it created), research waiting for your review, and a weekly digest.
+* **Backup & restore**: export your decisions, rules and watches to a file and import them after a reinstall; the brain can also re-adopt its own automations by their `ai_brain_` id.
 
 ---
 
