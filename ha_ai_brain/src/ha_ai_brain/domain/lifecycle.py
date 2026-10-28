@@ -99,7 +99,7 @@ def review_deployed_automation(
         )
     return AutomationReview(
         verdict="healthy",
-        details=f"{len(fires_since)} runs in {days:.0f} days, {overrides} overridden.",
+        details=f"{len(fires_since)} {'run' if len(fires_since) == 1 else 'runs'} in {days:.0f} {'day' if round(days) == 1 else 'days'}, {overrides} overridden.",
         entity_id=entity_id,
         **base,
     )

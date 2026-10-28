@@ -112,6 +112,20 @@ class WatchCompileRequest(BaseModel):
     text: str = Field(min_length=1, max_length=1000)
 
 
+class AutomationDraftRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=1500)
+
+
+class AutomationCreateRequest(BaseModel):
+    yaml: str = Field(min_length=1, max_length=20000)
+    automation_id: str = Field(default="", max_length=64)
+    request_text: str = Field(default="", max_length=1500)
+
+
+class ForgetAutomationRequest(BaseModel):
+    block: bool = False
+
+
 class ResearchDecisionRequest(BaseModel):
     decision: str = Field(pattern="^(approve|reject)$")
 
@@ -261,6 +275,25 @@ def create_app(settings: BrainSettings | None = None) -> Any:
     @app.get("/api/watches")
     async def list_watches() -> dict[str, Any]:
         return {"watches": [w.model_dump(mode="json") for w in await orchestrator.watches.list()]}
+
+    @app.post("/api/automations/draft")
+    async def draft_automation(req: AutomationDraftRequest) -> dict[str, Any]:
+        """One AI call turns plain language into an editable automation draft (nothing is created yet)."""
+        return await orchestrator.draft_automation(req.text)
+
+    @app.post("/api/automations/create")
+    async def create_automation(req: AutomationCreateRequest) -> dict[str, Any]:
+        try:
+            return await orchestrator.create_automation_from_yaml(req.yaml, req.automation_id, req.request_text)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/automations/{automation_id}/forget")
+    async def forget_automation(automation_id: str, req: ForgetAutomationRequest) -> dict[str, Any]:
+        try:
+            return await orchestrator.forget_deployed_automation(automation_id, req.block)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Automation is not tracked") from exc
 
     @app.post("/api/watches/compile")
     async def compile_watch(req: WatchCompileRequest) -> dict[str, Any]:

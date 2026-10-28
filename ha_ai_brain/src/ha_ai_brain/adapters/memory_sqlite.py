@@ -275,6 +275,14 @@ class SQLiteMemoryAdapter(MemoryStorePort):
             latest.append(ep)
         return latest
 
+    async def delete_accepted_automation(self, signature: str) -> bool:
+        cur = self._conn.execute(
+            "DELETE FROM feedback_episodes WHERE action_signature = ? AND polarity IN (?, ?)",
+            (signature, FeedbackPolarity.ENDORSED_ONCE.value, FeedbackPolarity.ENDORSED_REPEATABLE.value),
+        )
+        self._conn.commit()
+        return cur.rowcount > 0
+
     async def unblock_rejected_signature(self, signature: str) -> bool:
         cur = self._conn.execute(
             "DELETE FROM feedback_episodes WHERE action_signature = ? AND polarity = ?",

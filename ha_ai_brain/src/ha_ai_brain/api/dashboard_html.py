@@ -48,6 +48,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       background: rgba(79,156,249,0.14); color: var(--accent); border: 1px solid rgba(79,156,249,0.3);
       white-space: nowrap; flex-shrink: 0;
     }
+    .pill.wrap { white-space: normal; flex-shrink: 1; max-width: 100%; min-width: 0; text-transform: none; overflow-wrap: anywhere; line-height: 1.3; }
     .pill.ok { background: rgba(52,211,153,0.12); color: var(--ok); border-color: rgba(52,211,153,0.3); }
     .pill.warn { background: rgba(251,191,36,0.12); color: var(--warn); border-color: rgba(251,191,36,0.3); }
     .pill.danger { background: rgba(248,113,113,0.12); color: var(--danger); border-color: rgba(248,113,113,0.3); }
@@ -168,6 +169,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     .scroll {
       max-height: 520px;
       overflow-y: auto;
+      overflow-x: hidden;
       padding-right: 6px;
       scrollbar-width: thin;
       scrollbar-color: rgba(255, 255, 255, 0.18) transparent;
@@ -337,6 +339,18 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
   <!-- TAB 1: Approvals -->
   <div id="pane-approvals" class="tab-pane active">
+    <div class="grid" style="margin-bottom:16px;">
+      <div class="card">
+        <div class="card-head"><h2>Create an automation</h2></div>
+        <div class="hint">Describe it in your own words. The AI writes a native Home Assistant automation; you review and edit the YAML, then create or cancel. Nothing is created until you press Create.</div>
+        <textarea id="autoText" rows="2" maxlength="1500" style="width:100%; box-sizing:border-box; margin-top:8px; background:var(--bg); color:var(--text); border:1px solid var(--border); border-radius:6px; padding:8px 10px; font-family:inherit; font-size:13px;" placeholder="e.g. Close the kitchen blind at sunset on weekdays, but only when someone is home"></textarea>
+        <div class="btn-row" style="align-items:center;">
+          <button class="primary" id="autoDraftBtn" onclick="draftAutomation()">Write automation</button>
+          <span id="autoMsg" class="muted"></span>
+        </div>
+        <div id="autoDraft"></div>
+      </div>
+    </div>
     <div class="grid">
       <div class="card">
         <div class="card-head">
@@ -527,7 +541,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     <div class="grid" style="margin-top:16px;">
       <div class="card">
         <div class="card-head"><h2>Deployed automation health</h2></div>
-        <div class="hint">Checked daily: do the automations the brain created run, and do you keep reverting them?</div>
+        <div class="hint">Checked daily. This lists only automations created through the brain (approved proposals and ones you wrote above), not all your Home Assistant automations. Renaming one in Home Assistant is fine. If you deleted one, "Stop tracking" lets the brain propose it again later, "Never propose again" does not.</div>
         <div id="reviewsList" class="scroll" style="margin-top:8px;"></div>
       </div>
     </div>
@@ -1881,6 +1895,69 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     await refreshLearned();
   }
 
+  let autoDraftId = '';
+  let autoDraftText = '';
+
+  async function draftAutomation() {
+    const text = ($('autoText').value || '').trim();
+    if (!text) return;
+    $('autoMsg').textContent = 'Writing...';
+    $('autoDraftBtn').disabled = true;
+    let r;
+    try { r = await (await post('./api/automations/draft', {text})).json(); } catch (e) { r = {errors: ['Request failed']}; }
+    $('autoDraftBtn').disabled = false;
+    $('autoMsg').textContent = '';
+    autoDraftText = text;
+    renderAutomationDraft(r);
+  }
+
+  function renderAutomationDraft(r) {
+    const errors = r.errors || [];
+    let html = '';
+    if (errors.length) html += `<div class="banner" style="display:block; margin:10px 0;">${errors.map(e => esc(e)).join('<br>')}</div>`;
+    if (r.draft) {
+      autoDraftId = r.draft.automation_id;
+      const bt = r.backtest;
+      html += `<div class="item" style="margin-top:10px;">
+        ${r.explanation ? `<div style="font-size:0.84rem;">${esc(r.explanation)}</div>` : ''}
+        ${bt && bt.summary ? `<div class="muted" style="font-size:0.8rem; margin-top:6px;">🧪 ${esc(bt.summary)}</div>` : ''}
+        ${(r.warnings || []).map(w => `<div class="muted" style="font-size:0.8rem; margin-top:4px;">⚠ ${esc(w)}</div>`).join('')}
+        <div class="muted" style="font-size:0.78rem; margin-top:8px;">Triggers, conditions and actions (YAML). You can edit it before creating.</div>
+        <textarea id="autoYaml" rows="14" spellcheck="false" style="width:100%; box-sizing:border-box; margin-top:4px; background:#080d18; color:#c3cee3; border:1px solid var(--border); border-radius:6px; padding:8px 10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:12px;">${esc(r.draft.yaml)}</textarea>
+        <div class="btn-row"><button class="primary" id="autoCreateBtn" onclick="createAutomation()">Create automation</button><button class="icon" onclick="discardAutomationDraft()">Cancel</button></div>
+        <div id="autoCreateMsg" class="muted" style="font-size:0.82rem; margin-top:4px;"></div>
+      </div>`;
+    } else if (errors.length) {
+      html += '<div class="btn-row"><button class="icon" onclick="discardAutomationDraft()">Dismiss</button></div>';
+    }
+    $('autoDraft').innerHTML = html;
+  }
+
+  function discardAutomationDraft() { autoDraftId = ''; $('autoDraft').innerHTML = ''; }
+
+  async function createAutomation() {
+    const yamlText = $('autoYaml').value;
+    $('autoCreateBtn').disabled = true;
+    $('autoCreateMsg').textContent = 'Creating...';
+    const res = await post('./api/automations/create', {yaml: yamlText, automation_id: autoDraftId, request_text: autoDraftText});
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      $('autoCreateBtn').disabled = false;
+      $('autoCreateMsg').textContent = typeof body.detail === 'string' ? body.detail : 'Could not create this automation.';
+      return;
+    }
+    $('autoText').value = '';
+    $('autoDraft').innerHTML = `<div class="item" style="margin-top:10px;">✅ Created "${esc(body.alias)}" in Home Assistant. It is tracked under Deployed automation health.</div>`;
+    autoDraftId = '';
+    await refreshAll();
+  }
+
+  async function forgetAutomation(id, block) {
+    if (block && !confirm('Remove it from this list and never propose this automation again?')) return;
+    await post('./api/automations/' + encodeURIComponent(id) + '/forget', {block});
+    await refreshLearned();
+  }
+
   async function refreshLearned() {
     let d;
     try {
@@ -1913,7 +1990,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         <div>${esc(p.description)}</div>
         <div style="margin-top:4px; display:flex; gap:6px; flex-wrap:wrap;">
           <span class="pill">${Math.round(p.confidence * 100)}% confidence</span>
-          ${p.covered_by ? `<span class="pill ok">already automated: ${esc(p.covered_by)}</span>` : '<span class="pill warn">not automated yet</span>'}
+          ${p.covered_by ? `<span class="pill ok wrap">already automated: ${esc(p.covered_by)}</span>` : '<span class="pill warn">not automated yet</span>'}
         </div></div>`).join('')
       : '<div class="empty">No recurring habits found yet. They appear after a few days of recorded history.</div>';
 
@@ -1926,7 +2003,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     $('reviewsList').innerHTML = reviews.length ? reviews.map(r => `<div class="item">
         <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;"><strong>${esc(r.alias)}</strong>
           <span class="pill ${VERDICT_PILL[r.verdict] || ''}">${esc(String(r.verdict).replace('_', ' '))}</span></div>
-        <div class="muted" style="font-size:0.82rem; margin-top:3px;">${esc(r.details)}</div></div>`).join('')
+        <div class="muted" style="font-size:0.82rem; margin-top:3px;">${esc(r.details)}</div>
+        ${r.verdict !== 'healthy' && r.verdict !== 'too_new' ? `<div class="btn-row" style="margin-top:6px;">
+          <button class="icon" data-id="${esc(r.automation_id)}" onclick="forgetAutomation(this.dataset.id, false)">Stop tracking</button>
+          <button class="icon" data-id="${esc(r.automation_id)}" onclick="forgetAutomation(this.dataset.id, true)">Never propose again</button></div>` : ''}</div>`).join('')
       : '<div class="empty">No automations deployed by the brain yet.</div>';
   }
 

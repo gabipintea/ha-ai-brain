@@ -53,6 +53,10 @@ class MemoryStorePort(ABC):
         """Return historical native automations accepted and deployed by the homeowner."""
         return []
 
+    async def delete_accepted_automation(self, signature: str) -> bool:
+        """Stop tracking a deployed automation (removes its acceptance records). Returns True if anything was removed."""
+        return False
+
     async def unblock_rejected_signature(self, signature: str) -> bool:
         """Remove explicit rejections for a signature so the suggestion may be proposed again."""
         return False

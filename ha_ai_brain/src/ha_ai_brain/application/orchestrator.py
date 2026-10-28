@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 import logging
+import re
 import time
 from typing import Any
 import uuid
@@ -22,6 +23,13 @@ from ha_ai_brain.application.watch_service import WatchService
 from ha_ai_brain.config import AutonomyLevel, BrainSettings, FallbackPolicy, OperatingMode
 from ha_ai_brain.domain.agent_scope import agent_can_act, agent_has_scope
 from ha_ai_brain.domain.arbiter import ConflictArbiter
+from ha_ai_brain.domain.automation_draft import (
+    COMPILER_SYSTEM_PROMPT as AUTOMATION_COMPILER_PROMPT,
+    proposal_from_ai,
+    proposal_from_yaml,
+    proposal_to_yaml,
+    validate_draft,
+)
 from ha_ai_brain.domain.automation_rules import AutomationRule, RuleAction, _collect_actions, find_equivalent_rule, parse_automation_config
 from ha_ai_brain.domain.expectations import ExceptionFinding, is_safety_entity
 from ha_ai_brain.domain.min_change import MinChangeRule, find_rule, is_below_min_change
@@ -31,7 +39,8 @@ from ha_ai_brain.domain.patterns import automation_from_pattern, is_duplicate_ha
 from ha_ai_brain.domain.research import is_same_open_insight
 from ha_ai_brain.domain.timeutil import is_quiet_hours, parse_hhmm, parse_iso
 from ha_ai_brain.domain.undo import build_undo_calls, capture_snapshot
-from ha_ai_brain.domain.watches import WatchRule, WatchTracker, backtest_watch, evaluate_watch, validate_watch
+from ha_ai_brain.domain.promptfmt import dumps as prompt_dumps
+from ha_ai_brain.domain.watches import WatchRule, WatchTracker, backtest_watch, build_entity_catalog, evaluate_watch, validate_watch
 from ha_ai_brain.domain.context import person_entities
 from ha_ai_brain.domain.guardrails import GuardrailDecisionType, GuardrailEngine
 from ha_ai_brain.domain.models import (
@@ -1865,7 +1874,10 @@ class BrainOrchestrator:
 
                     await self.telemetry.record_transitions([Transition(state.entity_id, last, "", AUTOMATION_FIRE_STATE, "ha_automation")])
                 fires = await self.telemetry.get_fires(state.entity_id, since=ep.created_at)
-            rule = AutomationRule(automation_id=automation_id, alias=str(data.get("alias") or automation_id))
+            # Show the name it has in Home Assistant today (the homeowner may have renamed it), without the brain's own prefix.
+            shown = str((state.attributes.get("friendly_name") if state is not None else "") or data.get("alias") or automation_id)
+            shown = re.sub(r"^(\s*\[ai brain\]\s*)+", "", shown, flags=re.IGNORECASE).strip() or automation_id
+            rule = AutomationRule(automation_id=automation_id, alias=shown)
             _collect_actions(data.get("action") or [], rule)
             targets = sorted({a.entity_id for a in rule.actions})
             tl = await self.learning.timeline_for(targets, now, days=30) if targets else await self.learning.timeline_for([], now, days=0)
@@ -2105,6 +2117,12 @@ class BrainOrchestrator:
         win = await self.learning.window(now)
         days = (win[1] - win[0]).total_seconds() / 86400.0 if win else 0.0
         patterns = await self.learning.get_patterns(now, self._cached_states or None)
+        names = {eid: str(st.attributes.get("friendly_name") or "") for eid, st in (self._cached_states or {}).items()}
+        distinct: list[Any] = []
+        for p in patterns:  # light/switch twins and same-named duplicates are one habit, not several
+            if not any(is_duplicate_habit(p, q, names) for q in distinct):
+                distinct.append(p)
+        patterns = distinct
         try:
             lifecycle = json.loads(await self.memory.get_kv("lifecycle:last") or "[]")
         except ValueError:
@@ -2126,6 +2144,124 @@ class BrainOrchestrator:
             "undo_records": await self.list_undo_records(),
             "muted_exceptions": self.learning.muted_exceptions(),
         }
+
+    # ==================================================================================================
+    # Homeowner-authored automations (plain language -> reviewed YAML -> native Home Assistant automation)
+    # ==================================================================================================
+    async def draft_automation(self, text: str) -> dict[str, Any]:
+        """One AI call turns a request into an editable draft. Nothing is created in Home Assistant yet."""
+        text = (text or "").strip()
+        empty: dict[str, Any] = {"draft": None, "warnings": [], "explanation": "", "backtest": None}
+        if len(text) < 8:
+            return {**empty, "errors": ["Describe what the automation should do."]}
+        states = self._cached_states or await self.smart_home.get_all_states()
+        raw = await self.llm.generate_json(
+            system_prompt=AUTOMATION_COMPILER_PROMPT,
+            user_prompt=prompt_dumps({"request": text, "entities": build_entity_catalog(text, states)}),
+            use_fast_tier=False,
+            context_hint={"task": "draft_automation", "agent_id": "automation_compiler"},
+        )
+        if not raw:
+            return {**empty, "errors": ["No AI provider is configured or it did not answer. Configure one in Settings."]}
+        if raw.get("error"):
+            return {**empty, "errors": [str(raw["error"])]}
+        payload = raw.get("automation")
+        if not isinstance(payload, dict):
+            return {**empty, "errors": ["The AI answer did not contain an automation. Try rephrasing."]}
+        try:
+            proposal = proposal_from_ai(payload)
+        except ValueError as exc:
+            return {**empty, "errors": [str(exc)], "explanation": str(raw.get("explanation", ""))}
+        proposal.discovered_pattern_rationale = text
+        available = await self.smart_home.get_available_services()
+        proposal = normalize_automation_proposal(
+            proposal=proposal,
+            available_services=available,
+            available_notify_services=await self.smart_home.get_available_notify_services(),
+            preferred_notify_service=self.settings.notification_service,
+            known_entity_ids=set(states.keys()),
+        )
+        errors, warnings = validate_draft(proposal, set(states.keys()), available)
+        twin = self.learning.equivalent_rule(proposal)
+        if twin:
+            warnings.append(f"An existing automation already does something equivalent: '{twin}'.")
+        backtest = None
+        try:
+            backtest = (await self.learning.backtest(proposal, datetime.now(timezone.utc))).model_dump(mode="json")
+        except Exception as exc:
+            logger.debug("Draft backtest failed: %s", exc)
+        return {
+            "draft": {"automation_id": proposal.automation_id, "yaml": proposal_to_yaml(proposal)},
+            "errors": errors,
+            "warnings": warnings,
+            "explanation": str(raw.get("explanation", "")),
+            "backtest": backtest,
+        }
+
+    async def create_automation_from_yaml(self, yaml_text: str, automation_id: str = "", request_text: str = "") -> dict[str, Any]:
+        """Create the (possibly edited) draft in Home Assistant. The click that sends this *is* the homeowner's approval."""
+        safe_id = automation_id if re.fullmatch(r"[a-z0-9_]{3,64}", automation_id or "") else None
+        proposal = proposal_from_yaml(yaml_text, safe_id)
+        states = self._cached_states or await self.smart_home.get_all_states()
+        errors, _ = validate_draft(proposal, set(states.keys()))
+        if errors:
+            raise ValueError(" ".join(errors))
+        intent = ActionIntent(
+            agent_id="homeowner",
+            domain="automation",
+            service="upsert_native_automation",
+            target_entity_ids=[f"automation.{proposal.automation_id}"] + proposal.extract_target_entities(),
+            service_data=proposal.model_dump(),
+            cause_category="user_authored",
+            rationale=(request_text or "Written by the homeowner").strip()[:500],
+            priority=ActionPriority.COMFORT_ENHANCEMENT,
+            risk_level=ActionRiskLevel.MEDIUM,
+            native_automation=proposal,
+        )
+        result = await self._execute_intent(intent)
+        if result.get("status") == "error":
+            raise ValueError(f"Home Assistant refused the automation: {result.get('error')}")
+        created = intent.native_automation or proposal
+        await self.memory.save_feedback(
+            FeedbackEpisode(
+                agent_id="homeowner",
+                cause_category="user_authored",
+                action_signature=intent.repeatable_signature(),
+                target_entity_ids=intent.target_entity_ids,
+                service_called="automation.upsert_native_automation",
+                service_data=created.model_dump(),
+                polarity=FeedbackPolarity.ENDORSED_ONCE,
+                human_note="Written by the homeowner in plain language and approved in the dashboard.",
+            )
+        )
+        self.invalidate_context_caches()
+        return {"status": "created", "automation_id": created.automation_id, "alias": created.branded_alias}
+
+    async def forget_deployed_automation(self, automation_id: str, block: bool = False) -> dict[str, Any]:
+        """Stop tracking a brain-created automation; with `block` the brain also never proposes that automation again."""
+        episode = next(
+            (ep for ep in await self.memory.get_accepted_automations() if str((ep.service_data or {}).get("automation_id")) == automation_id),
+            None,
+        )
+        if episode is None:
+            raise KeyError(automation_id)
+        if block:
+            await self.memory.save_feedback(
+                episode.model_copy(
+                    update={
+                        "polarity": FeedbackPolarity.REJECTED_EXPLICIT,
+                        "human_note": "The homeowner removed this automation and does not want it proposed again.",
+                    }
+                )
+            )
+        await self.memory.delete_accepted_automation(episode.action_signature)
+        try:
+            kept = [r for r in json.loads(await self.memory.get_kv("lifecycle:last") or "[]") if r.get("automation_id") != automation_id]
+            await self.memory.set_kv("lifecycle:last", json.dumps(kept))
+        except ValueError:
+            pass
+        self.invalidate_context_caches()
+        return {"status": "forgotten", "automation_id": automation_id, "blocked": block}
 
     # ==================================================================================================
     # Watches: user-described conditions, compiled once and evaluated locally
