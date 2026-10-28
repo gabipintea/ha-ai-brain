@@ -24,6 +24,8 @@ from ha_ai_brain.domain.timeutil import (
 NON_STATES = frozenset({"unavailable", "unknown", "", "none"})
 # Transitions caused by the brain itself or by an existing automation are not "human habits".
 AUTOMATED_ORIGINS = frozenset({"ai_brain", "ha_automation"})
+# In-between states of one physical movement: never a habit trigger ("blind opening" -> "blind open" is one action).
+TRANSITIONAL_STATES = frozenset({"opening", "closing", "locking", "unlocking", "arming", "disarming", "pending"})
 TRIGGER_DOMAINS = frozenset({"binary_sensor", "person", "lock", "cover", "light", "switch", "input_boolean"})
 WEEKDAYS = ["mon", "tue", "wed", "thu", "fri"]
 WEEKEND = ["sat", "sun"]
@@ -256,7 +258,7 @@ def mine_sequences(
         if t.new_state in NON_STATES or t.old_state == t.new_state:
             continue
         ts = t.ts.timestamp()
-        if t.domain in TRIGGER_DOMAINS:
+        if t.domain in TRIGGER_DOMAINS and t.new_state not in TRANSITIONAL_STATES:
             trig_times[(t.entity_id, t.new_state)].append(ts)
         if _is_habit_transition(t):
             effect_times[(t.entity_id, t.new_state)].append(ts)
@@ -307,6 +309,12 @@ def mine_sequences(
                     ),
                 )
             )
+
+    # Two entities that always follow each other (the same blind exposed by two integrations, a group, one remote command) are
+    # not a habit: automating A->B and B->A would even loop. Drop both directions.
+    pairs = {(p.trigger_entity, p.entity_id) for plist in candidates.values() for p in plist}
+    for key, plist in list(candidates.items()):
+        candidates[key] = [p for p in plist if (p.entity_id, p.trigger_entity) not in pairs]
 
     out: list[MinedPattern] = []
     for plist in candidates.values():

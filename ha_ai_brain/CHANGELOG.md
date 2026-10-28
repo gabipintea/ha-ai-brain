@@ -2,6 +2,15 @@
 
 All notable changes to **HA AI Brain** are documented in this file.
 
+## 0.2.10 - 2026-10-29
+
+### Added
+- **Propose automation button** on habits that are not automated yet: send a habit to Approvals right now even if it is below the automatic threshold. It gets the usual backtest, guardrails and approval.
+
+### Fixed
+- **Cleaner habit list.** In-between states ("opening", "closing", "locking", ...) no longer count as a trigger, so one blind movement is no longer reported as a habit; two entities that always follow each other (the same blind exposed through two integrations, a group) are dropped in both directions; same-named entities of the same type are treated as twins.
+- **Rejected action suggestions** no longer list rejected insights a second time (they stay under "Rejected insights & recommendations"), the rejection note now uses the full card width like the insights list, internal automation ids and raw category names are replaced by readable text, and always-allow rules for automations show the automation's name ("1 auto-run" instead of "1 auto-runs").
+
 ## 0.2.9 - 2026-10-29
 
 ### Changed

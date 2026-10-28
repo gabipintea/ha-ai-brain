@@ -21,7 +21,7 @@
 
 **Learns locally — no AI tokens**
 * Finds your **habits** ("this goes off around 23:00 on weekdays", "this follows that within minutes").
-* Turns strong, un-automated habits into **native Home Assistant automations** — written by statistics, not by an AI call.
+* Turns strong, un-automated habits into **native Home Assistant automations** — written by statistics, not by an AI call. A **Propose automation** button on any habit sends a weaker one to you for approval right away.
 * **Backtests** every proposed automation against your own history before you see it.
 * Learns what each sensor normally reads at each hour, and how long each device normally stays in each state.
 * Reads your existing UI-made automations, so it does not propose what you already have.

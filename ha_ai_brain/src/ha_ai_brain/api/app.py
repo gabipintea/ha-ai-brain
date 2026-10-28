@@ -136,6 +136,10 @@ class AutomationEnabledRequest(BaseModel):
     enabled: bool
 
 
+class HabitProposeRequest(BaseModel):
+    pattern_id: str = Field(min_length=1, max_length=100)
+
+
 class ForgetAutomationRequest(BaseModel):
     block: bool = False
 
@@ -302,6 +306,14 @@ def create_app(settings: BrainSettings | None = None) -> Any:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    @app.post("/api/habits/propose")
+    async def propose_habit(req: HabitProposeRequest) -> dict[str, Any]:
+        """Turn one learned habit into an automation proposal right now (it lands in Approvals like any other)."""
+        try:
+            return await orchestrator.propose_habit(req.pattern_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="That habit is no longer in the list. Refresh and try again.") from exc
+
     @app.get("/api/automations/adoptable")
     async def adoptable_automations() -> dict[str, Any]:
         return {"automations": await orchestrator.adoptable_automations()}
@@ -428,7 +440,8 @@ def create_app(settings: BrainSettings | None = None) -> Any:
             entity_count = len(states)
         pending = await orchestrator.get_pending_approvals()
         rules = await orchestrator.memory.get_endorsed_rules()
-        rejected = await orchestrator.memory.get_rejected_suggestions()
+        # A rejected insight is also stored as a record for the agents; it is listed under "Rejected insights", not as an action.
+        rejected = [e for e in await orchestrator.memory.get_rejected_suggestions() if e.service_called != "advisory_insight"]
         logs = await orchestrator.memory.get_recent_run_logs(limit=10)
         total_logs = await orchestrator.memory.get_run_logs_count()
         insights = await orchestrator.memory.get_advisory_insights(limit=30, status="active")

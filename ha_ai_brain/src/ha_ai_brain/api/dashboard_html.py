@@ -1001,6 +1001,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     return '';
   }
 
+  function humanize(text) {
+    const t = String(text || '').replace(/_/g, ' ').trim();
+    return t ? t.charAt(0).toUpperCase() + t.slice(1) : '';
+  }
+
   // Readable agent names: built-in/custom agents come from the status feed, the rest are internal sources of the brain.
   const SYSTEM_SOURCES = {
     pattern_miner: 'Habit learning',
@@ -1334,16 +1339,17 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
     $('rulesList').innerHTML = rules.length ? rules.map(r => {
       const isAuto = r.domain_service === 'automation.upsert_native_automation' || (r.description && r.description.startsWith('Native Automation'));
+      const named = isAuto && r.description && r.description.startsWith('Native Automation:');
       const titleHtml = isAuto
         ? `<div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
-            <span class="pill ok" style="font-size:0.72rem; padding:1px 6px;">⚡ Native Automation</span>
-            <strong>${esc(r.description || r.domain_service)}</strong>
-          </div>`
-        : `<strong>${esc(r.domain_service)}</strong>`;
+            <span class="pill ok wrap" style="font-size:0.72rem; padding:1px 6px;">⚡ Native Automation</span>
+            <strong>${esc(named ? r.description.slice('Native Automation:'.length).trim() : 'Automation')}</strong>
+          </div>${!named && r.description ? `<div class="muted" style="font-size:0.8rem;">${esc(r.description)}</div>` : ''}`
+        : `<strong>${esc(humanize(String(r.domain_service || '').split('.').pop()))}</strong>`;
       return `<div class="item"><div class="row"><div>
         ${titleHtml}
-        <div class="muted">${esc((r.target_entity_ids || []).join(', '))}</div>
-        <div class="muted">${esc(r.execution_count)} auto-runs</div></div>
+        <div class="muted">${esc((r.target_entity_ids || []).filter(t => !String(t).startsWith('automation.ai_brain_')).join(', '))}</div>
+        <div class="muted">${esc(r.execution_count)} auto-${r.execution_count === 1 ? 'run' : 'runs'}</div></div>
         <button class="danger icon" data-sig="${esc(r.signature)}" onclick="revokeRule(this.dataset.sig)">Revoke</button></div></div>`;
     }).join('')
       : '<div class="empty">No actions are set to run automatically. Choose "Always allow" on an approval to add one.</div>';
@@ -1357,17 +1363,18 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     $('rejectedList').innerHTML = rejected.length ? rejected.map(e => {
       const isAuto = e.service_called === 'automation.upsert_native_automation' || (e.service_data && !!e.service_data.alias);
       const autoAlias = (e.service_data && e.service_data.alias) || '';
+      // The brain's own automation id is internal noise; show only the devices the action touches.
+      const devices = (e.target_entity_ids || []).filter(t => !String(t).startsWith('automation.ai_brain_'));
+      const devicesHtml = devices.length ? `<code>${esc(devices.join(', '))}</code>` : '';
+      const svcName = humanize(String(e.service_called || '').split('.').pop());
       const titleHtml = isAuto
         ? `<div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
-            <span class="pill danger" style="font-size:0.72rem; padding:1px 6px;">⚡ Native Automation</span>
-            <strong>${esc(autoAlias ? `Create Native Automation: ${autoAlias}` : e.service_called)}</strong>
+            <span class="pill danger wrap" style="font-size:0.72rem; padding:1px 6px;">⚡ Native Automation</span>
+            <strong>${esc(autoAlias ? `Create Native Automation: ${autoAlias}` : 'Create Native Automation')}</strong>
           </div>`
-        : `<strong>${esc(e.service_called)}</strong> &rarr; <code>${esc((e.target_entity_ids || []).join(', '))}</code>`;
-
-      const subHtml = isAuto
-        ? `<div class="muted" style="font-size:12px; margin-top:2px;">Target: <code>${esc((e.target_entity_ids || []).join(', '))}</code> &middot; ${esc(agentLabel(e.agent_id))} &middot; ${esc(e.cause_category)}${e.created_at ? ' &middot; ' + esc(new Date(e.created_at).toLocaleDateString()) : ''}</div>`
-        : `<div class="muted">${esc(agentLabel(e.agent_id))} &middot; ${esc(e.cause_category)}${e.created_at ? ' &middot; ' + esc(new Date(e.created_at).toLocaleDateString()) : ''}</div>`;
-
+        : `<strong>${esc(svcName)}</strong>${devicesHtml ? ' &rarr; ' + devicesHtml : ''}`;
+      const when = e.created_at ? ' &middot; ' + esc(new Date(e.created_at).toLocaleDateString()) : '';
+      const subHtml = `<div class="muted" style="font-size:12px; margin-top:2px;">${isAuto && devicesHtml ? 'Controls ' + devicesHtml + ' &middot; ' : ''}${esc(agentLabel(e.agent_id))} &middot; ${esc(humanize(e.cause_category))}${when}</div>`;
       const noteHtml = e.human_note && !e.human_note.startsWith('Rejected by user')
         ? `<div class="muted" style="margin-top:6px; font-size:12px; background:rgba(255,255,255,0.04); padding:6px 8px; border-radius:4px;"><strong>Your rejection note:</strong> ${esc(e.human_note)}</div>`
         : '';
@@ -1377,10 +1384,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           <div>
             ${titleHtml}
             ${subHtml}
-            ${noteHtml}
           </div>
           <button class="icon" data-sig="${esc(e.action_signature)}" onclick="unblockRejected(this.dataset.sig)">Unblock</button>
         </div>
+        ${noteHtml}
       </div>`;
     }).join('')
       : '<div class="empty">No rejected suggestions.</div>';
@@ -2054,6 +2061,21 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     await refreshLearned();
   }
 
+  async function proposeHabit(btn) {
+    const msg = btn.closest('.item').querySelector('.habit-msg');
+    btn.disabled = true;
+    if (msg) msg.textContent = 'Preparing...';
+    let r = {};
+    try {
+      const res = await post('./api/habits/propose', {pattern_id: btn.dataset.pid});
+      r = await res.json();
+      if (!res.ok) r = {status: 'error', message: typeof r.detail === 'string' ? r.detail : 'Could not propose this habit.'};
+    } catch (e) { r = {status: 'error', message: 'Request failed.'}; }
+    if (msg) msg.textContent = r.message || r.status || '';
+    if (r.status !== 'proposed' && r.status !== 'created') btn.disabled = false;
+    if (r.status === 'proposed' || r.status === 'created') await refreshAll();
+  }
+
   async function forgetAutomation(id, block) {
     if (block && !confirm('Remove it from this list and never propose this automation again?')) return;
     await post('./api/automations/' + encodeURIComponent(id) + '/forget', {block});
@@ -2093,7 +2115,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         <div style="margin-top:4px; display:flex; gap:6px; flex-wrap:wrap;">
           <span class="pill">${Math.round(p.confidence * 100)}% confidence</span>
           ${p.covered_by ? `<span class="pill ok wrap">already automated: ${esc(p.covered_by)}</span>` : '<span class="pill warn">not automated yet</span>'}
-        </div></div>`).join('')
+        </div>
+        ${p.covered_by ? '' : `<div class="btn-row" style="margin-top:6px;"><button class="icon" data-pid="${esc(p.pattern_id)}" onclick="proposeHabit(this)">Propose automation</button></div>
+        <div class="muted habit-msg" style="font-size:0.8rem; margin-top:4px;"></div>`}</div>`).join('')
       : '<div class="empty">No recurring habits found yet. They appear after a few days of recorded history.</div>';
 
     const muted = d.muted_exceptions || [];

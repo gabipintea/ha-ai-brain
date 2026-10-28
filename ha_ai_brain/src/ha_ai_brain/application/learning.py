@@ -325,10 +325,22 @@ class LearningEngine:
         patterns = await asyncio.to_thread(mine_all, transitions, start, win[1], self.tz)
         if states is not None:
             patterns = [p for p in patterns if p.entity_id in states]
+            patterns = [p for p in patterns if not self._is_twin_sequence(p, states)]
         for p in patterns:
             p.covered_by = pattern_covered_by(self.rules, p)
         self._patterns, self._patterns_at = patterns, now
         return patterns
+
+    @staticmethod
+    def _is_twin_sequence(pattern: MinedPattern, states: dict[str, EntityState]) -> bool:
+        """A 'sequence' between two entities with the same name and type is one device exposed twice, not a routine."""
+        if pattern.kind != "sequence" or not pattern.trigger_entity:
+            return False
+        a, b = states.get(pattern.trigger_entity), states.get(pattern.entity_id)
+        if a is None or b is None or a.domain != b.domain:
+            return False
+        na, nb = str(a.attributes.get("friendly_name") or "").strip().lower(), str(b.attributes.get("friendly_name") or "").strip().lower()
+        return bool(na) and na == nb
 
     # ---------------------------------------------------------------- context
     async def household(self, states: dict[str, EntityState], now: datetime) -> dict[str, Any]:

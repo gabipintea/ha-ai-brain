@@ -1416,7 +1416,7 @@ class BrainOrchestrator:
                 domain_service=f"{intent.domain}.{intent.service}",
                 target_entity_ids=intent.target_entity_ids,
                 cause_category=intent.cause_category,
-                description=intent.rationale,
+                description=(f"Native Automation: {intent.native_automation.alias}" if intent.native_automation else intent.rationale),
                 auto_approve=True,
                 execution_count=1,
             )
@@ -1669,6 +1669,50 @@ class BrainOrchestrator:
             if "automation" in agent.controllable_domains:
                 return agent.agent_id
         return "pattern_miner"
+
+    async def propose_habit(self, pattern_id: str) -> dict[str, Any]:
+        """Homeowner-triggered: build the automation for one listed habit now, even if it is below the automatic threshold.
+
+        It goes through the same backtest, guardrails and approval as any proposal, so nothing is created without the usual decision."""
+        now = datetime.now(timezone.utc)
+        states = self._cached_states or await self.smart_home.get_all_states()
+        pattern = next((p for p in await self.learning.get_patterns(now, states) if p.pattern_id == pattern_id), None)
+        if pattern is None:
+            raise KeyError(pattern_id)
+        if pattern.covered_by:
+            return {"status": "already_automated", "message": f"Already covered by '{pattern.covered_by}'."}
+        names = {eid: str(st.attributes.get("friendly_name") or "") for eid, st in states.items()}
+        proposal = automation_from_pattern(pattern, names, person_entities(states))
+        if proposal is None:
+            return {"status": "unsupported", "message": "The brain cannot build a safe automation for this kind of habit."}
+        twin = self.learning.equivalent_rule(proposal)
+        if twin:
+            return {"status": "already_automated", "message": f"An automation that does the same already exists: '{twin}'."}
+        domain = pattern.entity_id.split(".", 1)[0]
+        intent = ActionIntent(
+            agent_id=self._agent_for_automation(domain),
+            domain="automation",
+            service="upsert_native_automation",
+            target_entity_ids=[f"automation.{proposal.automation_id}"] + proposal.extract_target_entities(),
+            service_data=proposal.model_dump(),
+            cause_category="learned_habit",
+            rationale=proposal.discovered_pattern_rationale,
+            priority=ActionPriority.HABIT_PREDICTION,
+            risk_level=ActionRiskLevel.MEDIUM,
+            native_automation=proposal,
+        )
+        if intent.repeatable_signature() in await self.memory.get_rejected_signatures():
+            return {"status": "previously_rejected", "message": "You rejected this automation before. Unblock it under Memory & Rules first."}
+        run_id = f"run_{uuid.uuid4().hex[:8]}"
+        intent.run_id = run_id
+        await self._attach_backtests([intent], now)
+        result = (await self._evaluate_and_dispatch_intents([intent], run_id=run_id))[0]
+        status = str(result.get("status"))
+        if status == "awaiting_user_approval":
+            return {"status": "proposed", "message": "Sent to Approvals. Review the backtest there, then approve or reject it."}
+        if status == "executed":
+            return {"status": "created", "message": "Created in Home Assistant."}
+        return {"status": status, "message": str(result.get("reason") or "It could not be proposed right now.")}
 
     async def run_pattern_cycle(self) -> AgentRunLog | None:
         """Turn strong, un-automated recurring habits into automation proposals using statistics only (zero tokens)."""
