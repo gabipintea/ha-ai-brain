@@ -538,6 +538,14 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         <div id="mutedList" style="margin-top:8px;"></div>
       </div>
     </div>
+    <div class="grid" style="margin-top:16px; display:none;" id="adoptCard">
+      <div class="card">
+        <div class="card-head"><h2>Automations found that the brain does not track</h2></div>
+        <div class="hint">These automations have the brain's id prefix (ai_brain_) in Home Assistant, but the brain has no record of them, for example after a reinstall. Tick the ones that are really the brain's and start tracking them so their health is reviewed. Nothing is changed in Home Assistant.</div>
+        <div id="adoptList" style="margin-top:8px;"></div>
+        <div class="btn-row"><button class="primary" onclick="adoptSelected()">Track selected</button></div>
+      </div>
+    </div>
     <div class="grid" style="margin-top:16px;">
       <div class="card">
         <div class="card-head"><h2>Deployed automation health</h2></div>
@@ -741,6 +749,18 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         <div class="card-head"><h2>Active Specialized Domain Agents</h2><span class="pill" id="agentsCountBadge">0</span></div>
         <div class="hint">Specialized cognitive agents that analyze both real-time stream events and periodic historical batch patterns.</div>
         <div id="agentsList" style="margin-top:14px;"></div>
+      </div>
+    </div>
+    <div class="grid" style="margin-top:16px;">
+      <div class="card">
+        <div class="card-head"><h2>Backup &amp; restore</h2></div>
+        <div class="hint">Saves what you decided or wrote: settings, notes, ignore list, minimum-change rules, Watches, muted alerts, rejected suggestions and insights, always-allow rules, tracked automations and approved research. It does not include recorded history, logs or your API key. Importing merges into what is already here and never deletes anything. Uninstalling the add-on erases all of this, so export first.</div>
+        <div class="btn-row" style="align-items:center;">
+          <a href="./api/export" download><button class="primary" type="button">Export to file</button></a>
+          <button class="icon" type="button" onclick="$('importFile').click()">Import from file...</button>
+          <input type="file" id="importFile" accept="application/json,.json" style="display:none;" onchange="previewImport(this)" />
+        </div>
+        <div id="importPreview"></div>
       </div>
     </div>
   </div>
@@ -1952,6 +1972,69 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     await refreshAll();
   }
 
+  let importData = null;
+
+  async function previewImport(input) {
+    const file = input.files && input.files[0];
+    input.value = '';
+    if (!file) return;
+    let data;
+    try { data = JSON.parse(await file.text()); } catch (e) { $('importPreview').innerHTML = '<div class="banner" style="display:block; margin:10px 0;">This file is not valid JSON.</div>'; return; }
+    const res = await post('./api/import', {data, apply: false});
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) { importData = null; $('importPreview').innerHTML = `<div class="banner" style="display:block; margin:10px 0;">${esc(typeof body.detail === 'string' ? body.detail : 'Could not read this file.')}</div>`; return; }
+    importData = data;
+    const rows = (body.sections || []).map(x => `<div>${esc(x.label)}: <strong>${esc(x.count)}</strong>${x.skipped ? ` <span class="muted">(${esc(x.skipped)} skipped as invalid)</span>` : ''}</div>`).join('');
+    $('importPreview').innerHTML = `<div class="item" style="margin-top:10px;"><div class="muted" style="font-size:0.8rem; margin-bottom:6px;">The file contains:</div>${rows || '<div class="muted">Nothing to import.</div>'}
+      ${(body.warnings || []).map(w => `<div class="muted" style="font-size:0.8rem; margin-top:6px;">⚠ ${esc(w)}</div>`).join('')}
+      <div class="btn-row">${rows ? '<button class="primary" onclick="applyImport()">Import</button>' : ''}<button class="icon" onclick="cancelImport()">Cancel</button></div></div>`;
+  }
+
+  function cancelImport() { importData = null; $('importPreview').innerHTML = ''; }
+
+  async function applyImport() {
+    if (!importData) return;
+    const res = await post('./api/import', {data: importData, apply: true});
+    const body = await res.json().catch(() => ({}));
+    importData = null;
+    $('importPreview').innerHTML = res.ok ? '<div class="item" style="margin-top:10px;">✅ Imported. Everything was merged into the current settings and rules.</div>'
+      : `<div class="banner" style="display:block; margin:10px 0;">${esc(typeof body.detail === 'string' ? body.detail : 'Import failed.')}</div>`;
+    await refreshAll();
+    await refreshLearned();
+    await refreshWatches();
+  }
+
+  async function refreshAdoptable() {
+    let d;
+    try { d = await (await fetch('./api/automations/adoptable', {cache: 'no-store'})).json(); } catch (e) { return; }
+    const list = d.automations || [];
+    $('adoptCard').style.display = list.length ? 'block' : 'none';
+    if (!list.length) { $('adoptList').innerHTML = ''; return; }
+    $('adoptList').innerHTML = list.map(a => `<label class="check" style="margin:6px 0;"><input type="checkbox" class="adoptBox" value="${esc(a.automation_id)}" checked />
+      <span>${esc(a.alias)} <code>${esc(a.automation_id)}</code></span></label>`).join('');
+  }
+
+  async function adoptSelected() {
+    const ids = Array.from(document.querySelectorAll('.adoptBox:checked')).map(b => b.value);
+    if (!ids.length) return;
+    await post('./api/automations/adopt', {automation_ids: ids});
+    await refreshAdoptable();
+    await refreshLearned();
+  }
+
+  async function setAutomationEnabled(id, enabled) {
+    const res = await post('./api/automations/' + encodeURIComponent(id) + '/enabled', {enabled});
+    if (!res.ok) { const b = await res.json().catch(() => ({})); alert(typeof b.detail === 'string' ? b.detail : 'Could not change the automation.'); }
+    await refreshLearned();
+  }
+
+  async function deleteAutomation(id, alias) {
+    if (!confirm('Delete "' + alias + '" from Home Assistant? This cannot be undone. (Use "Never propose again" first if you do not want the brain to suggest it again.)')) return;
+    const res = await fetch('./api/automations/' + encodeURIComponent(id), {method: 'DELETE'});
+    if (!res.ok) { const b = await res.json().catch(() => ({})); alert(typeof b.detail === 'string' ? b.detail : 'Could not delete the automation.'); }
+    await refreshLearned();
+  }
+
   async function forgetAutomation(id, block) {
     if (block && !confirm('Remove it from this list and never propose this automation again?')) return;
     await post('./api/automations/' + encodeURIComponent(id) + '/forget', {block});
@@ -2004,10 +2087,14 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;"><strong>${esc(r.alias)}</strong>
           <span class="pill ${VERDICT_PILL[r.verdict] || ''}">${esc(String(r.verdict).replace('_', ' '))}</span></div>
         <div class="muted" style="font-size:0.82rem; margin-top:3px;">${esc(r.details)}</div>
+        ${r.verdict !== 'missing' && r.entity_id ? `<div class="btn-row" style="margin-top:6px;">
+          <button class="icon" data-id="${esc(r.automation_id)}" onclick="setAutomationEnabled(this.dataset.id, ${r.verdict === 'disabled'})">${r.verdict === 'disabled' ? 'Enable' : 'Disable'}</button>
+          <button class="danger icon" data-id="${esc(r.automation_id)}" data-alias="${esc(r.alias)}" onclick="deleteAutomation(this.dataset.id, this.dataset.alias)">Delete</button></div>` : ''}
         ${r.verdict !== 'healthy' && r.verdict !== 'too_new' ? `<div class="btn-row" style="margin-top:6px;">
           <button class="icon" data-id="${esc(r.automation_id)}" onclick="forgetAutomation(this.dataset.id, false)">Stop tracking</button>
           <button class="icon" data-id="${esc(r.automation_id)}" onclick="forgetAutomation(this.dataset.id, true)">Never propose again</button></div>` : ''}</div>`).join('')
       : '<div class="empty">No automations deployed by the brain yet.</div>';
+    refreshAdoptable();
   }
 
   async function updateSetting(field, value) {

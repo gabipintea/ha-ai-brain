@@ -2,6 +2,13 @@
 
 All notable changes to **HA AI Brain** are documented in this file.
 
+## 0.2.6 - 2026-10-28
+
+### Added
+- **Backup & restore** (Settings tab). Export to a file everything you decided or wrote: dashboard settings, notes about your home, ignore list, minimum-change rules, Watches, muted/dismissed alerts, rejected suggestions and insights, always-allow rules, tracked automations, and approved/rejected research. Import shows what the file contains first, then merges it in; nothing is ever deleted and importing twice does not duplicate anything. Recorded history, logs and your API key are never exported. Export before uninstalling the add-on, which erases its data.
+- **Re-adopting the brain's automations** (Learned tab). Automations in Home Assistant whose id starts with `ai_brain_` but that the brain no longer tracks (for example after a reinstall) are listed; you tick the ones that are really the brain's and they are tracked again. Matching uses the automation id, not its name, so renaming is safe, and nothing happens without your confirmation.
+- **Disable / Enable and Delete** buttons in Deployed automation health, for every automation the brain tracks and that still exists in Home Assistant. Disable is reversible; Delete asks for confirmation, removes it from Home Assistant and stops tracking it (use "Never propose again" first if you do not want it suggested again). Automations the brain does not track can never be touched this way. Automations defined in YAML cannot be deleted from here.
+
 ## 0.2.5 - 2026-10-28
 
 ### Added

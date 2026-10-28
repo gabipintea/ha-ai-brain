@@ -122,6 +122,19 @@ class AutomationCreateRequest(BaseModel):
     request_text: str = Field(default="", max_length=1500)
 
 
+class ImportRequest(BaseModel):
+    data: dict[str, Any]
+    apply: bool = False
+
+
+class AdoptRequest(BaseModel):
+    automation_ids: list[str] = Field(max_length=200)
+
+
+class AutomationEnabledRequest(BaseModel):
+    enabled: bool
+
+
 class ForgetAutomationRequest(BaseModel):
     block: bool = False
 
@@ -287,6 +300,45 @@ def create_app(settings: BrainSettings | None = None) -> Any:
             return await orchestrator.create_automation_from_yaml(req.yaml, req.automation_id, req.request_text)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/api/automations/adoptable")
+    async def adoptable_automations() -> dict[str, Any]:
+        return {"automations": await orchestrator.adoptable_automations()}
+
+    @app.post("/api/automations/adopt")
+    async def adopt_automations(req: AdoptRequest) -> dict[str, Any]:
+        return await orchestrator.adopt_automations(req.automation_ids)
+
+    @app.get("/api/export")
+    async def export_data() -> JSONResponse:
+        bundle = await orchestrator.export_bundle()
+        name = "ha-ai-brain-export-" + str(bundle["exported_at"])[:10] + ".json"
+        return JSONResponse(bundle, headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+    @app.post("/api/import")
+    async def import_data(req: ImportRequest) -> dict[str, Any]:
+        try:
+            return await orchestrator.import_bundle(req.data, req.apply)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/automations/{automation_id}/enabled")
+    async def set_automation_enabled(automation_id: str, req: AutomationEnabledRequest) -> dict[str, Any]:
+        try:
+            return await orchestrator.set_automation_enabled(automation_id, req.enabled)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Automation is not tracked or no longer exists") from exc
+
+    @app.delete("/api/automations/{automation_id}")
+    async def delete_automation(automation_id: str) -> dict[str, Any]:
+        try:
+            return await orchestrator.delete_tracked_automation(automation_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Automation is not tracked or no longer exists") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"Home Assistant refused: {exc}") from exc
 
     @app.post("/api/automations/{automation_id}/forget")
     async def forget_automation(automation_id: str, req: ForgetAutomationRequest) -> dict[str, Any]:

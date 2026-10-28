@@ -14,10 +14,12 @@ import time
 from typing import Any
 import uuid
 
+import yaml
+
 from ha_ai_brain.application.agent_registry import AgentRegistry
 from ha_ai_brain.application.graphs.specialized_agent import AgentGraphState, SpecializedAgentGraph
 from ha_ai_brain.application.graphs.subagents import ComputationSubAgent, ResearchSubAgent
-from ha_ai_brain.application.learning import LearningEngine
+from ha_ai_brain.application.learning import FEEDBACK_PREFIX, LearningEngine
 from ha_ai_brain.application.research_agenda import KnowledgeStore, ResearchAgenda
 from ha_ai_brain.application.watch_service import WatchService
 from ha_ai_brain.config import AutonomyLevel, BrainSettings, FallbackPolicy, OperatingMode
@@ -39,6 +41,7 @@ from ha_ai_brain.domain.patterns import automation_from_pattern, is_duplicate_ha
 from ha_ai_brain.domain.research import is_same_open_insight
 from ha_ai_brain.domain.timeutil import is_quiet_hours, parse_hhmm, parse_iso
 from ha_ai_brain.domain.undo import build_undo_calls, capture_snapshot
+from ha_ai_brain.domain.portability import LABELS, build_bundle, exportable_prefs, parse_bundle
 from ha_ai_brain.domain.promptfmt import dumps as prompt_dumps
 from ha_ai_brain.domain.watches import WatchRule, WatchTracker, backtest_watch, build_entity_catalog, evaluate_watch, validate_watch
 from ha_ai_brain.domain.context import person_entities
@@ -72,6 +75,7 @@ from ha_ai_brain.ports.smart_home import SmartHomePort
 from ha_ai_brain.ports.telemetry import TelemetryStorePort
 
 MIN_CHANGE_KEY = "min_change_rules"
+BRAIN_ID_PREFIX = "ai_brain_"
 logger = logging.getLogger(__name__)
 
 # True while handling a critical unusual situation: its approval requests must reach you even during quiet hours.
@@ -2237,6 +2241,42 @@ class BrainOrchestrator:
         self.invalidate_context_caches()
         return {"status": "created", "automation_id": created.automation_id, "alias": created.branded_alias}
 
+    async def _tracked_entity(self, automation_id: str) -> str:
+        """Entity id of a tracked automation; KeyError when the brain does not track it or Home Assistant no longer has it."""
+        tracked = {str((e.service_data or {}).get("automation_id")) for e in await self.memory.get_accepted_automations()}
+        if automation_id not in tracked:
+            raise KeyError(automation_id)
+        states = await self.smart_home.get_all_states()
+        for st in states.values():
+            if st.domain == "automation" and str(st.attributes.get("id")) == automation_id:
+                return st.entity_id
+        raise KeyError(automation_id)
+
+    async def set_automation_enabled(self, automation_id: str, enabled: bool) -> dict[str, Any]:
+        """Switch a tracked automation on or off in Home Assistant (reversible)."""
+        entity_id = await self._tracked_entity(automation_id)
+        await self.smart_home.call_service(
+            domain="automation",
+            service="turn_on" if enabled else "turn_off",
+            target_entity_ids=[entity_id],
+            service_data={},
+            context_id=f"ai_brain_{uuid.uuid4().hex[:12]}",
+        )
+        self.triage.mark_manual_override(entity_id)
+        self._cached_states = await self.smart_home.get_all_states()
+        await self.review_deployed_automations()
+        return {"status": "enabled" if enabled else "disabled", "automation_id": automation_id}
+
+    async def delete_tracked_automation(self, automation_id: str) -> dict[str, Any]:
+        """Remove a tracked automation from Home Assistant and stop tracking it (it may be proposed again later)."""
+        await self._tracked_entity(automation_id)
+        if not await self.smart_home.delete_automation(automation_id):
+            raise ValueError("Home Assistant did not delete it (not found, or it is defined in YAML and must be removed there).")
+        self._cached_states = await self.smart_home.get_all_states()
+        await self.learning.refresh_rules(self._cached_states, force=True)
+        await self.forget_deployed_automation(automation_id, block=False)
+        return {"status": "deleted", "automation_id": automation_id}
+
     async def forget_deployed_automation(self, automation_id: str, block: bool = False) -> dict[str, Any]:
         """Stop tracking a brain-created automation; with `block` the brain also never proposes that automation again."""
         episode = next(
@@ -2262,6 +2302,133 @@ class BrainOrchestrator:
             pass
         self.invalidate_context_caches()
         return {"status": "forgotten", "automation_id": automation_id, "blocked": block}
+
+    # ==================================================================================================
+    # Export / import of the homeowner's own decisions and rules (never history, logs or secrets)
+    # ==================================================================================================
+    async def export_bundle(self) -> dict[str, Any]:
+        from ha_ai_brain import __version__
+
+        knowledge = KnowledgeStore(self.memory)
+        sections: dict[str, Any] = {
+            "preferences": exportable_prefs(await self.memory.get_ui_preferences()),
+            "context_notes": [n.model_dump(mode="json") for n in await self.memory.get_user_context_notes(active_only=True)],
+            "ignored_targets": [t.model_dump(mode="json") for t in await self.memory.get_ignored_targets()],
+            "min_change_rules": [r.model_dump(mode="json") for r in await self.get_min_change_rules()],
+            "watches": [w.model_dump(mode="json") for w in await self.watches.list()],
+            "muted_alerts": dict(self.learning._exception_feedback),
+            "rejected_suggestions": [e.model_dump(mode="json") for e in await self.memory.get_rejected_suggestions()],
+            "rejected_insights": [i.model_dump(mode="json") for i in await self.memory.get_rejected_insights()],
+            "approval_rules": [r.model_dump(mode="json") for r in (await self.memory.get_endorsed_rules()).values()],
+            "deployed_automations": [e.model_dump(mode="json") for e in await self.memory.get_accepted_automations()],
+            "knowledge_items": [i.model_dump(mode="json") for i in await knowledge.items() if i.status in ("approved", "rejected")],
+            "research_topics": [t.model_dump(mode="json") for t in await knowledge.topics()],
+        }
+        return build_bundle(sections, __version__)
+
+    async def import_bundle(self, data: Any, apply: bool = False) -> dict[str, Any]:
+        """Merge an export into this installation: nothing is deleted or overwritten with older data except same-id entries."""
+        parsed = parse_bundle(data)
+        summary = {
+            "sections": [{"key": k, "label": LABELS.get(k, k), "count": n, "skipped": parsed.skipped.get(k, 0)} for k, n in parsed.counts().items()],
+            "warnings": parsed.warnings,
+            "applied": False,
+        }
+        if not apply:
+            return summary
+        sec = parsed.sections
+        for key, value in sec.get("preferences", []):
+            await self.memory.save_ui_preference(key, value)
+        if sec.get("preferences"):
+            self._apply_ui_preferences_dict(await self.memory.get_ui_preferences())
+        for note in sec.get("context_notes", []):
+            await self.memory.save_user_context_note(note)
+        for target in sec.get("ignored_targets", []):
+            await self.memory.save_ignored_target(target)
+        if sec.get("min_change_rules"):
+            merged = {r.pattern: r for r in await self.get_min_change_rules()}
+            merged.update({r.pattern: r for r in sec["min_change_rules"]})
+            await self.save_min_change_rules(list(merged.values()))
+        for rule in sec.get("watches", []):
+            await self.watches.save(rule)
+        for key, fb in sec.get("muted_alerts", []):
+            current = self.learning._exception_feedback.get(key, {"dismissed": 0, "muted": False})
+            merged_fb = {"dismissed": max(int(current.get("dismissed", 0)), fb["dismissed"]), "muted": bool(current.get("muted")) or fb["muted"]}
+            self.learning._exception_feedback[key] = merged_fb
+            await self.memory.set_kv(FEEDBACK_PREFIX + key, json.dumps(merged_fb))
+        for ep in sec.get("rejected_suggestions", []):
+            await self.memory.save_feedback(ep)
+        for ins in sec.get("rejected_insights", []):
+            await self.memory.save_advisory_insight(ins)
+        for rule in sec.get("approval_rules", []):
+            await self.memory.save_approval_rule(rule)
+        tracked = {str((e.service_data or {}).get("automation_id")) for e in await self.memory.get_accepted_automations()}
+        for ep in sec.get("deployed_automations", []):
+            if str(ep.service_data.get("automation_id")) not in tracked:
+                await self.memory.save_feedback(ep)
+        knowledge = KnowledgeStore(self.memory)
+        for item in sec.get("knowledge_items", []):
+            await knowledge.save_item(item)
+        for topic in sec.get("research_topics", []):
+            await knowledge.save_topic(topic)
+        self.invalidate_context_caches()
+        summary["applied"] = True
+        return summary
+
+    # ==================================================================================================
+    # Re-adopting the brain's own automations (identified by their immutable id prefix, never by name)
+    # ==================================================================================================
+    async def adoptable_automations(self) -> list[dict[str, str]]:
+        """Automations whose id carries the brain's prefix but that the brain no longer tracks (e.g. after a reinstall)."""
+        states = self._cached_states or await self.smart_home.get_all_states()
+        tracked = {str((e.service_data or {}).get("automation_id")) for e in await self.memory.get_accepted_automations()}
+        out = []
+        for st in states.values():
+            aid = str(st.attributes.get("id") or "")
+            if st.domain == "automation" and aid.startswith(BRAIN_ID_PREFIX) and aid not in tracked:
+                out.append({"automation_id": aid, "alias": str(st.attributes.get("friendly_name") or aid), "state": st.state})
+        return sorted(out, key=lambda r: r["alias"].lower())
+
+    async def adopt_automations(self, automation_ids: list[str]) -> dict[str, Any]:
+        """Start tracking the confirmed automations. Only ids with the brain's prefix are accepted."""
+        wanted = {i for i in automation_ids if i.startswith(BRAIN_ID_PREFIX)}
+        candidates = {c["automation_id"] for c in await self.adoptable_automations()}
+        wanted &= candidates
+        adopted: list[str] = []
+        for cfg in await self.smart_home.get_automation_configs():
+            aid = str(cfg.get("id") or "")
+            if aid not in wanted:
+                continue
+            try:
+                proposal = proposal_from_yaml(yaml.safe_dump(cfg), aid)
+            except ValueError as exc:
+                logger.warning("Cannot adopt %s: %s", aid, exc)
+                continue
+            intent = ActionIntent(
+                agent_id="homeowner",
+                domain="automation",
+                service="upsert_native_automation",
+                target_entity_ids=[f"automation.{aid}"] + proposal.extract_target_entities(),
+                service_data=proposal.model_dump(),
+                cause_category="adopted",
+                rationale="Re-adopted after the add-on lost its records.",
+                native_automation=proposal,
+            )
+            await self.memory.save_feedback(
+                FeedbackEpisode(
+                    agent_id="homeowner",
+                    cause_category="adopted",
+                    action_signature=intent.repeatable_signature(),
+                    target_entity_ids=intent.target_entity_ids,
+                    service_called="automation.upsert_native_automation",
+                    service_data=proposal.model_dump(),
+                    polarity=FeedbackPolarity.ENDORSED_ONCE,
+                    human_note="Existing automation with the brain's id prefix, confirmed by the homeowner.",
+                )
+            )
+            adopted.append(aid)
+        self.invalidate_context_caches()
+        return {"status": "adopted", "adopted": adopted, "skipped": sorted(wanted - set(adopted))}
 
     # ==================================================================================================
     # Watches: user-described conditions, compiled once and evaluated locally

@@ -422,6 +422,18 @@ class HomeAssistantAdapter(SmartHomePort):
             logger.warning("Could not trigger automation.reload after upserting %s: %s", proposal.automation_id, reload_err)
         return {"status": "automation_created", "automation_id": proposal.automation_id, "alias": payload["alias"]}
 
+    async def delete_automation(self, automation_id: str) -> bool:
+        client = self._http()
+        resp = await client.delete(f"{self.base_url}/api/config/automation/config/{automation_id}", timeout=15.0)
+        if resp.status_code == 404:
+            return False
+        resp.raise_for_status()
+        try:
+            await client.post(f"{self.base_url}/api/services/automation/reload", json={}, timeout=15.0)
+        except httpx.HTTPError as exc:
+            logger.warning("Could not reload automations after deleting %s: %s", automation_id, exc)
+        return True
+
     async def get_automation_configs(self) -> list[dict[str, Any]]:
         """Fetch the config of every UI-managed automation (YAML-defined ones are not exposed by HA's config API)."""
         try:

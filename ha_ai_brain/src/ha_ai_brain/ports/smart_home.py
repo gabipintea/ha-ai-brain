@@ -41,6 +41,10 @@ class SmartHomePort(ABC):
     async def upsert_automation(self, proposal: NativeAutomationProposal) -> dict[str, Any]:
         """Create or update a native Home Assistant automation via the HA Config API."""
 
+    async def delete_automation(self, automation_id: str) -> bool:
+        """Remove an automation from Home Assistant by its config id. Returns False when unsupported or not found."""
+        return False
+
     @abstractmethod
     async def get_system_logs(self, limit: int = 50) -> list[dict[str, Any]]:
         """Read Home Assistant error/warning logs (used by the Repair & Diagnostics Agent)."""

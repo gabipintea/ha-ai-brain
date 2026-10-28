@@ -301,6 +301,8 @@ class SmartHomeSimulatorAdapter(SmartHomePort):
                 temp = service_data.get("temperature")
                 if temp is not None:
                     new_attrs["temperature"] = temp
+            elif domain == "automation" and service in ("turn_on", "turn_off"):
+                new_state_val = "on" if service == "turn_on" else "off"
             elif domain == "cover":
                 if service == "set_cover_position":
                     pos = service_data.get("position", 10)
@@ -332,6 +334,7 @@ class SmartHomeSimulatorAdapter(SmartHomePort):
             entity_id=auto_eid,
             state="on",
             attributes={
+                "id": proposal.automation_id,  # real Home Assistant exposes the config id like this
                 "friendly_name": proposal.branded_alias,
                 "last_triggered": None,
                 "mode": proposal.mode,
@@ -343,6 +346,11 @@ class SmartHomeSimulatorAdapter(SmartHomePort):
             "automation_id": proposal.automation_id,
             "alias": proposal.branded_alias,
         }
+
+    async def delete_automation(self, automation_id: str) -> bool:
+        existed = self._created_automations.pop(automation_id, None) is not None
+        self._states.pop(f"automation.{automation_id}", None)
+        return existed
 
     async def get_system_logs(self, limit: int = 50) -> list[dict[str, Any]]:
         return [
