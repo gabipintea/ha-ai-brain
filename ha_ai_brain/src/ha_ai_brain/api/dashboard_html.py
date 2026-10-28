@@ -997,6 +997,19 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     return '';
   }
 
+  // Readable agent names: built-in/custom agents come from the status feed, the rest are internal sources of the brain.
+  const SYSTEM_SOURCES = {
+    pattern_miner: 'Habit learning',
+    automation_lifecycle: 'Automation health review',
+    watch_monitor: 'Watches',
+    exception_monitor: 'Unusual-situation alerts',
+    homeowner: 'You',
+  };
+  let AGENT_NAMES = {};
+  function agentLabel(id) {
+    return AGENT_NAMES[id] || SYSTEM_SOURCES[id] || String(id || '').replace(/_/g, ' ').replace(/\\b\\w/g, c => c.toUpperCase());
+  }
+
   function renderLog(l) {
     const research = (l.research_findings || []).map(rf => `
       <div class="finding"><strong>${esc(rf.topic)}</strong>
@@ -1028,12 +1041,12 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     const topApprovalBtn = firstApprovalId ? renderTopApprovalBadge(firstApprovalId) : '';
 
     return `<div class="item" id="log-${esc(l.run_id)}" data-log-id="${esc(l.run_id)}">
-      <div class="row">
-        <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
-          <strong>${esc(l.agent_id)}</strong>
+      <div style="display:flex; flex-wrap:wrap; align-items:baseline; justify-content:space-between; gap:2px 12px;">
+        <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap; min-width:0;">
+          <strong>${esc(agentLabel(l.agent_id))}</strong>
           ${topApprovalBtn}
         </div>
-        <span class="muted">${esc(t)}</span>
+        <span class="muted" style="font-size:0.8rem; white-space:nowrap;">${esc(t)}</span>
       </div>
       <div class="muted" style="margin:2px 0 4px;">${esc(l.mode)} &middot; ${esc(l.trigger_summary)}</div>
       ${research ? `<div class="sec-title">Research</div>${research}` : ''}
@@ -1211,6 +1224,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       const res = await fetch('./api/status', {cache: 'no-store'});
       data = await res.json();
     } catch (e) { return; }
+    AGENT_NAMES = Object.fromEntries((data.agents || []).map(a => [a.agent_id, a.name]));
 
     if (seqAtStart === settingsMutationSeq) {
       $('modeBadge').textContent = data.settings.operating_mode.replace('_', ' ') + ' / ' + data.settings.default_autonomy;
@@ -1347,8 +1361,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         : `<strong>${esc(e.service_called)}</strong> &rarr; <code>${esc((e.target_entity_ids || []).join(', '))}</code>`;
 
       const subHtml = isAuto
-        ? `<div class="muted" style="font-size:12px; margin-top:2px;">Target: <code>${esc((e.target_entity_ids || []).join(', '))}</code> &middot; ${esc(e.agent_id)} &middot; ${esc(e.cause_category)}${e.created_at ? ' &middot; ' + esc(new Date(e.created_at).toLocaleDateString()) : ''}</div>`
-        : `<div class="muted">${esc(e.agent_id)} &middot; ${esc(e.cause_category)}${e.created_at ? ' &middot; ' + esc(new Date(e.created_at).toLocaleDateString()) : ''}</div>`;
+        ? `<div class="muted" style="font-size:12px; margin-top:2px;">Target: <code>${esc((e.target_entity_ids || []).join(', '))}</code> &middot; ${esc(agentLabel(e.agent_id))} &middot; ${esc(e.cause_category)}${e.created_at ? ' &middot; ' + esc(new Date(e.created_at).toLocaleDateString()) : ''}</div>`
+        : `<div class="muted">${esc(agentLabel(e.agent_id))} &middot; ${esc(e.cause_category)}${e.created_at ? ' &middot; ' + esc(new Date(e.created_at).toLocaleDateString()) : ''}</div>`;
 
       const noteHtml = e.human_note && !e.human_note.startsWith('Rejected by user')
         ? `<div class="muted" style="margin-top:6px; font-size:12px; background:rgba(255,255,255,0.04); padding:6px 8px; border-radius:4px;"><strong>Your rejection note:</strong> ${esc(e.human_note)}</div>`

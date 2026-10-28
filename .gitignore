@@ -10,3 +10,22 @@ build/
 .env
 data/
 .DS_Store
+
+# AI coding assistants: their local state and the guidance files written for them (kept on this machine only)
+AGENTS.md
+CLAUDE.md
+GEMINI.md
+docs/DECISIONS.md
+.github/copilot-instructions.md
+.claude/
+.gemini/
+.cursor/
+.windsurf/
+.continue/
+.cline/
+.roo/
+.aider*
+.codex/
+.copilot/
+.ai/
+*.local.md

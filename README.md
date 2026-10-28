@@ -53,7 +53,7 @@
 * Skips agents with nothing to do, skips unchanged batches, coalesces event bursts, caches calculations and research, compact database with automatic clean-up and batched writes. Works the same with any AI provider.
 
 **Transparent**
-* Dashboard with approvals, a full activity log with the agents' reasoning, what it has learned, automation health reviews (with Disable / Enable / Delete for the automations it created), research waiting for your review, and a weekly digest.
+* Dashboard with approvals, a full activity log with the agents' reasoning, what it has learned, automation health reviews (problems listed first, with Disable / Enable / Delete for the automations it created), research waiting for your review, and a weekly digest.
 * **Backup & restore**: export your decisions, rules and watches to a file and import them after a reinstall; the brain can also re-adopt its own automations by their `ai_brain_` id.
 
 ---

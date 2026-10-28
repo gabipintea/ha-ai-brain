@@ -67,6 +67,22 @@ class HealthWordingTests(unittest.TestCase):
         self.assertIn("1 run in 2 days", r.details)
 
 
+class HealthOrderTests(unittest.TestCase):
+    def test_problems_first_then_alphabetical(self) -> None:
+        from ha_ai_brain.domain.lifecycle import review_sort_key
+
+        rows = [
+            {"verdict": "healthy", "alias": "Zebra"}, {"verdict": "too_new", "alias": "Mid"},
+            {"verdict": "overridden", "alias": "b night"}, {"verdict": "missing", "alias": "Cutoff"},
+            {"verdict": "overridden", "alias": "A morning"}, {"verdict": "healthy", "alias": "alpha"},
+            {"verdict": "disabled", "alias": "Old"}, {"verdict": "never_fired", "alias": "Idle"},
+        ]
+        got = [(r["verdict"], r["alias"]) for r in sorted(rows, key=review_sort_key)]
+        self.assertEqual([v for v, _ in got], ["missing", "overridden", "overridden", "never_fired", "disabled", "too_new", "healthy", "healthy"])
+        self.assertEqual([a for v, a in got if v == "overridden"], ["A morning", "b night"])
+        self.assertEqual([a for v, a in got if v == "healthy"], ["alpha", "Zebra"])
+
+
 class OrchestratorTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
@@ -127,6 +143,38 @@ class OrchestratorTests(unittest.IsolatedAsyncioTestCase):
         res = await self.o.draft_automation("Turn the light on at 8 pm")
         self.assertIsNone(res["draft"])
         self.assertTrue(res["errors"])
+
+
+class AgentPromptPermissionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_prompt_forbids_automations_only_for_agents_without_the_domain(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            o = build_orchestrator(BrainSettings(
+                use_simulator=True, operating_mode=OperatingMode.PERIODIC_BATCH, default_autonomy=AutonomyLevel.COPILOT,
+                db_path=str(Path(tmp) / "p.db"),
+            ))
+            seen: dict[str, str] = {}
+            original = o.llm.generate_json
+
+            async def spy(system_prompt: str, user_prompt: str, **kw):  # type: ignore[no-untyped-def]
+                agent = str((kw.get("context_hint") or {}).get("agent_id", ""))
+                if "native_automations" in system_prompt:
+                    seen[agent] = system_prompt
+                return await original(system_prompt=system_prompt, user_prompt=user_prompt, **kw)
+
+            o.llm.generate_json = spy  # type: ignore[method-assign]
+            agent = o.registry.get_agent("climate_thermal_agent")
+            self.assertIn("automation", agent.controllable_domains)
+            await o.run_periodic_batch_analysis(agent_id="climate_thermal_agent", force=True)
+            allowed = seen.pop("climate_thermal_agent")
+            self.assertIn("CRITICAL RULES FOR NATIVE AUTOMATIONS", allowed)
+            self.assertNotIn("NOT PERMITTED", allowed)
+
+            agent.controllable_domains = [d for d in agent.controllable_domains if d != "automation"]
+            o.invalidate_context_caches()
+            await o.run_periodic_batch_analysis(agent_id="climate_thermal_agent", force=True)
+            denied = seen["climate_thermal_agent"]
+            self.assertIn("NOT PERMITTED TO CREATE AUTOMATIONS", denied)
+            self.assertNotIn("CRITICAL RULES FOR NATIVE AUTOMATIONS", denied)
 
 
 if __name__ == "__main__":

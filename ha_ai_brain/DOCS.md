@@ -242,9 +242,9 @@ You can override the level for one device type, for example `light → autonomou
 * If *Send actionable approval notifications* is switched off, low/medium-risk actions are executed without asking (see the FAQ).
 
 ### 4.10 Transparency and lifecycle
-* **Activity log**: every agent run with its research, computed signals, proposed actions and what happened to each (executed, awaiting approval, blocked, suppressed, shadow-logged). Last 300 runs.
+* **Activity log**: every agent run (shown under the agent's readable name) with its research, computed signals, proposed actions and what happened to each (executed, awaiting approval, blocked, suppressed, shadow-logged). Last 300 runs.
 * **Learned tab**: learning progress, habits found (and whether already automated), AI calls avoided, automations proposed from habits, unusual situations, tokens used, recent autonomous actions with Undo, muted alerts, and the health of automations the brain created.
-* **Automation health review (daily)**: for each automation the brain created (approved proposals and automations you wrote with *Create an automation*) — not for your other automations. Statuses: *healthy*, *too new* (deployed under 3 days ago and has not run yet), *never fired*, *overridden* (at least 4 runs and half or more reverted by hand within 15 minutes, counted over its whole life), *disabled* and *missing* (no longer in Home Assistant). Statuses are recomputed from scratch every day, so an automation can return to healthy once clean runs outweigh the reverted ones. Problems become insights (at most one per automation per week); an overridden automation also gets a suggestion to switch it off (needs your approval). Each tracked automation that still exists has **Disable / Enable** and **Delete** buttons (Delete asks for confirmation, removes it from Home Assistant and stops tracking it; automations defined in YAML must be removed there). Unhealthy ones also offer **Stop tracking** (forget it; the brain may propose it again) and **Never propose again** (forget it and block that proposal; undo it under *Memory & Rules → rejected suggestions*). Names are read live from Home Assistant, so renaming is fine.
+* **Automation health review (daily)**: for each automation the brain created (approved proposals and automations you wrote with *Create an automation*) — not for your other automations. Statuses: *healthy*, *too new* (deployed under 3 days ago and has not run yet), *never fired*, *overridden* (at least 4 runs and half or more reverted by hand within 15 minutes, counted over its whole life), *disabled* and *missing* (no longer in Home Assistant). Statuses are recomputed from scratch every day, so an automation can return to healthy once clean runs outweigh the reverted ones. Problems become insights (at most one per automation per week); an overridden automation also gets a suggestion to switch it off (needs your approval). Each tracked automation that still exists has **Disable / Enable** and **Delete** buttons (Delete asks for confirmation, removes it from Home Assistant and stops tracking it; automations defined in YAML must be removed there). Unhealthy ones also offer **Stop tracking** (forget it; the brain may propose it again) and **Never propose again** (forget it and block that proposal; undo it under *Memory & Rules → rejected suggestions*). The list is sorted with problems first (missing, overridden, never fired, disabled, then too new and healthy), alphabetically within each status. Names are read live from Home Assistant, so renaming is fine.
 * **Re-adopting automations**: automations in Home Assistant whose *id* starts with `ai_brain_` but that the brain does not track (for example after a reinstall) are listed in the Learned tab; tick the ones that are really the brain's and press *Track selected*. Matching is by id, never by name, and nothing is changed in Home Assistant.
 * **Trust suggestions**: after five approvals of the same kind of action with no objection, the brain suggests *Always allow* or a more autonomous setting for that device type.
 * **Weekly digest**: AI calls avoided, habits automated, exceptions, undone actions, tokens, research waiting for review.
@@ -368,23 +368,55 @@ To keep it low:
 
 ## 11. Custom agents and extra knowledge
 
-**Custom agents.** An agent is a YAML file:
+**Custom agents.** An agent is a YAML file. A complete example (every field):
 
 ```yaml
-agent_id: my_agent            # letters, digits, _ or -
-name: My Specialist Agent
-specialty: One line describing the expertise
-description: What it should look after
-monitored_domains: [sensor, switch]       # what it observes
-monitored_device_classes: [power]         # optional filter for sensors
-controllable_domains: [switch, notify, automation]   # what it may act on
+agent_id: pool_agent              # required; letters, digits, _ or -, max 64; also the file name
+name: Pool & Garden Agent         # required; shown in the dashboard and logs
+specialty: Pool water chemistry and irrigation efficiency   # required; one line
+description: >                    # required; what it should look after
+  Watches the pool pump, water temperature and the garden irrigation valves and
+  suggests how to save energy and water.
+monitored_domains: [sensor, switch, valve, weather]   # what it observes
+monitored_device_classes: [temperature, power]        # optional filter for sensors
+controllable_domains: [switch, valve, notify]         # the ONLY domains it may act on (see below)
+goals:                            # plain-language goals
+  - Run the pump when it is cheapest and the water actually needs filtering
+  - Warn me when the water temperature or pump power looks abnormal
+custom_domain_rules_prompt: >     # optional extra rules / knowledge, plain language
+  The pump must never run for less than 2 hours per day. Never touch the irrigation valve
+  between 22:00 and 06:00.
+batch_trigger: auto               # auto (default) | unavailable_only (diagnostic agents) | always
+enabled: true                     # false = defined but switched off
+```
+
+Only `agent_id`, `name`, `specialty` and `description` are required; everything else has a default.
+
+**What an agent may do is decided by `controllable_domains`.** It is a hard permission enforced in code: any action in another domain is blocked ("blocked_domain_not_permitted" in the activity log), whatever the AI says. The special domain `automation` is the permission to *propose new native automations*; an agent without it is told so in its prompt and returns ideas as insights instead. The text in `goals` and `custom_domain_rules_prompt` only guides the AI; it never grants or removes permissions. The same goes for notes you write on the *Memory & Rules* tab and the note you type when rejecting a proposal (the latter is kept for the agent that made it).
+
+Save it as `/config/ha_ai_brain/agents/pool_agent.yaml` (that is the `ha_ai_brain/agents` folder inside your Home Assistant configuration folder; the **File editor**, **Samba share** or **SSH & Web Terminal** add-ons can reach it) and restart the add-on. A file there with the same `agent_id` as a bundled example overrides it — that is how you **enable** the two bundled examples (a solar/energy agent and a brewery agent ship disabled): copy the example into that folder and set `enabled: true`. Agents registered through `POST /api/agents/custom` are saved in the same folder. Agents cannot be switched on or off from the dashboard yet.
+
+**Changing a built-in agent** (for example letting the Repair & Diagnostics agent propose automations). Built-in agents are defined inside the add-on, but a file in `/config/ha_ai_brain/agents/` with the **same `agent_id`** replaces them. Save the complete definition with your change, then restart the add-on:
+
+```yaml
+# /config/ha_ai_brain/agents/repair_diagnostics_agent.yaml
+agent_id: repair_diagnostics_agent
+name: Repair & Diagnostics Agent
+specialty: Smart Home Systems Reliability & Network Diagnostics Engineer
+description: >
+  Monitors unavailable entities and HA error logs; uses MCP tools to diagnose connectivity,
+  DHCP/IP changes, and integration health.
+monitored_domains: [device_tracker, sensor, switch, climate, light]
+monitored_device_classes: []
+controllable_domains: [homeassistant, notify, automation]   # <- "automation" added
 goals:
-  - A goal in plain language
-custom_domain_rules_prompt: Extra rules and domain knowledge in plain language.
+  - Detect unavailable entities, inspect HA system logs, and diagnose root causes
+  - Use available MCP tools and HA services to self-heal integrations or report actionable diagnostics
+batch_trigger: unavailable_only
 enabled: true
 ```
 
-Save it as `/config/ha_ai_brain/agents/my_agent.yaml` (that is the `ha_ai_brain/agents` folder inside your Home Assistant configuration folder; the **File editor**, **Samba share** or **SSH & Web Terminal** add-ons can reach it) and restart the add-on. A file there with the same `agent_id` as a bundled example overrides it — that is how you **enable** the two bundled examples (a solar/energy agent and a brewery agent ship disabled): copy the example into that folder and set `enabled: true`. Agents registered through `POST /api/agents/custom` are saved in the same folder. Agents cannot be switched on or off from the dashboard yet.
+Your file survives add-on updates and uninstalls (it lives in your Home Assistant configuration folder). Two things to know: it replaces the **whole** agent, so improvements to that built-in agent in later add-on versions will not reach you until you compare and update your copy; and to go back to the built-in version, delete your file and restart. The built-in definitions are listed in the add-on's source (`application/agent_registry.py`).
 
 **Extra reference knowledge.** Put YAML files in `/config/ha_ai_brain/knowledge/`:
 

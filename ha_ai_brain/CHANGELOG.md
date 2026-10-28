@@ -2,6 +2,14 @@
 
 All notable changes to **HA AI Brain** are documented in this file.
 
+## 0.2.8 - 2026-10-29
+
+### Changed
+- The activity log cards show the agent's readable name ("Repair & Diagnostics Agent", "Habit learning", "Watches", ...) instead of its internal id, and the title and time wrap cleanly on phones. The same names are used in the accepted/rejected suggestion lists.
+- Deployed automation health is sorted with problems first: missing, overridden, never fired, disabled, then too new and healthy; alphabetical by name within each status.
+- Agents that are not allowed to create automations (no `automation` in `controllable_domains`) are now told so in their analysis prompt and suggest the idea as an insight instead of repeatedly proposing an automation that gets blocked. The activity log still shows any blocked proposal.
+- The manual explains the full custom agent format with an example, the difference between permissions and guidance, and how to change a built-in agent with a file in `/config/ha_ai_brain/agents/`.
+
 ## 0.2.7 - 2026-10-28
 
 ### Changed

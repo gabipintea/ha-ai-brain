@@ -13,6 +13,18 @@ from ha_ai_brain.domain.patterns import AUTOMATED_ORIGINS
 OVERRIDE_WINDOW = timedelta(minutes=15)
 
 
+# Problems first, in the order a homeowner wants to look at them; the fine ones last.
+VERDICT_ORDER = ("missing", "overridden", "never_fired", "disabled", "too_new", "healthy")
+
+
+def review_sort_key(review: "AutomationReview | dict") -> tuple[int, str]:
+    """Sort key for the health list: by status (problems first), then alphabetically by name."""
+    verdict = review.get("verdict") if isinstance(review, dict) else review.verdict
+    alias = review.get("alias") if isinstance(review, dict) else review.alias
+    rank = VERDICT_ORDER.index(verdict) if verdict in VERDICT_ORDER else len(VERDICT_ORDER)
+    return rank, str(alias or "").lower()
+
+
 @dataclass
 class AutomationReview:
     automation_id: str

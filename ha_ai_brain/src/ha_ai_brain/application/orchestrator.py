@@ -35,7 +35,7 @@ from ha_ai_brain.domain.automation_draft import (
 from ha_ai_brain.domain.automation_rules import AutomationRule, RuleAction, _collect_actions, find_equivalent_rule, parse_automation_config
 from ha_ai_brain.domain.expectations import ExceptionFinding, is_safety_entity
 from ha_ai_brain.domain.min_change import MinChangeRule, find_rule, is_below_min_change
-from ha_ai_brain.domain.lifecycle import AutomationReview, review_deployed_automation
+from ha_ai_brain.domain.lifecycle import AutomationReview, review_deployed_automation, review_sort_key
 from ha_ai_brain.domain.outcomes import evaluate_outcome
 from ha_ai_brain.domain.patterns import automation_from_pattern, is_duplicate_habit
 from ha_ai_brain.domain.research import is_same_open_insight
@@ -2140,7 +2140,7 @@ class BrainOrchestrator:
             "timezone": self.learning._tz_name or "UTC",
             "patterns": [p.to_dict() for p in patterns[:40]],
             "existing_automations": len(self.learning.rules),
-            "automation_reviews": lifecycle,
+            "automation_reviews": sorted(lifecycle, key=review_sort_key),
             "stats_7d": {k: v for k, v in stats.items() if not k.startswith("avoided:")},
             "tokens_today": await self._tokens_used_today(),
             "daily_token_budget": self.settings.daily_token_budget,

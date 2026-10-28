@@ -513,6 +513,7 @@ class SpecializedAgentGraph:
             for dom, svcs in available_services.items()
             if (dom in agent_spec.controllable_domains and dom in present_domains) or dom in ("notify", "homeassistant")
         }
+        may_automate = "automation" in agent_spec.controllable_domains
         histories = state.get("history_summaries", {})
         deployed_or_pending = [
             {
@@ -553,13 +554,18 @@ class SpecializedAgentGraph:
                 "Call a `reference_knowledge` entry a 'built-in reference' (or 'approved knowledge' only when its origin says approved); "
                 "never write that something is 'based on research' or 'research shows' unless an entry's origin says approved web research.\n"
                 "- Use `household.weather.forecast_next_hours`, `household.energy_prices` and `household.solar_forecast` when proposing load-shifting or pre-conditioning.\n"
-                "CRITICAL RULES FOR NATIVE AUTOMATIONS (Triggers, Conditions & Actions):\n"
-                "- ONLY use entity IDs that exist in the provided `entities` dictionary. Never hallucinate or assume non-existent entities.\n"
-                "- ONLY use valid Home Assistant services that exist in the provided `available_ha_services`.\n"
-                f"- When an automation action sends a notification (e.g. alerting the homeowner), you MUST use a valid service from `available_notification_services` (preferred: '{configured_notify}').\n"
-                f"- NEVER invent non-existent notification services or guess device names (e.g. never invent unverified device names). If notifying the homeowner, use '{configured_notify}'.\n"
-                "- Actions must use standard Home Assistant action schema: `{'service': 'domain.service', 'target': {'entity_id': '...'}, 'data': {...}}`.\n"
-                "Return JSON with:\n"
+                + (
+                    "CRITICAL RULES FOR NATIVE AUTOMATIONS (Triggers, Conditions & Actions):\n"
+                    "- ONLY use entity IDs that exist in the provided `entities` dictionary. Never hallucinate or assume non-existent entities.\n"
+                    "- ONLY use valid Home Assistant services that exist in the provided `available_ha_services`.\n"
+                    f"- When an automation action sends a notification (e.g. alerting the homeowner), you MUST use a valid service from `available_notification_services` (preferred: '{configured_notify}').\n"
+                    f"- NEVER invent non-existent notification services or guess device names (e.g. never invent unverified device names). If notifying the homeowner, use '{configured_notify}'.\n"
+                    "- Actions must use standard Home Assistant action schema: `{'service': 'domain.service', 'target': {'entity_id': '...'}, 'data': {...}}`.\n"
+                    if may_automate
+                    else "YOU ARE NOT PERMITTED TO CREATE AUTOMATIONS: always return an empty `native_automations` list. "
+                    "When an automation would help, describe it in an `advisory_insight` and put the idea in `recommended_human_action` instead.\n"
+                )
+                + "Return JSON with:\n"
                 "1) `advisory_insights`: list of objects (`category`, `title` (concise 4-8 words), `finding_details` (deep technical analysis with sensor readings and psychrometric context), `evidence_metrics`, "
                 "`recommended_human_action` (direct actionable step for homeowner), `estimated_impact`).\n"
                 "2) `native_automations`: list of new, non-duplicate Home Assistant automation objects (`alias`, `description`, "
