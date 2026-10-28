@@ -131,6 +131,35 @@ class OrchestratorTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(KeyError):
             await self.o.forget_deployed_automation("nope")
 
+    async def test_draft_warns_about_unlocking_and_refuses_code_services(self) -> None:
+        entity = self.entity
+
+        def reply(actions: list) -> object:
+            async def fake(**_: object) -> dict:
+                return {"automation": {"alias": "X", "description": "d", "trigger": [{"platform": "time", "at": "07:00:00"}], "action": actions}}
+            return fake
+
+        self.o.llm.generate_json = reply([{"service": "lock.unlock", "target": {"entity_id": entity}}])  # type: ignore[method-assign]
+        res = await self.o.draft_automation("Open the lock at seven every morning")
+        self.assertTrue(any("by itself" in w for w in res["warnings"]))
+        self.o.llm.generate_json = reply([{"service": "shell_command.reboot"}])  # type: ignore[method-assign]
+        res = await self.o.draft_automation("Reboot something every morning")
+        self.assertTrue(any("not allowed" in e for e in res["errors"]))
+        ok = YAML.replace("light.living", self.entity)
+        self.assertEqual((await self.o.create_automation_from_yaml(ok))["status"], "created")  # control: the same YAML is fine
+        with self.assertRaises(ValueError):  # the same rule when the homeowner edits the YAML before creating
+            await self.o.create_automation_from_yaml(YAML.replace("light.living", self.entity).replace("light.turn_on", "shell_command.reboot"))
+
+    async def test_extra_critical_setting_is_applied_persisted_and_exported(self) -> None:
+        await self.o.update_runtime_settings({"critical_openings": " Cover.Driveway ,*carport*;barn,, "})
+        self.assertEqual(self.o.guardrails.extra_critical, ("cover.driveway", "*carport*", "barn"))
+        self.assertEqual((await self.o.memory.get_ui_preferences())["critical_openings"], "cover.driveway, *carport*, barn")
+        again = build_orchestrator(BrainSettings(use_simulator=True, operating_mode=OperatingMode.PERIODIC_BATCH, db_path=str(Path(self._tmp.name) / "t2.db")))  # a fresh orchestrator on another database starts empty...
+        self.assertEqual(again.guardrails.extra_critical, ())
+        again._apply_ui_preferences_dict(await self.o.memory.get_ui_preferences())  # ...and restores it from the saved preferences
+        self.assertEqual(again.guardrails.extra_critical, ("cover.driveway", "*carport*", "barn"))
+        self.assertIn("critical_openings", (await self.o.export_bundle())["sections"]["preferences"])
+
     async def test_unknown_entity_is_refused(self) -> None:
         with self.assertRaises(ValueError):
             await self.o.create_automation_from_yaml(YAML.replace("light.living", "light.does_not_exist"))

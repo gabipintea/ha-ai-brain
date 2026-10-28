@@ -53,6 +53,7 @@ class SettingsUpdateRequest(BaseModel):
     quiet_hours_start: str | None = Field(default=None, max_length=5)
     quiet_hours_end: str | None = Field(default=None, max_length=5)
     domain_autonomy: dict[str, AutonomyLevel] | None = None
+    critical_openings: str | None = Field(default=None, max_length=2000)
     research_enabled: bool | None = None
     research_web_search: bool | None = None
     research_interval_days: int | None = Field(default=None, ge=1, le=90)
@@ -61,7 +62,7 @@ class SettingsUpdateRequest(BaseModel):
     RUNTIME_FIELDS: ClassVar[tuple[str, ...]] = (
         "paused", "realtime_gating", "exception_detection", "deterministic_automations", "notify_autonomous_actions",
         "privacy_scrub", "daily_token_budget", "max_actions_per_hour", "max_actions_per_entity_per_hour",
-        "quiet_hours_start", "quiet_hours_end", "domain_autonomy",
+        "quiet_hours_start", "quiet_hours_end", "domain_autonomy", "critical_openings",
         "research_enabled", "research_web_search", "research_interval_days", "research_topics_per_agent",
         "realtime_coalesce_seconds", "max_agent_wakeups_per_hour",
     )

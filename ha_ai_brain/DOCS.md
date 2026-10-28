@@ -99,14 +99,20 @@ Habit-based automation proposals and the agents' periodic analyses are produced 
 
 ### 3.4 The specialised agents
 
-| Agent | Looks after |
-|---|---|
-| Climate & Indoor Environment | Temperature, humidity, ventilation, heating/cooling, condensation, thermal behaviour |
-| Lighting & Habit Automation | Lights, presence, occupancy patterns |
-| Security & Safety | Locks, alarms, doors/windows, covers, leaks, smoke/gas |
-| Energy, Power & Solar | Power, energy, batteries, solar, tariffs, load shifting |
-| Cover & Solar Shading | Blinds, shutters, awnings, sun and glare |
-| Repair & Diagnostics | Unavailable entities, flapping integrations, network/DHCP problems |
+| Agent (`agent_id`) | Goal | Watches (domains) | May act on (domains) | Can propose automations | Runs when |
+|---|---|---|---|---|---|
+| **Climate & Indoor Environment** (`climate_thermal_agent`) | Building-physics view of comfort and risks: condensation, thermal lag, ventilation, heating/cooling; control climate, fans, humidifiers and covers or notify you | sensor, climate, weather, cover, fan, humidifier (temperature, humidity, light level, CO₂, VOC, pressure) | climate, fan, humidifier, cover, notify, automation | Yes | Your home has at least one of the devices it operates |
+| **Lighting & Habit Automation** (`lighting_pattern_agent`) | Tell real manual habits from automated ones; act on lighting or propose automations for recurring routines | light, binary_sensor, sensor, sun, person (light level, motion, occupancy, presence) | light, scene, notify, automation | Yes | Your home has lights or scenes |
+| **Security & Safety** (`security_safety_agent`) | Combine who is home with doors, windows, leaks, smoke and gas to protect the property; proposes the actual actuator call, which always asks you first | lock, alarm_control_panel, binary_sensor, cover, person (door, window, lock, moisture, smoke, gas) | lock, alarm_control_panel, cover, valve, notify, automation | Yes, for protective routines only (anything that unlocks, disarms or opens always needs your approval) | Your home has locks, alarms, covers or valves |
+| **Energy, Power & Solar** (`energy_efficiency_agent`) | Find standby waste, shift flexible loads to cheap or solar-surplus hours, flag energy anomalies | sensor, switch, climate, binary_sensor (power, energy, battery, current, voltage) | switch, climate, notify, automation | Yes | Your home has switches or climate devices |
+| **Cover & Solar Shading** (`cover_shading_agent`) | Blinds and shutters follow sun, glare and weather; night closing in winter; automate manual adjustments | cover, sensor, sun, weather, binary_sensor (blind, curtain, shade, shutter, window, light level, temperature) | cover, notify, automation | Yes | Your home has covers |
+| **Repair & Diagnostics** (`repair_diagnostics_agent`) | Diagnose unavailable entities and error logs, self-heal or report; may propose an automation for a recurring reliability problem (for example a low battery) that nothing else covers | device_tracker, sensor, switch, climate, light | homeassistant, notify, automation | Yes | Only when some entity is unavailable |
+
+All six are **enabled** by default and appear in the Settings tab. Things that apply to every agent:
+* **Permission = "May act on".** An action in any other domain is blocked and shown in the activity log. `automation` means the agent may propose new native automations (they always need your approval); an agent without it is told so and suggests ideas as insights instead. `notify` and `homeassistant` are generic and never count as "owning devices".
+* **"Runs when"** is for the scheduled analysis: an agent with nothing to look at in your home is skipped without an AI call. Real-time reactions additionally need a significant, non-routine event in its field.
+* **Change one** by saving a file with the same `agent_id` in `/config/ha_ai_brain/agents/` (section 11). **Add your own** the same way. Two disabled examples (solar/energy and brewery) ship as templates.
+* Besides the agents, some sources appear in the logs that are not AI agents (see below).
 
 Each agent is a persona with goals, the entity types it watches and the services it is allowed to call. An agent can only act through the device types it is declared to control. You can add your own (section 11). Every agent run follows the same pipeline: gather context → consult its expert notes (generated once per setup and cached; this is separate from the weekly *Research* tab) → compute derived signals (sandboxed Python written by the AI, run in an isolated process) → synthesise actions or insights.
 
@@ -224,10 +230,10 @@ You can override the level for one device type, for example `light → autonomou
 
 **Deterministic guardrails** (applied to every action, whatever the AI says):
 * Climate setpoints outside **12–28 °C** are blocked.
-* Domains that run arbitrary code or manage the host (`shell_command`, `python_script`, `pyscript`, `command_line`, `rest_command`, `hassio`, `script`, `recorder`) are blocked.
-* **Critical** (always needs approval): unlocking/opening locks, disarming alarms, opening a garage door or gate.
+* Domains that run arbitrary code or manage the host (`shell_command`, `python_script`, `pyscript`, `command_line`, `rest_command`, `hassio`, `script`, `recorder`) are blocked, also when they appear inside a proposed automation.
+* **Critical** (always needs approval): unlocking/opening locks, disarming alarms, opening a garage door or gate. *Garage door or gate* is recognised by Home Assistant's own **device class** (`garage`, `gate`) or by the whole words "garage" / "gate" in the entity id or friendly name (so `investigate` does not match), on covers and also on switch-like openers (`switch`, `button`). Closing, locking, arming, stopping and switching off are never escalated. Anything else (a driveway barrier, a carport door, a barn...) can be added under **Settings → Learning & Safety → "Extra doors, gates or devices that always need approval to open"**: a comma-separated list of exact entity ids (`cover.driveway`), patterns (`*carport*`) or single words (`barn`).
 * **High** (never automatic): closing a valve, restarting Home Assistant, moving a cover beyond 30 % (blinds, shades, curtains and shutters are treated as lower risk).
-* Creating an automation is at least **medium** risk.
+* Creating an automation is at least **medium** risk, **and its risk is the highest of whatever its actions would do later on their own**. The guardrails look inside every automation an agent proposes (including nested conditions, choices and parallel steps): one that would unlock or open a lock, disarm an alarm, open a garage door or gate is **critical** (you must approve it even in Autonomous mode and even if you chose *Always allow* for similar actions); one that would close a valve, restart Home Assistant or call a service chosen by a template is **high**; one that calls a code-running or host-managing service is **blocked**. The approval card names the reason.
 * Anything you rejected before (same agent, same service, same device) is blocked.
 * Agents may only call device types they are declared to control; targets that do not exist are rejected; actions that would change nothing (already in that state) are suppressed; identical or opposing proposals that are already awaiting your decision are suppressed.
 
@@ -251,7 +257,7 @@ You can override the level for one device type, for example `light → autonomou
 * **Quota and cost monitor**: live status per provider with rate-limit cool-downs, session token counts and an estimated spend.
 
 ### 4.11 Your own automations in plain language
-In *Memory & Rules → Create an automation* describe what you want ("close the kitchen blind at sunset on weekdays, only when someone is home"). The AI writes a native Home Assistant automation using only entities that exist; you see its interpretation, a history check, any warnings (for example an equivalent automation already exists) and the **YAML** (triggers, conditions, actions), which you can edit freely. **Create automation** adds it to Home Assistant (named `[AI Brain] …`, id `ai_brain_…`); **Cancel** discards the draft. Pressing Create is your approval, so it does not pass through Approvals. Created automations appear in the automation health review like any other.
+In *Memory & Rules → Create an automation* describe what you want ("close the kitchen blind at sunset on weekdays, only when someone is home"). The AI writes a native Home Assistant automation using only entities that exist; you see its interpretation, a history check, any warnings (for example an equivalent automation already exists) and the **YAML** (triggers, conditions, actions), which you can edit freely. If the draft would unlock, disarm, open or otherwise do something sensitive by itself, you get a warning to read the YAML carefully; a draft (or an edit of it) that calls a code-running or host-managing service is refused. **Create automation** adds it to Home Assistant (named `[AI Brain] …`, id `ai_brain_…`); **Cancel** discards the draft. Pressing Create is your approval, so it does not pass through Approvals. Created automations appear in the automation health review like any other.
 
 ### 4.12 Backup and restore
 *Settings → Backup & restore* exports one JSON file with everything you decided or wrote: dashboard settings, notes, ignore list, minimum-change rules, watches, muted and dismissed alerts, rejected suggestions and insights, always-allow rules, the list of tracked automations, and approved/rejected research with its topics. Recorded history, logs, pending approvals and your API key are never included. **Import** first shows what the file contains (and warns if it holds always-allow rules), then merges it into the current installation; nothing is deleted and importing twice does not duplicate anything. Export before uninstalling the add-on, because uninstalling erases its data.
@@ -307,7 +313,7 @@ Any model supported by LiteLLM: Google Gemini, OpenAI, Anthropic, OpenRouter, lo
 Settings you change in the dashboard are saved in the brain's database and **take precedence over the add-on options** afterwards.
 
 ### Dashboard-only settings
-Real-time coalescing (`realtime_coalesce_seconds`, default 90: a burst of events in one area becomes one AI call) · maximum wake-ups per agent per hour (`max_agent_wakeups_per_hour`, default 6; safety events are exempt) · Per-device-type autonomy · AI quota fallback policy and fallback models · maximum autonomous actions per hour · "tell me when the brain acts on its own" · provider presets · watches · created automations · context notes · ignore list · backup & restore.
+Extra critical openings (`critical_openings`: exact entity ids, `*` patterns or words that always need approval to open) · Real-time coalescing (`realtime_coalesce_seconds`, default 90: a burst of events in one area becomes one AI call) · maximum wake-ups per agent per hour (`max_agent_wakeups_per_hour`, default 6; safety events are exempt) · Per-device-type autonomy · AI quota fallback policy and fallback models · maximum autonomous actions per hour · "tell me when the brain acts on its own" · provider presets · watches · created automations · context notes · ignore list · backup & restore.
 
 ### Advanced environment variables (for Docker / development)
 `BRAIN_BASELINE_MIN_DAYS` (3), `BRAIN_STORE_RETENTION_DAYS` (90), `BRAIN_STORE_BACKFILL_HOURS` (240), `BRAIN_HISTORY_MAX_ENTITIES` (300), `BRAIN_MAX_NEW_AUTOMATIONS` (3), `BRAIN_MAX_EXCEPTIONS_PER_CYCLE` (5), `BRAIN_MAX_EXCEPTIONS_PER_DAY` (20), `BRAIN_RESEARCH_TOPICS_PER_AGENT` (1), `BRAIN_MAX_ACTIONS_PER_ENTITY_PER_HOUR` (3), `BRAIN_KNOWLEDGE_DIR`, `BRAIN_TRUSTED_PROXIES`. See `.env.example`.
@@ -396,7 +402,7 @@ Only `agent_id`, `name`, `specialty` and `description` are required; everything 
 
 Save it as `/config/ha_ai_brain/agents/pool_agent.yaml` (that is the `ha_ai_brain/agents` folder inside your Home Assistant configuration folder; the **File editor**, **Samba share** or **SSH & Web Terminal** add-ons can reach it) and restart the add-on. A file there with the same `agent_id` as a bundled example overrides it — that is how you **enable** the two bundled examples (a solar/energy agent and a brewery agent ship disabled): copy the example into that folder and set `enabled: true`. Agents registered through `POST /api/agents/custom` are saved in the same folder. Agents cannot be switched on or off from the dashboard yet.
 
-**Changing a built-in agent** (for example letting the Repair & Diagnostics agent propose automations). Built-in agents are defined inside the add-on, but a file in `/config/ha_ai_brain/agents/` with the **same `agent_id`** replaces them. Save the complete definition with your change, then restart the add-on:
+**Changing a built-in agent** (for example stopping the Repair & Diagnostics agent from proposing automations, or giving the Security agent permission to). Built-in agents are defined inside the add-on, but a file in `/config/ha_ai_brain/agents/` with the **same `agent_id`** replaces them. Save the complete definition with your change, then restart the add-on:
 
 ```yaml
 # /config/ha_ai_brain/agents/repair_diagnostics_agent.yaml
@@ -408,7 +414,7 @@ description: >
   DHCP/IP changes, and integration health.
 monitored_domains: [device_tracker, sensor, switch, climate, light]
 monitored_device_classes: []
-controllable_domains: [homeassistant, notify, automation]   # <- "automation" added
+controllable_domains: [homeassistant, notify]   # <- "automation" removed (it is on by default)
 goals:
   - Detect unavailable entities, inspect HA system logs, and diagnose root causes
   - Use available MCP tools and HA services to self-heal integrations or report actionable diagnostics
@@ -490,7 +496,7 @@ Not in the default *Co-pilot* mode: it asks first. In *Autonomous* mode it execu
 With *Send actionable approval notifications* off, low- and medium-risk actions are executed **without asking, even in Co-pilot mode**, because there is no way to ask you. Keep it on unless you want that. High and critical actions still require approval (visible on the dashboard).
 
 **Can it create automations by itself?**
-Creating an automation counts as medium risk. In Co-pilot you approve each one. In *Autonomous* mode it is created automatically — to keep approvals for automations while everything else is autonomous, set the device type `automation` to *Co-pilot* in *Settings → Learning & Safety*. Everything it creates is named `[AI Brain] …`.
+Creating an automation counts as medium risk, unless what it would do later is more sensitive (unlocking, disarming, opening a garage door or gate is critical; closing a valve, restarting or template-chosen services is high; code-running services are blocked), in which case it needs your approval even in Autonomous mode. In Co-pilot you approve each one. In *Autonomous* mode it is created automatically — to keep approvals for automations while everything else is autonomous, set the device type `automation` to *Co-pilot* in *Settings → Learning & Safety*. Everything it creates is named `[AI Brain] …`.
 
 **How do I remove an automation it created?**
 Delete it in *Settings → Automations* (search for "AI Brain"). The brain will notice it is gone during its daily check. Because the habit behind it still exists, it may propose the same automation again later — if you never want it, **Reject** the proposal in *Approvals* (a plain Dismiss does not block it), or put the device on the ignore list.

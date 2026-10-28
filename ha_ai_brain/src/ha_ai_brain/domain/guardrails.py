@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import fnmatch
 import re
+from collections.abc import Callable, Iterator
 from enum import Enum
+from typing import Any
 
 from pydantic import BaseModel
 
@@ -30,6 +33,35 @@ class GuardrailEvaluation(BaseModel):
     matched_rule: ApprovalRule | None = None
 
 
+def _entity_list(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, list):
+        return [v for v in value if isinstance(v, str)]
+    return []
+
+
+def iter_action_calls(node: Any, depth: int = 0) -> Iterator[tuple[str, list[str]]]:
+    """Every service call inside an automation's actions, however deeply nested (choose / if / repeat / parallel ...).
+
+    Yields (service string, target entity ids). Walks all nested structures generically so no branch can hide a call."""
+    if depth > 10:
+        return
+    if isinstance(node, dict):
+        svc = node.get("service") or node.get("action")
+        if isinstance(svc, str):
+            target = node.get("target") if isinstance(node.get("target"), dict) else {}
+            data = node.get("data") if isinstance(node.get("data"), dict) else {}
+            ids = _entity_list(target.get("entity_id")) or _entity_list(node.get("entity_id")) or _entity_list(data.get("entity_id"))
+            yield svc, ids
+        for value in node.values():
+            if isinstance(value, (dict, list)):
+                yield from iter_action_calls(value, depth + 1)
+    elif isinstance(node, list):
+        for item in node:
+            yield from iter_action_calls(item, depth + 1)
+
+
 class GuardrailEngine:
     """
     Deterministic policy engine protecting the smart home:
@@ -40,6 +72,54 @@ class GuardrailEngine:
 
     MIN_SAFE_TEMP_C = 12.0
     MAX_SAFE_TEMP_C = 28.0
+
+    # Words that make a cover / opener a garage door or gate; matched as whole words in the entity id and friendly name.
+    SENSITIVE_WORDS = frozenset({"garage", "gate", "gates"})
+    SENSITIVE_DEVICE_CLASSES = frozenset({"garage", "gate"})
+    # Domains whose "open" is a service on a switch-like entity (garage openers are often a switch or a button).
+    OPENER_DOMAINS = frozenset({"cover", "switch", "button", "input_button"})
+    # Services that close, lock, arm, stop or switch something off are never escalated.
+    NON_OPENING_SERVICES = frozenset({"close_cover", "stop_cover", "lock", "turn_off", "close_valve"})
+
+    # Set by the orchestrator: entity id -> (device_class, friendly_name) from live states, and the user's extra critical entries.
+    entity_lookup: Callable[[str], tuple[str, str]] | None = None
+    extra_critical: tuple[str, ...] = ()
+
+    def _words(self, entity_id: str) -> set[str]:
+        device_class, name = ("", "")
+        if self.entity_lookup is not None:
+            try:
+                device_class, name = self.entity_lookup(entity_id)
+            except Exception:
+                device_class, name = ("", "")
+        return {w for w in re.split(r"[^a-z0-9]+", f"{entity_id.split('.', 1)[-1]} {name}".lower()) if w}
+
+    def _device_class(self, entity_id: str) -> str:
+        if self.entity_lookup is None:
+            return ""
+        try:
+            return (self.entity_lookup(entity_id)[0] or "").lower()
+        except Exception:
+            return ""
+
+    def is_critical_opening(self, entity_id: str, service_name: str) -> bool:
+        """Would calling `service_name` on this entity open something the homeowner flagged or that is clearly a garage door / gate?"""
+        if service_name in self.NON_OPENING_SERVICES or service_name.startswith("alarm_arm"):
+            return False
+        eid = entity_id.lower()
+        words = self._words(eid)
+        for entry in self.extra_critical:
+            if "." in entry and not any(c in entry for c in "*?"):
+                if eid == entry:
+                    return True
+            elif any(c in entry for c in "*?"):
+                if fnmatch.fnmatch(eid, entry):
+                    return True
+            elif entry in words:
+                return True
+        if eid.split(".", 1)[0] in self.OPENER_DOMAINS:
+            return self._device_class(eid) in self.SENSITIVE_DEVICE_CLASSES or bool(words & self.SENSITIVE_WORDS)
+        return False
 
     CRITICAL_SERVICES = {
         ("lock", "unlock"),
@@ -78,6 +158,15 @@ class GuardrailEngine:
                 effective_risk=ActionRiskLevel.CRITICAL,
                 signature=signature,
                 reason=f"Hard Safety Guardrail: domain '{intent.domain}' can run arbitrary code or manage the host and is never allowed.",
+            )
+
+        # 0b. The same ban applies to what an automation would do later on its own
+        if intent.domain == "automation" and self.automation_action_risk(intent)[2]:
+            return GuardrailEvaluation(
+                decision=GuardrailDecisionType.HARD_BLOCKED,
+                effective_risk=ActionRiskLevel.CRITICAL,
+                signature=signature,
+                reason="Hard Safety Guardrail: the automation would call a service that can run arbitrary code or manage the host.",
             )
 
         # 1. Check if the user previously explicitly banned/rejected this repeatable signature
@@ -139,7 +228,11 @@ class GuardrailEngine:
                 decision=GuardrailDecisionType.REQUIRE_USER_APPROVAL,
                 effective_risk=effective_risk,
                 signature=signature,
-                reason=f"Critical security guardrail: '{intent.domain}.{intent.service}' always requires explicit human confirmation.",
+                reason=(
+                    f"Critical security guardrail: this automation always requires explicit human confirmation because {self.automation_action_risk(intent)[1]}."
+                    if intent.domain == "automation"
+                    else f"Critical security guardrail: '{intent.domain}.{intent.service}' always requires explicit human confirmation."
+                ),
             )
 
         # 7. Check if this repeatable action signature has already been endorsed by the user
@@ -242,6 +335,48 @@ class GuardrailEngine:
     def _max_risk(cls, *levels: ActionRiskLevel) -> ActionRiskLevel:
         return max(levels, key=cls._RISK_ORDER.index)
 
+    @staticmethod
+    def _automation_actions(intent: ActionIntent) -> list[Any]:
+        if intent.native_automation is not None:
+            return list(intent.native_automation.action or [])
+        raw = intent.service_data.get("action") if isinstance(intent.service_data, dict) else None
+        return raw if isinstance(raw, list) else []
+
+    def automation_action_risk(self, intent: ActionIntent) -> tuple[ActionRiskLevel, str, bool]:
+        """Worst risk among what a proposed automation would do later on its own: (risk, why, contains_forbidden_call).
+
+        An automation keeps running without the brain, so what its actions do matters more than the fact that it is an automation."""
+        worst, why, forbidden = ActionRiskLevel.MEDIUM, "", False
+
+        def raise_to(level: ActionRiskLevel, reason: str) -> None:
+            nonlocal worst, why
+            if self._RISK_ORDER.index(level) > self._RISK_ORDER.index(worst):
+                worst, why = level, reason
+
+        for svc, targets in iter_action_calls(self._automation_actions(intent)):
+            if "{{" in svc or "{%" in svc:
+                raise_to(ActionRiskLevel.HIGH, "it calls a service chosen by a template")
+                continue
+            domain, _, name = svc.partition(".")
+            if domain in self.FORBIDDEN_DOMAINS:
+                forbidden = True
+                continue
+            if (domain, name) in self.CRITICAL_SERVICES:
+                raise_to(ActionRiskLevel.CRITICAL, f"it would call {svc}")
+            elif (domain, name) in self.HIGH_RISK_SERVICES:
+                raise_to(ActionRiskLevel.HIGH, f"it would call {svc}")
+            for eid in targets:
+                kind = eid.split(".", 1)[0]
+                if kind == "lock" and name != "lock":
+                    raise_to(ActionRiskLevel.CRITICAL, f"it would unlock or open {eid}")
+                elif kind == "alarm_control_panel" and not name.startswith("alarm_arm"):
+                    raise_to(ActionRiskLevel.CRITICAL, f"it would disarm or trigger {eid}")
+                elif self.is_critical_opening(eid, name):
+                    raise_to(ActionRiskLevel.CRITICAL, f"it would open {eid}")
+                elif kind == "valve" and name == "close_valve":
+                    raise_to(ActionRiskLevel.HIGH, f"it would close {eid}")
+        return worst, why, forbidden
+
     def _determine_effective_risk(self, intent: ActionIntent) -> ActionRiskLevel:
         """Compute deterministic floor risk for sensitive services."""
         pair = (intent.domain, intent.service)
@@ -250,12 +385,13 @@ class GuardrailEngine:
         if pair in self.HIGH_RISK_SERVICES:
             return ActionRiskLevel.HIGH
 
+        if intent.domain in self.OPENER_DOMAINS or self.extra_critical:
+            # Opening a garage door or gate (or anything the homeowner flagged) exposes the property; closing is never escalated.
+            if any(self.is_critical_opening(e, intent.service) for e in intent.target_entity_ids):
+                return ActionRiskLevel.CRITICAL
+
         if intent.domain == "cover":
-            opening = intent.service != "close_cover"
             for entity_id in intent.target_entity_ids:
-                # Opening a garage door or gate exposes the property; closing one is never escalated.
-                if opening and ("garage" in entity_id or "gate" in entity_id):
-                    return ActionRiskLevel.CRITICAL
                 if any(k in entity_id for k in ("blind", "shade", "curtain", "shutter")):
                     return intent.risk_level
             pos = intent.service_data.get("position", 100 if intent.service == "open_cover" else 0)
@@ -267,6 +403,6 @@ class GuardrailEngine:
             return self._max_risk(intent.risk_level, ActionRiskLevel.MEDIUM)
 
         if intent.domain == "automation":
-            return self._max_risk(intent.risk_level, ActionRiskLevel.MEDIUM)
+            return self._max_risk(intent.risk_level, self.automation_action_risk(intent)[0])
 
         return intent.risk_level

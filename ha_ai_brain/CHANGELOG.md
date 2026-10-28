@@ -2,6 +2,15 @@
 
 All notable changes to **HA AI Brain** are documented in this file.
 
+## 0.2.9 - 2026-10-29
+
+### Changed
+- The built-in **Repair & Diagnostics** agent may now propose native automations (for example a warning for a low battery on a device that matters). They still need your approval, and the agent is told to propose one only when no existing automation, Watch or built-in alert already covers the problem. To switch this off, override the agent as described in the manual.
+- **Safer automations from agents.** The guardrails now look inside every automation an agent proposes, including nested steps. One that would unlock or open a lock, disarm an alarm or open a garage door or gate is critical (always needs your approval, even in Autonomous mode or with an *Always allow* rule for similar actions); one that would close a valve, restart Home Assistant or call a service chosen by a template is high risk; one that calls a code-running or host-managing service (shell commands, scripts, `hassio`, ...) is blocked. Previously every automation proposal was only rated medium, which Autonomous mode runs without asking. The same checks warn you (or refuse) in *Create an automation*.
+- **Better recognition of garage doors and gates.** They are now detected by Home Assistant's device class (`garage`, `gate`) as well as by the whole words "garage"/"gate" in the entity id or friendly name (no more false hits like "investigate"), on covers and on switch/button openers. A new setting, **Extra doors, gates or devices that always need approval to open** (Settings → Learning & Safety), takes your own entities, patterns (`*carport*`) or words (`barn`). It applies to the brain's direct actions and to the automations it proposes, and it is included in Backup & restore.
+- The built-in **Security & Safety** agent may now propose automations, for protective routines only (for example a notification when a door stays unlocked while everyone is away).
+- The manual has a clear table of all built-in agents: goal, what each watches, which domains it may act on, whether it can propose automations, and when it runs.
+
 ## 0.2.8 - 2026-10-29
 
 ### Changed

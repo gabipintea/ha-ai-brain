@@ -37,7 +37,7 @@
 * Describe a condition in a sentence; the AI interprets it once, shows how it understood you and how often it would have fired on your history; from then on it runs locally for free.
 
 **Specialised AI agents**
-* Climate, Lighting, Security, Energy & Solar, Shading and Repair agents, plus your own custom agents.
+* Climate, Lighting, Security, Energy & Solar, Shading and Repair & Diagnostics agents, plus your own custom agents.
 * **Regular analysis of the whole picture**: every few hours each agent studies your entities, trends and existing automations and proposes insights, recommendations and new automation ideas — even when nothing is wrong (for example condensation risk from indoor humidity/temperature and the outdoor temperature). Calculations run in a sandbox.
 * Real-time reactions to unusual events.
 * In real time, only called when local learning says it is worth it — routine events, normal readings and things already automated never reach the AI.
@@ -45,7 +45,7 @@
 
 **You stay in control**
 * Shadow / Co-pilot / Autonomous — globally and per device type (for example lights autonomous, locks co-pilot).
-* Hard guardrails the AI cannot override: temperature limits, blocked code-execution domains, approval always required for unlocking, disarming, garage doors, valves and restarts.
+* Hard guardrails the AI cannot override: temperature limits, blocked code-execution domains, approval always required for unlocking, disarming, garage doors, valves and restarts — also when they are hidden inside an automation an agent proposes.
 * Approve from your phone: *Approve once*, *Always allow*, *Dismiss*, *Reject*. **Undo** button on everything it does by itself.
 * Action rate limits, quiet hours, a daily token budget, a kill switch, and a privacy filter that hides people, phones and network identifiers from cloud AI.
 

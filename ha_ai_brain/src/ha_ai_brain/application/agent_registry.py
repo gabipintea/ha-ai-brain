@@ -69,10 +69,11 @@ def get_builtin_agents() -> list[AgentSpec]:
             ),
             monitored_domains=["lock", "alarm_control_panel", "binary_sensor", "cover", "person"],
             monitored_device_classes=["door", "window", "lock", "moisture", "smoke", "gas"],
-            controllable_domains=["lock", "alarm_control_panel", "cover", "valve", "notify"],
+            controllable_domains=["lock", "alarm_control_panel", "cover", "valve", "notify", "automation"],
             goals=[
                 "Correlate occupancy with perimeter state and environmental hazard sensors to protect the property",
                 "Propose the actual actuator service call (e.g. lock.lock, cover.close_cover, valve.close_valve) when an action can be taken by an actuator; the Guardrail Engine will automatically attach the interactive Approve/Reject buttons to the user notification",
+                "Propose native automations only for protective routines (for example a notification when a door stays unlocked while everyone is away, or closing a valve on a leak); automations that unlock, disarm or open anything are never created without your explicit approval",
             ],
             enabled=True,
             is_custom=False,
@@ -125,10 +126,12 @@ def get_builtin_agents() -> list[AgentSpec]:
             ),
             monitored_domains=["device_tracker", "sensor", "switch", "climate", "light"],
             monitored_device_classes=[],
-            controllable_domains=["homeassistant", "notify"],
+            controllable_domains=["homeassistant", "notify", "automation"],
             goals=[
                 "Detect unavailable entities, inspect HA system logs, and diagnose root causes",
                 "Use available MCP tools and HA services to self-heal integrations or report actionable diagnostics",
+                "Propose a native automation only for a recurring reliability problem (for example a low battery on a device that matters) "
+                "that no existing automation, Watch or built-in alert already covers",
             ],
             batch_trigger="unavailable_only",
             enabled=True,

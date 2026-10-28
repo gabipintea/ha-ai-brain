@@ -165,6 +165,10 @@ class BrainSettings(BaseModel):
     max_actions_per_entity_per_hour: int = Field(default=3)
     quiet_hours_start: str = Field(default="", description="HH:MM local time; low-severity pushes are held during quiet hours")
     quiet_hours_end: str = Field(default="")
+    critical_openings: str = Field(
+        default="",
+        description="Comma-separated extra entities, wildcards or words (for example 'cover.driveway, *carport*, barn') that always need approval to open",
+    )
     log_level: str = Field(default="INFO", description="DEBUG | INFO | WARNING - DEBUG logs every single state change")
     paused: bool = Field(default=False, description="Kill switch: observe and learn only, never act or call the LLM in real time")
     domain_autonomy: dict[str, AutonomyLevel] = Field(

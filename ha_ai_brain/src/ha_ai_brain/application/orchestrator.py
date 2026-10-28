@@ -122,6 +122,7 @@ class BrainOrchestrator:
         self.triage = EdgeSignalTriage(manual_override_cooldown_seconds=settings.manual_override_cooldown_seconds)
         self.arbiter = ConflictArbiter(triage=self.triage)
         self.guardrails = GuardrailEngine()
+        self.guardrails.entity_lookup = self._entity_label
 
         self.research_subagent = ResearchSubAgent(llm=llm, research_port=research)
         self.computation_subagent = ComputationSubAgent(llm=llm, sandbox=sandbox, memory=memory)
@@ -342,6 +343,18 @@ class BrainOrchestrator:
         "realtime_coalesce_seconds", "max_agent_wakeups_per_hour",
     )
 
+    def _entity_label(self, entity_id: str) -> tuple[str, str]:
+        st = (self._cached_states or {}).get(entity_id)
+        return ((st.device_class or "") if st else "", str(st.attributes.get("friendly_name") or "") if st else "")
+
+    @staticmethod
+    def parse_critical_openings(raw: str) -> tuple[str, ...]:
+        parts = [p.strip().lower() for p in re.split(r"[,\n;]+", raw or "")]
+        return tuple(dict.fromkeys(p[:100] for p in parts if p))[:50]
+
+    def _sync_guardrail_settings(self) -> None:
+        self.guardrails.extra_critical = self.parse_critical_openings(self.settings.critical_openings)
+
     def _apply_extended_preferences(self, prefs: dict[str, str]) -> None:
         for key in self._BOOL_PREFS:
             if key in prefs:
@@ -355,6 +368,9 @@ class BrainOrchestrator:
         for key in ("quiet_hours_start", "quiet_hours_end"):
             if key in prefs:
                 setattr(self.settings, key, prefs[key])
+        if "critical_openings" in prefs:
+            self.settings.critical_openings = prefs["critical_openings"]
+        self._sync_guardrail_settings()
         if "domain_autonomy" in prefs:
             try:
                 raw = json.loads(prefs["domain_autonomy"])
@@ -382,6 +398,11 @@ class BrainOrchestrator:
                     raise ValueError(f"{key} must be HH:MM")
                 setattr(self.settings, key, value)
                 await self.memory.save_ui_preference(key, value)
+        if changes.get("critical_openings") is not None:
+            entries = self.parse_critical_openings(str(changes["critical_openings"]))
+            self.settings.critical_openings = ", ".join(entries)
+            await self.memory.save_ui_preference("critical_openings", self.settings.critical_openings)
+            self._sync_guardrail_settings()
         if changes.get("domain_autonomy") is not None:
             mapping = {str(d).strip().lower(): AutonomyLevel(v) for d, v in dict(changes["domain_autonomy"]).items() if str(d).strip()}
             self.settings.domain_autonomy = mapping
@@ -2189,6 +2210,15 @@ class BrainOrchestrator:
         twin = self.learning.equivalent_rule(proposal)
         if twin:
             warnings.append(f"An existing automation already does something equivalent: '{twin}'.")
+        risk, why, forbidden = self.guardrails.automation_action_risk(
+            ActionIntent(agent_id="homeowner", domain="automation", service="upsert_native_automation", target_entity_ids=[],
+                         cause_category="user_authored", rationale="draft", native_automation=proposal)
+        )
+        if why:
+            warnings.append(f"Read the YAML carefully: {why}, and it would do so by itself whenever its trigger fires.")
+        if forbidden:
+            warnings.append("It calls a service that can run arbitrary code or manage the host; the brain never creates those for you.")
+            errors.append("This automation calls a service that is not allowed (shell commands, scripts, host management).")
         backtest = None
         try:
             backtest = (await self.learning.backtest(proposal, datetime.now(timezone.utc))).model_dump(mode="json")
@@ -2210,6 +2240,10 @@ class BrainOrchestrator:
         errors, _ = validate_draft(proposal, set(states.keys()))
         if errors:
             raise ValueError(" ".join(errors))
+        probe = ActionIntent(agent_id="homeowner", domain="automation", service="upsert_native_automation", target_entity_ids=[],
+                             cause_category="user_authored", rationale="check", native_automation=proposal)
+        if self.guardrails.automation_action_risk(probe)[2]:
+            raise ValueError("This automation calls a service that is not allowed (shell commands, scripts, host management).")
         intent = ActionIntent(
             agent_id="homeowner",
             domain="automation",

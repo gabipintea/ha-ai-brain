@@ -727,6 +727,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
             <span id="quietHint">Quiet hours are off.</span>
             <button class="icon" type="button" onclick="clearQuietHours()">Clear quiet hours</button>
           </div>
+          <label class="field">Extra doors, gates or devices that always need approval to open
+            <input type="text" id="criticalInput" maxlength="2000" placeholder="e.g. cover.driveway, *carport*, barn" onchange="setRuntime('critical_openings', this.value)" />
+          </label>
+          <div class="hint" style="margin:0 0 10px;">Garage doors and gates are recognised automatically (by their Home Assistant device class or the words "garage" and "gate" in the name). Add anything else here: an exact entity id, a pattern with * or ?, or a single word. Comma-separated.</div>
           <div class="field">Autonomy per device type
             <div class="hint" style="margin:4px 0 6px;">Override the global autonomy for one domain, for example lights autonomous while locks stay co-pilot. Critical security actions always need approval.</div>
             <div style="display:flex; gap:8px; flex-wrap:wrap;">
@@ -1729,6 +1733,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     setVal('wakeCapInput', st.max_agent_wakeups_per_hour);
     setVal('quietStartInput', st.quiet_hours_start);
     setVal('quietEndInput', st.quiet_hours_end);
+    setVal('criticalInput', st.critical_openings);
     const quietHint = $('quietHint');
     if (quietHint) {
       quietHint.textContent = (st.quiet_hours_start && st.quiet_hours_end && st.quiet_hours_start !== st.quiet_hours_end)
