@@ -91,6 +91,9 @@ def _collect_actions(items: list[Any], rule: AutomationRule, depth: int = 0) -> 
             data = item.get("data") if isinstance(item.get("data"), dict) else {}
             ids = _entity_ids(target.get("entity_id")) or _entity_ids(item.get("entity_id")) or _entity_ids(data.get("entity_id"))
             clean_data = {k: v for k, v in data.items() if k != "entity_id"}
+            if domain == "script" and service not in ("turn_on", "turn_off", "toggle", "reload"):
+                ids = [f"script.{service}"]  # `script.movie_mode` called directly runs that script
+                service = "turn_on"
             for eid in ids:
                 rule.actions.append(RuleAction(eid, domain, service, clean_data))
             continue
@@ -156,13 +159,13 @@ def _weekday_overlap(rule: AutomationRule, day_class: str) -> bool:
     return bool(rule.weekdays & days)
 
 
-def pattern_covered_by(rules: list[AutomationRule], pattern: MinedPattern, tolerance: int = 45) -> str | None:
+def pattern_covered_by(rules: list[AutomationRule], pattern: MinedPattern, tolerance: int = 45, twins: Any = None) -> str | None:
     """Alias of an enabled automation that already produces the behaviour in `pattern`, else None."""
     for rule in rules:
         if not rule.enabled:
             continue
         for act in rule.actions:
-            if not same_device(act.entity_id, pattern.entity_id) or act.result_state != pattern.to_state:
+            if not (same_device(act.entity_id, pattern.entity_id) or (twins and twins.are_twins(act.entity_id, pattern.entity_id))) or act.result_state != pattern.to_state:
                 continue
             if pattern.kind == "time_habit" and pattern.minute_of_day is not None:
                 if any(circular_distance(m, pattern.minute_of_day) <= tolerance for m in rule.time_triggers) and _weekday_overlap(
@@ -174,7 +177,7 @@ def pattern_covered_by(rules: list[AutomationRule], pattern: MinedPattern, toler
                 if not rule.time_triggers and routine_triggers:
                     return rule.alias
             elif pattern.kind == "sequence":
-                if any(e == pattern.trigger_entity for e, _ in rule.state_triggers):
+                if any(e == pattern.trigger_entity or (twins and twins.are_twins(e, pattern.trigger_entity or "")) for e, _ in rule.state_triggers):
                     return rule.alias
     return None
 

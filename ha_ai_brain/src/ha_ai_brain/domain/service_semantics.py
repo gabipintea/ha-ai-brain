@@ -9,6 +9,9 @@ ACTUATOR_DOMAINS = frozenset(
     {"light", "switch", "cover", "climate", "fan", "humidifier", "lock", "input_boolean", "water_heater", "valve"}
 )
 
+# A script has no lasting state: a hand-started run is recorded as this momentary "state" so it can be mined like any habit.
+SCRIPT_RUN_STATE = "run"
+
 _ON_OFF = {"turn_on": "on", "turn_off": "off"}
 _RESULT_STATE: dict[str, dict[str, str]] = {
     "light": _ON_OFF,
@@ -19,6 +22,7 @@ _RESULT_STATE: dict[str, dict[str, str]] = {
     "cover": {"open_cover": "open", "close_cover": "closed"},
     "lock": {"lock": "locked", "unlock": "unlocked"},
     "valve": {"open_valve": "open", "close_valve": "closed"},
+    "script": {"turn_on": SCRIPT_RUN_STATE},
 }
 
 _STATE_SERVICE: dict[str, dict[str, str]] = {

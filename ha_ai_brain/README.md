@@ -20,7 +20,7 @@
 * You add context in plain words: a site description, permanent notes the AI must obey, and an ignore list.
 
 **Learns locally — no AI tokens**
-* Finds your **habits** ("this goes off around 23:00 on weekdays", "this follows that within minutes").
+* Finds your **habits** ("this goes off around 23:00 on weekdays", "this follows that within minutes", "you run this script around 21:00"). Devices that merely react to the same trigger (for example several automations that all start at sunset) are not mistaken for a habit, the same device exposed by two integrations (for example Matter and HomeKit) is recognised by its serial number and counted once, and the Learned tab lists what was ignored or merged and why.
 * Turns strong, un-automated habits into **native Home Assistant automations** — written by statistics, not by an AI call. A **Propose automation** button on any habit sends a weaker one to you for approval right away.
 * **Backtests** every proposed automation against your own history before you see it.
 * Learns what each sensor normally reads at each hour, and how long each device normally stays in each state.

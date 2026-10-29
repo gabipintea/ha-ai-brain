@@ -533,6 +533,21 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     </div>
     <div class="grid" style="margin-top:16px;">
       <div class="card">
+        <div class="card-head"><h2>Habits ignored on purpose</h2><span class="pill" id="suppressedCount">0</span></div>
+        <div class="hint">Things that looked like a habit ("this follows that") but are probably not: the devices just react to the same trigger, happen at the same time every day, or are one scene. Each entry says why it was left out, so you can check the reasoning.</div>
+        <div id="suppressedStats" class="muted" style="font-size:0.8rem; margin-top:6px;"></div>
+        <div id="suppressedList" class="scroll" style="margin-top:8px;"></div>
+      </div>
+    </div>
+    <div class="grid" style="margin-top:16px;">
+      <div class="card">
+        <div class="card-head"><h2>Devices seen twice</h2><span class="pill" id="twinsCount">0</span></div>
+        <div class="hint">The same physical device exposed by two integrations (for example Matter and HomeKit) shows up as two entities. They are recognised by the serial number in Home Assistant's device registry, and their history is merged so the device counts once. If a pair is not really one device, split it.</div>
+        <div id="twinsList" class="scroll" style="margin-top:8px;"></div>
+      </div>
+    </div>
+    <div class="grid" style="margin-top:16px;">
+      <div class="card">
         <div class="card-head"><h2>Muted alerts</h2></div>
         <div class="hint">Unusual-situation alerts you rejected. Dismissing an alert makes the brain wait longer before repeating it; rejecting mutes it until you unmute it here.</div>
         <div id="mutedList" style="margin-top:8px;"></div>
@@ -1936,6 +1951,16 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   async function toggleWatch(id) { await fetch('./api/watches/' + encodeURIComponent(id) + '/toggle', {method: 'POST'}); await refreshWatches(); }
   async function deleteWatch(id) { await fetch('./api/watches/' + encodeURIComponent(id), {method: 'DELETE'}); await refreshWatches(); }
 
+  let lastTwinSplits = [];
+  async function splitTwin(groupId, split) {
+    await post('./api/twins/split', {group_id: groupId, split});
+    await refreshLearned();
+  }
+  async function restoreTwins() {
+    for (const id of lastTwinSplits) await post('./api/twins/split', {group_id: id, split: false});
+    await refreshLearned();
+  }
+
   async function unmuteException(key) {
     await post('./api/exceptions/unmute', {key});
     await refreshLearned();
@@ -2119,6 +2144,35 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         ${p.covered_by ? '' : `<div class="btn-row" style="margin-top:6px;"><button class="icon" data-pid="${esc(p.pattern_id)}" onclick="proposeHabit(this)">Propose automation</button></div>
         <div class="muted habit-msg" style="font-size:0.8rem; margin-top:4px;"></div>`}</div>`).join('')
       : '<div class="empty">No recurring habits found yet. They appear after a few days of recorded history.</div>';
+
+    const sup = d.suppressed_habits || {};
+    const supItems = sup.items || [];
+    const SUP_LABELS = {shared_cause: 'Same trigger', same_time_of_day: 'Same time every day', fan_out: 'One trigger, many devices', mirror: 'Always together', twin_device: 'Same device twice'};
+    $('suppressedCount').textContent = sup.suppressed_total || 0;
+    const ign = [];
+    if (sup.ignored_automated_triggers) ign.push(sup.ignored_automated_triggers + ' changes made by automations were not used as triggers');
+    if (sup.ignored_burst_transitions) ign.push(sup.ignored_burst_transitions + ' changes in scene-like bursts (many devices within seconds) were ignored');
+    $('suppressedStats').textContent = ign.join('. ');
+    $('suppressedList').innerHTML = supItems.length ? supItems.map(x => `<div class="item">
+        <div class="wrap">${esc(x.trigger_entity)} '${esc(x.trigger_state)}' &rarr; ${esc(x.entity_id)} '${esc(x.to_state)}'</div>
+        <div style="margin-top:4px; display:flex; gap:6px; flex-wrap:wrap;">
+          <span class="pill warn">${esc(SUP_LABELS[x.rule] || x.rule)}</span>
+          <span class="pill">${Math.round(x.confidence * 100)}% of the time, ${esc(x.hits)} times</span>
+        </div>
+        <div class="muted wrap" style="font-size:0.85rem; margin-top:4px;">${esc(x.reason)}</div></div>`).join('')
+      : '<div class="empty">Nothing was ignored. Everything that looked like a habit is in the list above.</div>';
+
+    const twins = d.device_twins || [];
+    $('twinsCount').textContent = twins.length;
+    lastTwinSplits = d.device_twin_splits || [];
+    const splitCount = lastTwinSplits.length;
+    $('twinsList').innerHTML = twins.length ? twins.map(g => `<div class="item">
+        <div class="wrap"><b>${esc(g.canonical)}</b> &larr; ${g.members.filter(m => m !== g.canonical).map(esc).join(', ')}</div>
+        <div class="muted wrap" style="font-size:0.85rem; margin-top:4px;">${esc(g.reason)}</div>
+        <div class="muted" style="font-size:0.8rem; margin-top:4px;">${g.twin_changes ? 'Seen by both entities in ' + g.moved_together + ' of ' + g.twin_changes + ' recent changes.' : 'No recent changes to compare.'}</div>
+        <div class="btn-row" style="margin-top:6px;"><button class="icon" data-gid="${esc(g.group_id)}" onclick="splitTwin(this.dataset.gid, true)">Not the same device</button></div></div>`).join('')
+      : '<div class="empty">No device is exposed twice' + (splitCount ? ' (' + splitCount + ' pair(s) split by you)' : '') + '.</div>';
+    if (splitCount) $('twinsList').insertAdjacentHTML('beforeend', '<div class="muted" style="font-size:0.8rem; margin-top:6px;">' + splitCount + ' pair(s) split by you. <a href="#" onclick="restoreTwins(); return false;">Undo all</a></div>');
 
     const muted = d.muted_exceptions || [];
     $('mutedList').innerHTML = muted.length ? muted.map(k => `<div class="item" style="display:flex; justify-content:space-between; align-items:center; gap:8px;">

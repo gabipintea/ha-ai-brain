@@ -162,3 +162,33 @@ class TestBackfill(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestScriptContexts(unittest.TestCase):
+    def test_device_change_inside_a_script_run_is_not_a_human_action(self) -> None:
+        ad = adapter_with(lambda r: httpx.Response(200, json=[]))
+        ad._track_automation_context("run1", "script.movie_mode")  # what a `script_started` event does
+        data = {"new_state": {"entity_id": "light.lounge", "state": "off", "attributes": {}}, "old_state": {"entity_id": "light.lounge", "state": "on", "attributes": {}}}
+        ev = ad._parse_state_changed(data, {"id": "step1", "parent_id": "run1"})
+        assert ev is not None
+        self.assertEqual(ev.origin.value, "ha_automation")
+        self.assertEqual(ev.triggered_by_automation_id, "script.movie_mode")
+        human = ad._parse_state_changed(data, {"id": "other", "parent_id": None})
+        assert human is not None
+        self.assertEqual(human.origin.value, "human_or_physical")
+
+    def test_script_started_is_subscribed(self) -> None:
+        from ha_ai_brain.adapters.ha_websocket_rest import SUBSCRIBED_EVENT_TYPES
+        self.assertIn("script_started", SUBSCRIBED_EVENT_TYPES)
+
+    def test_the_script_entity_itself_is_not_tagged_by_its_own_run_context(self) -> None:
+        ad = adapter_with(lambda r: httpx.Response(200, json=[]))
+        ad._track_automation_context("run1", "script.movie_mode")
+        data = {"new_state": {"entity_id": "script.movie_mode", "state": "on", "attributes": {}}, "old_state": {"entity_id": "script.movie_mode", "state": "off", "attributes": {}}}
+        by_hand = ad._parse_state_changed(data, {"id": "run1", "parent_id": None, "user_id": "u1"})
+        assert by_hand is not None
+        self.assertEqual(by_hand.origin.value, "human_or_physical")  # started by a person: a habit candidate
+        ad._track_automation_context("auto1", "automation.evening")
+        by_automation = ad._parse_state_changed(data, {"id": "run2", "parent_id": "auto1"})
+        assert by_automation is not None
+        self.assertEqual(by_automation.origin.value, "ha_automation")

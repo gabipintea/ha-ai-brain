@@ -14,6 +14,7 @@ import httpx
 
 from ha_ai_brain.domain.models import EntityState, EventOrigin, NativeAutomationProposal, StateChangedEvent
 from ha_ai_brain.domain.timeutil import parse_iso
+from ha_ai_brain.domain.twins import EntityFacts
 from ha_ai_brain.ports.smart_home import SmartHomePort
 
 logger = logging.getLogger(__name__)
@@ -25,6 +26,7 @@ REGISTRY_RETRY_MINUTES = 5
 SUBSCRIBED_EVENT_TYPES = (
     "state_changed",
     "automation_triggered",
+    "script_started",
     "mobile_app_notification_action",
     "ios.notification_action_fired",
 )
@@ -58,11 +60,12 @@ class HomeAssistantAdapter(SmartHomePort):
         self._available_notify_services: list[str] = []
         self._available_services_cache: dict[str, list[str]] = {}
         self._services_last_fetched: datetime | None = None
-        # context_id -> automation_entity_id from `automation_triggered` events
+        # context_id -> automation or script entity id from `automation_triggered` / `script_started` events
         self._automation_context_map: dict[str, str] = {}
         self._notification_action_handler: Callable[[str, str], Coroutine[Any, Any, None]] | None = None
         self._discovered_panel_path: str | None = None
         self._device_inventory: list[dict[str, Any]] = []
+        self._entity_facts: list[EntityFacts] = []
         self._client: httpx.AsyncClient | None = None
         self._action_tasks: set[asyncio.Task[Any]] = set()
 
@@ -167,6 +170,7 @@ class HomeAssistantAdapter(SmartHomePort):
                     entity_area_map[eid] = aid
 
             self._device_inventory = self._build_inventory(devices_list, entities_list)
+            self._entity_facts = self._build_entity_facts(devices_list, entities_list)
             self._area_names = area_names
             self._entity_area_map = entity_area_map
             self._registry_last_fetched = now
@@ -215,6 +219,34 @@ class HomeAssistantAdapter(SmartHomePort):
             ),
             key=lambda g: (-g["entity_count"], g["manufacturer"], g["model"]),
         )
+
+    @staticmethod
+    def _build_entity_facts(devices: list[dict[str, Any]], entities: list[dict[str, Any]]) -> list[EntityFacts]:
+        by_device = {d.get("id"): d for d in devices if d.get("id")}
+        facts: list[EntityFacts] = []
+        for e in entities:
+            eid, did = e.get("entity_id"), e.get("device_id")
+            dev = by_device.get(did)
+            if not eid or dev is None or dev.get("entry_type") == "service":
+                continue
+            facts.append(
+                EntityFacts(
+                    entity_id=str(eid),
+                    device_id=str(did),
+                    manufacturer=str(dev.get("manufacturer") or ""),
+                    model=str(dev.get("model") or ""),
+                    serial=str(dev.get("serial_number") or ""),
+                    platform=str(e.get("platform") or ""),
+                    area_id=e.get("area_id") or dev.get("area_id"),
+                    disabled=bool(e.get("disabled_by") or dev.get("disabled_by")),
+                    hidden=bool(e.get("hidden_by")),
+                )
+            )
+        return facts
+
+    async def get_entity_device_facts(self) -> list[EntityFacts]:
+        await self.refresh_area_registry_map()
+        return list(self._entity_facts)
 
     async def get_device_inventory(self) -> list[dict[str, Any]]:
         await self.refresh_area_registry_map()
@@ -611,8 +643,9 @@ class HomeAssistantAdapter(SmartHomePort):
 
         ctx_id = ctx.get("id")
         parent_id = ctx.get("parent_id")
+        # A script's own state change carries the run's context: it is the run itself, only its parent says who started it.
         auto_eid_matched = (
-            (self._automation_context_map.get(ctx_id) if ctx_id else None)
+            (self._automation_context_map.get(ctx_id) if ctx_id and not eid.startswith("script.") else None)
             or (self._automation_context_map.get(parent_id) if parent_id else None)
         )
         if auto_eid_matched:
@@ -711,6 +744,11 @@ class HomeAssistantAdapter(SmartHomePort):
                                 self._track_automation_context(
                                     ctx.get("id"), str(data.get("entity_id", "automation.unknown"))
                                 )
+                                continue
+
+                            if event_type == "script_started":
+                                # Device changes made by a script's steps carry this run's context as parent: they are not human actions
+                                self._track_automation_context(ctx.get("id"), str(data.get("entity_id", "script.unknown")))
                                 continue
 
                             if event_type != "state_changed":

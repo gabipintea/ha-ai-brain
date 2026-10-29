@@ -43,7 +43,8 @@ class SequenceQualityTests(unittest.TestCase):
             t += [Transition("cover.a", day(d, 9), "closed", "open"), Transition("cover.b", day(d, 9, 0, 30), "closed", "open"),
                   Transition("cover.a", day(d, 9, 5), "open", "closed"), Transition("cover.b", day(d, 9, 5, 30), "open", "closed")]
             # a genuine one-way relation: the porch light switch is followed by the hall cover
-            t += [Transition("switch.porch", day(d, 18), "off", "on"), Transition("cover.hall", day(d, 18, 1), "open", "closed")]
+            t += [Transition("switch.porch", day(d, 17) + timedelta(minutes=(d * 37) % 150), "off", "on"),
+                  Transition("cover.hall", day(d, 17, 1) + timedelta(minutes=(d * 37) % 150), "open", "closed")]
         found = sequences(t)
         self.assertIn(("cover.hall", "switch.porch"), found)
         self.assertFalse([f for f in found if set(f) == {"cover.a", "cover.b"}])

@@ -148,6 +148,11 @@ class ResearchDecisionRequest(BaseModel):
     decision: str = Field(pattern="^(approve|reject)$")
 
 
+class TwinSplitRequest(BaseModel):
+    group_id: str = Field(max_length=40, pattern=r"^[0-9a-f]{6,40}$")
+    split: bool = True
+
+
 class UnmuteRequest(BaseModel):
     key: str = Field(max_length=300)
 
@@ -427,6 +432,14 @@ def create_app(settings: BrainSettings | None = None) -> Any:
     async def unmute_exception(req: UnmuteRequest) -> dict[str, Any]:
         await orchestrator.learning.unmute_exception(req.key)
         return {"status": "unmuted", "muted": orchestrator.learning.muted_exceptions()}
+
+    @app.post("/api/twins/split")
+    async def split_twin_group(req: TwinSplitRequest) -> dict[str, Any]:
+        """Say that a detected 'same device seen twice' group is not one device (split=true) or undo that (split=false)."""
+        await orchestrator.learning.set_twin_split(req.group_id, req.split)
+        if orchestrator._cached_states:
+            await orchestrator.learning.refresh_twins(orchestrator._cached_states, force=True)
+        return {"status": "split" if req.split else "restored", "splits": await orchestrator.learning.twin_splits()}
 
     @app.get("/api/status")
     async def get_status() -> dict[str, Any]:

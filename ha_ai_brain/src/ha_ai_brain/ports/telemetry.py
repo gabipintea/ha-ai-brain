@@ -51,6 +51,10 @@ class TelemetryStorePort(ABC):
     async def get_fires(self, automation_entity_id: str, since: datetime | None = None) -> list[datetime]:
         """Recorded run times of an automation entity."""
 
+    async def get_all_fires(self, since: datetime | None = None) -> list[Transition]:
+        """Every recorded automation / script run as a Transition (new_state == AUTOMATION_FIRE_STATE). Default: none."""
+        return []
+
     @abstractmethod
     async def observation_window(self, now: datetime) -> tuple[datetime, datetime] | None:
         """(first observed, now) or None when nothing was recorded yet."""

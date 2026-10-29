@@ -132,6 +132,9 @@ class GuardrailEngine:
         {"shell_command", "python_script", "pyscript", "command_line", "rest_command", "hassio", "script", "recorder"}
     )
 
+    # Set by the orchestrator only while it builds a proposal from locally mined hand-run scripts; never from LLM output.
+    habit_scripts: frozenset[str] = frozenset()
+
     _RISK_ORDER = (ActionRiskLevel.LOW, ActionRiskLevel.MEDIUM, ActionRiskLevel.HIGH, ActionRiskLevel.CRITICAL)
 
     HIGH_RISK_SERVICES = {
@@ -358,6 +361,10 @@ class GuardrailEngine:
                 raise_to(ActionRiskLevel.HIGH, "it calls a service chosen by a template")
                 continue
             domain, _, name = svc.partition(".")
+            if domain == "script" and name == "turn_on" and targets and all(t in self.habit_scripts for t in targets):
+                # The household's own script, run by hand at this time (learned locally); its steps cannot be seen, so a human must approve.
+                raise_to(ActionRiskLevel.HIGH, f"it would run your script {targets[0]}, whose steps the brain cannot see")
+                continue
             if domain in self.FORBIDDEN_DOMAINS:
                 forbidden = True
                 continue

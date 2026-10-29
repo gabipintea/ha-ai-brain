@@ -842,6 +842,7 @@ class BrainOrchestrator:
 
         now = datetime.now(timezone.utc)
         await self.learning.refresh_rules(all_states)
+        await self.learning.refresh_twins(all_states)
         patterns = await self.learning.get_patterns(now, all_states)
 
         fp_key = f"batchfp:{agent_spec.agent_id}:{area_id or 'all'}"
@@ -1676,6 +1677,7 @@ class BrainOrchestrator:
         It goes through the same backtest, guardrails and approval as any proposal, so nothing is created without the usual decision."""
         now = datetime.now(timezone.utc)
         states = self._cached_states or await self.smart_home.get_all_states()
+        await self.learning.refresh_twins(states)
         pattern = next((p for p in await self.learning.get_patterns(now, states) if p.pattern_id == pattern_id), None)
         if pattern is None:
             raise KeyError(pattern_id)
@@ -1706,13 +1708,22 @@ class BrainOrchestrator:
         run_id = f"run_{uuid.uuid4().hex[:8]}"
         intent.run_id = run_id
         await self._attach_backtests([intent], now)
-        result = (await self._evaluate_and_dispatch_intents([intent], run_id=run_id))[0]
+        result = (await self._dispatch_habit_intents([intent], [pattern], run_id))[0]
         status = str(result.get("status"))
         if status == "awaiting_user_approval":
             return {"status": "proposed", "message": "Sent to Approvals. Review the backtest there, then approve or reject it."}
         if status == "executed":
             return {"status": "created", "message": "Created in Home Assistant."}
         return {"status": status, "message": str(result.get("reason") or "It could not be proposed right now.")}
+
+    async def _dispatch_habit_intents(self, intents: list[ActionIntent], patterns: list[Any], run_id: str) -> list[dict[str, Any]]:
+        """Dispatch proposals mined locally. Only here may an automation call `script.turn_on` for a script the household runs by hand
+        (rated high risk, so a human always approves); everywhere else scripts stay forbidden."""
+        self.guardrails.habit_scripts = frozenset(p.entity_id for p in patterns if p.entity_id.startswith("script."))
+        try:
+            return await self._evaluate_and_dispatch_intents(intents, run_id=run_id)
+        finally:
+            self.guardrails.habit_scripts = frozenset()
 
     async def run_pattern_cycle(self) -> AgentRunLog | None:
         """Turn strong, un-automated recurring habits into automation proposals using statistics only (zero tokens)."""
@@ -1723,6 +1734,7 @@ class BrainOrchestrator:
         self._cached_states = states
         ignored = await self.memory.get_ignored_targets()
         await self.learning.refresh_rules(states)
+        await self.learning.refresh_twins(states)
         patterns = [
             p
             for p in await self.learning.get_patterns(now, states, force=True)
@@ -1771,7 +1783,7 @@ class BrainOrchestrator:
         for intent in intents:
             intent.run_id = run_id
         await self._attach_backtests(intents, now)
-        exec_results = await self._evaluate_and_dispatch_intents(intents, run_id=run_id)
+        exec_results = await self._dispatch_habit_intents(intents, proposed_patterns, run_id)
         proposed = sum(1 for r in exec_results if r.get("status") in ("awaiting_user_approval", "executed"))
         self.learning.stats["habit_automations_proposed"] += proposed
         run_log = AgentRunLog(
@@ -1829,6 +1841,7 @@ class BrainOrchestrator:
         ignored = await self.memory.get_ignored_targets()
         visible = {e: s for e, s in states.items() if not (ignored and any(t.matches(e) for t in ignored))}
         await self.learning.refresh_rules(states)
+        await self.learning.refresh_twins(states)
         household = await self.learning.household(visible, now)
         findings = await self.learning.detect_exceptions(visible, now, household)
         for finding in findings:
@@ -2185,6 +2198,8 @@ class BrainOrchestrator:
         now = datetime.now(timezone.utc)
         win = await self.learning.window(now)
         days = (win[1] - win[0]).total_seconds() / 86400.0 if win else 0.0
+        if self._cached_states:
+            await self.learning.refresh_twins(self._cached_states)
         patterns = await self.learning.get_patterns(now, self._cached_states or None)
         names = {eid: str(st.attributes.get("friendly_name") or "") for eid, st in (self._cached_states or {}).items()}
         distinct: list[Any] = []
@@ -2204,6 +2219,9 @@ class BrainOrchestrator:
             "store": await self.telemetry.stats(),
             "timezone": self.learning._tz_name or "UTC",
             "patterns": [p.to_dict() for p in patterns[:40]],
+            "suppressed_habits": self.learning.suppressed_habits(),
+            "device_twins": self.learning.twin_groups(),
+            "device_twin_splits": await self.learning.twin_splits(),
             "existing_automations": len(self.learning.rules),
             "automation_reviews": sorted(lifecycle, key=review_sort_key),
             "stats_7d": {k: v for k, v in stats.items() if not k.startswith("avoided:")},

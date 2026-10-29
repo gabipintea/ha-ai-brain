@@ -10,6 +10,7 @@ from typing import Any
 from ha_ai_brain.domain.automation_rules import AutomationRule, RuleAction, _collect_actions, _entity_ids, _listify
 from ha_ai_brain.domain.models import BacktestResult, NativeAutomationProposal, Transition
 from ha_ai_brain.domain.patterns import AUTOMATED_ORIGINS
+from ha_ai_brain.domain.service_semantics import SCRIPT_RUN_STATE
 from ha_ai_brain.domain.timeutil import WEEKDAY_NAMES, iter_days, local_at, minute_of_day, parse_hhmm, to_local
 
 MIN_DAYS = 3.0
@@ -201,7 +202,8 @@ def backtest_automation(
             for act in targets:
                 desired = act.result_state or ""
                 # strictly before the fire instant: a manual action at the same second still counts as aligned, not redundant
-                if tl.state_at(act.entity_id, fire - timedelta(seconds=1)) == desired:
+                # a script run is momentary: it is never "already in the desired state"
+                if desired != SCRIPT_RUN_STATE and tl.state_at(act.entity_id, fire - timedelta(seconds=1)) == desired:
                     continue
                 all_redundant = False
                 near = [t for t in tl.between(act.entity_id, fire - window, fire + window) if t.new_state == desired and t.origin not in AUTOMATED_ORIGINS]

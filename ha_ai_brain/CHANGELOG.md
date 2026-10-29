@@ -2,6 +2,21 @@
 
 All notable changes to **HA AI Brain** are documented in this file.
 
+## 0.2.11 - 2026-10-29
+
+### Added
+- **Scripts you start by hand are habits too.** If you run a script (for example `script.movie_mode`) at about the same time most days, it appears in the Habits list ("is run around 21:00 ...") and can be proposed as an automation that calls `script.turn_on`. Runs started by an automation or by the brain never count. Because the brain cannot see what a script does, such a proposal is always rated **high risk**: it needs your approval even in Autonomous mode, and it is only possible for scripts you actually run by hand. Existing automations that already run the script (`script.turn_on` or calling `script.<name>` directly) are recognised, so it is not proposed again.
+- **Habits ignored on purpose** (Learned tab): every "this follows that" candidate the brain dropped is listed with a plain-language reason, so you can check its reasoning.
+- **One device exposed twice is now one device.** When the same physical device appears through two integrations (for example Matter and HomeKit), Home Assistant keeps two entities, but both devices carry the same manufacturer and serial number. The brain recognises such pairs from the device registry (same manufacturer + serial number, same kind of entity, on two different devices; several entities of one device are never merged) and merges their history onto one entity, the one with more controls, that is reachable and has an area. Habits and automation proposals then appear once, no fake "B follows A" habit appears between the two, an existing automation on either one counts as covering the habit, and unusual-situation alerts are no longer raised twice. A change reported by only one of them is kept.
+- **Devices seen twice** card (Learned tab): every detected pair with the reason, which entity was kept and how often both reported the same change. **Not the same device** splits a pair that was matched wrongly (kept in your settings and included in Backup & restore); *Undo all* restores them.
+
+### Changed
+- **Far fewer false "B follows A" habits.** Several automations that start on the same trigger (sunset, someone arriving, a clock time) used to look like one device reacting to another. The brain now drops a pair when both changed right after the same automation or script run, when both happen at a fixed or smoothly drifting time of day (they stay separate time habits), when one trigger is followed by many different devices, or when the changes come from a scripted burst of devices switching within seconds. Changes made by automations or scripts are no longer used as triggers.
+- Automation and **script runs** are now recorded and used as the possible shared cause; device changes made inside a script run are recognised as automated (via the script's run).
+
+### Fixed
+- The shared-cause check could not see automation runs on a real installation (they were hidden from the miner). They are now passed to it.
+
 ## 0.2.10 - 2026-10-29
 
 ### Added

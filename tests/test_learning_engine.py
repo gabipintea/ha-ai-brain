@@ -105,7 +105,7 @@ class TestPatternMining(unittest.TestCase):
     def test_sequence_with_statistical_lift_is_found(self) -> None:
         trans: list[Transition] = []
         for d in range(1, 11):
-            t = at(d, 20, d % 5)
+            t = at(d, 17, 0) + timedelta(minutes=(d * 37) % 150)  # irregular, human-like time (a fixed clock time is a time habit)
             trans.append(Transition("binary_sensor.motion", t, "on", "off", "sensor_telemetry"))
             trans.append(Transition("light.hall", t + timedelta(minutes=4), "on", "off", "human_or_physical"))
         seq = mine_sequences(trans, NOW - timedelta(days=11), NOW)

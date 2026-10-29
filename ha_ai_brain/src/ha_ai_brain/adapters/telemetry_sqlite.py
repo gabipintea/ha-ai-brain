@@ -189,6 +189,20 @@ class SQLiteTelemetryStore(TelemetryStorePort):
             for r in self._conn.execute(sql, params)
         ]
 
+    async def get_all_fires(self, since: datetime | None = None) -> list[Transition]:
+        s = self._st.get(AUTOMATION_FIRE_STATE)
+        if s is None:
+            return []
+        sql, params = "SELECT e, ts FROM tr WHERE s = ?", [s]
+        if since is not None:
+            sql += " AND ts >= ?"
+            params.append(_epoch(since))
+        ent = self._ent_rev
+        return [
+            Transition(ent[r[0]], datetime.fromtimestamp(r[1], UTC), "", AUTOMATION_FIRE_STATE, "ha_automation")
+            for r in self._conn.execute(sql + " ORDER BY ts", params)
+        ]
+
     async def get_fires(self, automation_entity_id: str, since: datetime | None = None) -> list[datetime]:
         e, s = self._ent.get(automation_entity_id), self._st.get(AUTOMATION_FIRE_STATE)
         if e is None or s is None:

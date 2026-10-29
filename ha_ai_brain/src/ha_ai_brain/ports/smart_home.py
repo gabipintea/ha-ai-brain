@@ -8,6 +8,7 @@ from datetime import datetime
 from typing import Any
 
 from ha_ai_brain.domain.models import EntityState, NativeAutomationProposal, StateChangedEvent
+from ha_ai_brain.domain.twins import EntityFacts
 
 
 class SmartHomePort(ABC):
@@ -78,6 +79,10 @@ class SmartHomePort(ABC):
     async def get_timezone(self) -> str:
         """IANA timezone configured in Home Assistant (empty when unknown)."""
         return ""
+
+    async def get_entity_device_facts(self) -> list[EntityFacts]:
+        """Registry facts per entity (device, manufacturer, model, serial, area) used to recognise one device exposed twice."""
+        return []
 
     async def get_device_inventory(self) -> list[dict[str, Any]]:
         """Distinct physical device models in the home: [{manufacturer, model, integrations, domains, entity_count}]."""

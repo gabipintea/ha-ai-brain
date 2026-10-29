@@ -48,11 +48,13 @@ from ha_ai_brain.domain.models import (
     StateChangedEvent,
     Transition,
 )
-from ha_ai_brain.domain.patterns import MinedPattern, mine_all
-from ha_ai_brain.domain.service_semantics import ACTUATOR_DOMAINS
+from ha_ai_brain.domain.patterns import MinedPattern, mine_all_report
+from ha_ai_brain.domain.sequence_filters import RULE_TWIN, SuppressedHabit
+from ha_ai_brain.domain.service_semantics import ACTUATOR_DOMAINS, SCRIPT_RUN_STATE
 from ha_ai_brain.domain.timeutil import ensure_utc, parse_iso, resolve_tz, to_local
 from ha_ai_brain.ports.memory import MemoryStorePort
 from ha_ai_brain.ports.smart_home import SmartHomePort
+from ha_ai_brain.domain.twins import TwinMap, build_twin_map, canonicalize_transitions, dump_splits, load_splits, reason_for_card
 from ha_ai_brain.ports.telemetry import AUTOMATION_FIRE_STATE, TelemetryStorePort
 
 logger = logging.getLogger(__name__)
@@ -62,6 +64,7 @@ SECURITY_DEVICE_CLASSES = frozenset({"smoke", "gas", "moisture", "carbon_monoxid
 NON_STATES = frozenset({"unavailable", "unknown", ""})
 PATTERN_CACHE_MINUTES = 30
 MINING_WINDOW_DAYS = 30
+SUPPRESSED_LIST_MAX = 60  # how many dropped 'habits' are kept for the dashboard
 EXCEPTION_COOLDOWN_HOURS = 6
 
 
@@ -154,6 +157,10 @@ class LearningEngine:
         self._snapshot: LearnedSnapshot | None = None
         # Writes are batched: one transaction every ~30 s instead of one commit per sensor event (SD cards, CPU).
         self._tr_buffer: list[Transition] = []
+        self.twins: TwinMap = TwinMap()
+        self._twins_at: datetime | None = None
+        self._suppressed: list[dict[str, Any]] = []
+        self._suppression_stats: dict[str, int] = {}
         self._num_buffer: dict[tuple[str, datetime], list[float]] = {}
         self._last_flush = time.monotonic()
         self._exception_feedback: dict[str, dict[str, Any]] = {}
@@ -197,11 +204,14 @@ class LearningEngine:
         new = event.new_state
         old = event.old_state
         ts = ensure_utc(event.timestamp)
-        if new.domain == "automation":
+        if new.domain in ("automation", "script"):
             last = parse_iso(new.attributes.get("last_triggered"))
             prev_last = parse_iso(old.attributes.get("last_triggered")) if old else None
             if last is not None and last != prev_last:
                 self._tr_buffer.append(Transition(new.entity_id, last, "", AUTOMATION_FIRE_STATE, "ha_automation"))
+                if new.domain == "script" and event.origin.value == "human_or_physical":
+                    # Started by hand (not by an automation or the brain): a habit candidate, like flipping a switch.
+                    self._tr_buffer.append(Transition(new.entity_id, last, "off", SCRIPT_RUN_STATE, "human_or_physical", event.context_user_id))
         elif new.domain == "sensor":
             value = new.numeric_value
             if value is not None:
@@ -322,14 +332,102 @@ class LearningEngine:
             return []
         start = max(win[0], now - timedelta(days=MINING_WINDOW_DAYS))
         transitions = await self.telemetry.get_transitions(since=start)
-        patterns = await asyncio.to_thread(mine_all, transitions, start, win[1], self.tz)
+        fires = await self.telemetry.get_all_fires(since=start)  # automation / script runs: hidden causes, never habits themselves
+        twins = self.twins
+        if twins:  # one physical device exposed twice: merge its history so it is mined as one device
+            transitions = await asyncio.to_thread(canonicalize_transitions, transitions, twins)
+        patterns, report = await asyncio.to_thread(mine_all_report, transitions, start, win[1], self.tz, fires)
+        suppressed = list(report.suppressed)
         if states is not None:
             patterns = [p for p in patterns if p.entity_id in states]
-            patterns = [p for p in patterns if not self._is_twin_sequence(p, states)]
+            twins = [p for p in patterns if self._is_twin_sequence(p, states)]
+            patterns = [p for p in patterns if p not in twins]
+            suppressed += [
+                SuppressedHabit(
+                    RULE_TWIN, p.trigger_entity or "", p.trigger_state or "", p.entity_id, p.to_state, p.support_days, p.confidence,
+                    f"{p.trigger_entity} and {p.entity_id} have the same name and type: one device exposed twice, not a habit.",
+                )
+                for p in twins
+            ]
+        self._suppressed = [s.to_dict() for s in sorted(suppressed, key=lambda s: (s.confidence, s.hits), reverse=True)[:SUPPRESSED_LIST_MAX]]
+        self._suppression_stats = {
+            "suppressed_total": len(suppressed),
+            "ignored_automated_triggers": report.ignored_automated_triggers,
+            "ignored_burst_transitions": report.ignored_burst_transitions,
+        }
         for p in patterns:
-            p.covered_by = pattern_covered_by(self.rules, p)
+            p.covered_by = pattern_covered_by(self.rules, p, twins=twins)
         self._patterns, self._patterns_at = patterns, now
         return patterns
+
+    # ------------------------------------------------------------ twin devices
+    TWIN_SPLITS_KEY = "twin_splits"
+    TWIN_REFRESH_SECONDS = 300
+
+    async def refresh_twins(self, states: dict[str, EntityState], now: datetime | None = None, force: bool = False) -> TwinMap:
+        """Recognise one physical device exposed by two integrations from the device registry (serial number + manufacturer)."""
+        now = now or datetime.now(timezone.utc)
+        if not force and self._twins_at and (now - self._twins_at).total_seconds() < self.TWIN_REFRESH_SECONDS:
+            return self.twins
+        try:
+            facts = await self.smart_home.get_entity_device_facts()
+        except Exception as exc:  # the registry is optional: without it nothing is merged
+            logger.warning("Could not read device registry facts for twin detection: %s", exc)
+            facts = []
+        prefs = await self.memory.get_ui_preferences() if self.memory is not None else {}
+        twins = build_twin_map(facts, states, load_splits(prefs.get(self.TWIN_SPLITS_KEY)))
+        before = {(g.group_id, g.canonical) for g in self.twins.groups}
+        if {(g.group_id, g.canonical) for g in twins.groups} != before:
+            self._patterns_at = None  # habits must be re-mined with the new grouping
+            self._snapshot = None
+            if twins:
+                logger.info("Twin devices: %s", "; ".join(f"{g.canonical} <- {', '.join(m for m in g.members if m != g.canonical)}" for g in twins.groups))
+        self.twins, self._twins_at = twins, now
+        return twins
+
+    def _one_finding_per_twin_group(self, findings: list[ExceptionFinding]) -> list[ExceptionFinding]:
+        """The same device seen twice must not raise the same alert twice: keep the canonical entity's, else the first."""
+        if not self.twins:
+            return findings
+        kept: dict[tuple[str, str], ExceptionFinding] = {}
+        out: list[ExceptionFinding] = []
+        for f in findings:
+            group = self.twins.group_of(f.entity_id)
+            if group is None:
+                out.append(f)
+                continue
+            key = (f.kind, group.group_id)
+            current = kept.get(key)
+            if current is None:
+                kept[key] = f
+                out.append(f)
+            elif f.entity_id == group.canonical and current.entity_id != group.canonical:
+                out[out.index(current)] = f
+                kept[key] = f
+        return out
+
+    def twin_groups(self) -> list[dict[str, Any]]:
+        return [{**g.to_dict(), "reason": reason_for_card(g)} for g in self.twins.groups]
+
+    async def set_twin_split(self, group_id: str, split: bool) -> None:
+        """The homeowner says a detected group is not one device (or undoes that)."""
+        if self.memory is None:
+            return
+        prefs = await self.memory.get_ui_preferences()
+        splits = load_splits(prefs.get(self.TWIN_SPLITS_KEY))
+        (splits.add if split else splits.discard)(group_id)
+        await self.memory.save_ui_preference(self.TWIN_SPLITS_KEY, dump_splits(splits))
+        self._twins_at = None
+        self._patterns_at = None
+        self._snapshot = None
+
+    async def twin_splits(self) -> list[str]:
+        prefs = await self.memory.get_ui_preferences() if self.memory is not None else {}
+        return sorted(load_splits(prefs.get(self.TWIN_SPLITS_KEY)))
+
+    def suppressed_habits(self) -> dict[str, Any]:
+        """Relations that looked like habits but were dropped (shared trigger, same clock time, ...), with the reason. For the dashboard."""
+        return {"items": self._suppressed, **self._suppression_stats}
 
     @staticmethod
     def _is_twin_sequence(pattern: MinedPattern, states: dict[str, EntityState]) -> bool:
@@ -422,7 +520,10 @@ class LearningEngine:
         since = now - timedelta(days=45)
         win = await self.window(now)
         start = max(win[0], since) if win else since
-        transitions = await self.telemetry.get_transitions(since=since)
+        # A script run is a momentary event, not a state the script stays in: keep it out of dwell / routine statistics.
+        transitions = [t for t in await self.telemetry.get_transitions(since=since) if t.new_state != SCRIPT_RUN_STATE]
+        if self.twins:
+            transitions = canonicalize_transitions(transitions, self.twins)
         rows = await self.telemetry.get_all_numeric_hours(since=since)
         tz = self.tz
 
@@ -495,11 +596,14 @@ class LearningEngine:
                 )
             findings += find_dwell_anomalies(states, snap.profiles, now, self.tz, household)
             findings += find_silent_entities(states, snap.profiles, now, self.tz, household)
-            recent = await self.telemetry.get_transitions(since=now - timedelta(hours=1))
+            recent = [t for t in await self.telemetry.get_transitions(since=now - timedelta(hours=1)) if t.new_state != SCRIPT_RUN_STATE]
+            if self.twins:
+                recent = canonicalize_transitions(recent, self.twins)
             recent_counts = Counter(t.entity_id for t in recent)
             findings += find_flapping(dict(recent_counts), states, snap.profiles, now, self.tz, household)
             findings += find_numeric_anomalies(states, snap.numeric_rows, snap.baselines, now, self.tz, household)
 
+        findings = self._one_finding_per_twin_group(findings)
         allowed: list[ExceptionFinding] = []
         for f in findings:
             if self._exception_feedback.get(f.feedback_key, {}).get("muted"):

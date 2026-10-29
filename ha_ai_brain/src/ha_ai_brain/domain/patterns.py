@@ -7,11 +7,27 @@ import statistics
 from bisect import bisect_right
 from collections import Counter, defaultdict
 from dataclasses import asdict, dataclass
-from datetime import datetime, timedelta, tzinfo
+from datetime import datetime, timedelta, timezone, tzinfo
 from typing import Any
 
 from ha_ai_brain.domain.models import NativeAutomationProposal, Transition
-from ha_ai_brain.domain.service_semantics import ACTUATOR_DOMAINS, service_for_state
+from ha_ai_brain.domain.sequence_filters import (
+    RULE_FAN_OUT,
+    RULE_MIRROR,
+    RULE_SAME_TIME,
+    RULE_SHARED_CAUSE,
+    SequenceReport,
+    SuppressedHabit,
+    build_cause_pool,
+    find_burst_transitions,
+    find_common_cause,
+    is_fan_out,
+    reason_fan_out,
+    reason_same_time,
+    reason_shared_cause,
+    time_anchor,
+)
+from ha_ai_brain.domain.service_semantics import ACTUATOR_DOMAINS, SCRIPT_RUN_STATE, service_for_state
 from ha_ai_brain.domain.timeutil import (
     circular_distance,
     circular_mean,
@@ -81,6 +97,11 @@ def _is_habit_transition(t: Transition) -> bool:
         and t.old_state != t.new_state
         and service_for_state(t.domain, t.new_state) is not None
     )
+
+
+def _is_script_run(t: Transition) -> bool:
+    """A script the household started by hand (runs started by automations or the brain are not habits)."""
+    return t.domain == "script" and t.new_state == SCRIPT_RUN_STATE and t.origin not in AUTOMATED_ORIGINS
 
 
 def _best_cluster(items: list[tuple[Any, int]], tolerance: int) -> tuple[float, list[tuple[Any, int]]]:
@@ -153,7 +174,7 @@ def mine_time_habits(
 
     groups: dict[tuple[str, str], list[tuple[Any, int, str]]] = defaultdict(list)
     for t in transitions:
-        if not _is_habit_transition(t):
+        if not (_is_habit_transition(t) or _is_script_run(t)):
             continue
         local = to_local(t.ts, tz)
         groups[(t.entity_id, t.new_state)].append((local.date(), minute_of_day(local), day_class(local)))
@@ -210,7 +231,7 @@ def mine_time_habits(
                         minute_of_day=centre,
                         spread_minutes=spread,
                         description=(
-                            f"{entity_id} is set to '{state}' around {format_minute(centre)} {cls_text} "
+                            f"{entity_id} {'is run' if state == SCRIPT_RUN_STATE else f'is set to {state!r}'} around {format_minute(centre)} {cls_text} "
                             f"({support} of {denominators} days, ±{int(spread)} min)"
                         ),
                     )
@@ -241,25 +262,50 @@ def mine_sequences(
     transitions: list[Transition],
     data_start: datetime,
     data_end: datetime,
+    **kwargs: Any,
+) -> list[MinedPattern]:
+    """'When A happens, the household does B within a few minutes' relations, filtered by statistical lift and shared-cause checks."""
+    return mine_sequences_report(transitions, data_start, data_end, **kwargs)[0]
+
+
+def mine_sequences_report(
+    transitions: list[Transition],
+    data_start: datetime,
+    data_end: datetime,
     *,
+    tz: tzinfo = timezone.utc,
     max_lag_seconds: int = 600,
     min_hits: int = 4,
     min_confidence: float = 0.7,
     min_lift: float = 3.0,
     max_keys: int = 150,
     max_per_effect: int = 2,
-) -> list[MinedPattern]:
-    """'When A happens, the household does B within a few minutes' relations, filtered by statistical lift."""
+    cause_events: list[Transition] | None = None,
+) -> tuple[list[MinedPattern], SequenceReport]:
+    """
+    Same as `mine_sequences`, plus a report of every relation that looked like a habit but was dropped, and why:
+    scripted bursts and automated triggers are ignored up front (#4); surviving pairs are rejected when they share a hidden cause
+    (#1), both sit at a fixed time of day (#2), or one trigger fans out to many devices (#3).
+    """
+    report = SequenceReport()
     span = max(3600.0, (data_end - data_start).total_seconds())
+
+    bursts = find_burst_transitions(transitions, _is_habit_transition)
+    report.ignored_burst_transitions = len(bursts)
+    # Automation / script runs are not device changes, but they are the most likely hidden cause behind a pair.
+    cause_pool = build_cause_pool(transitions + (cause_events or []), min_hits)
 
     trig_times: dict[tuple[str, str], list[float]] = defaultdict(list)
     effect_times: dict[tuple[str, str], list[float]] = defaultdict(list)
-    for t in transitions:
-        if t.new_state in NON_STATES or t.old_state == t.new_state:
+    for i, t in enumerate(transitions):
+        if t.new_state in NON_STATES or t.old_state == t.new_state or i in bursts:
             continue
         ts = t.ts.timestamp()
         if t.domain in TRIGGER_DOMAINS and t.new_state not in TRANSITIONAL_STATES:
-            trig_times[(t.entity_id, t.new_state)].append(ts)
+            if t.origin in AUTOMATED_ORIGINS:
+                report.ignored_automated_triggers += 1  # something an automation did is not a human action to react to
+            else:
+                trig_times[(t.entity_id, t.new_state)].append(ts)
         if _is_habit_transition(t):
             effect_times[(t.entity_id, t.new_state)].append(ts)
 
@@ -270,16 +316,34 @@ def mine_sequences(
     triggers = top(trig_times, min_hits + 1)
     effects = top(effect_times, min_hits)
 
+    def drop(rule: str, p: MinedPattern, reason: str, details: dict[str, Any] | None = None) -> None:
+        report.suppressed.append(
+            SuppressedHabit(
+                rule=rule,
+                trigger_entity=p.trigger_entity or "",
+                trigger_state=p.trigger_state or "",
+                entity_id=p.entity_id,
+                to_state=p.to_state,
+                hits=p.support_days,
+                confidence=p.confidence,
+                reason=reason,
+                details=details or {},
+            )
+        )
+
     candidates: dict[tuple[str, str], list[MinedPattern]] = defaultdict(list)
     for (a_ent, a_state), a_times in triggers.items():
+        anchor_a = time_anchor(a_times, tz)
         for (b_ent, b_state), b_times in effects.items():
             if a_ent == b_ent:
                 continue
             lags: list[float] = []
+            hit_pairs: list[tuple[float, float]] = []
             for ta in a_times:
                 idx = bisect_right(b_times, ta)
                 if idx < len(b_times) and b_times[idx] - ta <= max_lag_seconds:
                     lags.append(b_times[idx] - ta)
+                    hit_pairs.append((ta, b_times[idx]))
             hits = len(lags)
             if hits < min_hits:
                 continue
@@ -289,39 +353,83 @@ def mine_sequences(
             if conf < min_confidence or lift < min_lift:
                 continue
             median_lag = statistics.median(lags)
-            candidates[(b_ent, b_state)].append(
-                MinedPattern(
-                    pattern_id=_pid("sq", a_ent, a_state, b_ent, b_state),
-                    kind="sequence",
-                    entity_id=b_ent,
-                    to_state=b_state,
-                    day_class="all",
-                    support_days=hits,
-                    observed_days=len(a_times),
-                    confidence=min(1.0, conf),
-                    trigger_entity=a_ent,
-                    trigger_state=a_state,
-                    median_lag_seconds=median_lag,
-                    lift=lift,
-                    description=(
-                        f"{b_ent} goes '{b_state}' within ~{max(1, int(round(median_lag / 60)))} min after "
-                        f"{a_ent} becomes '{a_state}' ({hits} of {len(a_times)} times, lift x{lift:.1f})"
-                    ),
-                )
+            pattern = MinedPattern(
+                pattern_id=_pid("sq", a_ent, a_state, b_ent, b_state),
+                kind="sequence",
+                entity_id=b_ent,
+                to_state=b_state,
+                day_class="all",
+                support_days=hits,
+                observed_days=len(a_times),
+                confidence=min(1.0, conf),
+                trigger_entity=a_ent,
+                trigger_state=a_state,
+                median_lag_seconds=median_lag,
+                lift=lift,
+                description=(
+                    f"{b_ent} goes '{b_state}' within ~{max(1, int(round(median_lag / 60)))} min after "
+                    f"{a_ent} becomes '{a_state}' ({hits} of {len(a_times)} times, lift x{lift:.1f})"
+                ),
             )
+            cause = find_common_cause(a_ent, b_ent, a_times, hit_pairs, cause_pool, min_hits=min_hits, min_confidence=min_confidence)
+            if cause is not None:
+                key, explained, total = cause
+                drop(RULE_SHARED_CAUSE, pattern, reason_shared_cause(key, explained, total, a_ent, b_ent),
+                     {"cause_entity": key[0], "cause_state": key[1], "explained_hits": explained, "total_hits": total})
+                continue
+            anchor_b = time_anchor([tb for _, tb in hit_pairs], tz)
+            if anchor_a is not None and anchor_b is not None:
+                drop(RULE_SAME_TIME, pattern, reason_same_time(a_ent, anchor_a, b_ent, anchor_b),
+                     {"trigger_clock": anchor_a[0], "effect_clock": anchor_b[0]})
+                continue
+            candidates[(b_ent, b_state)].append(pattern)
+
+    # One trigger followed by many different devices is a scene / shared trigger, not a chain.
+    by_trigger: dict[tuple[str, str], list[MinedPattern]] = defaultdict(list)
+    for plist in candidates.values():
+        for p in plist:
+            by_trigger[(p.trigger_entity or "", p.trigger_state or "")].append(p)
+    fan_groups: list[tuple[set[tuple[str, str]], str, str]] = []
+    for (a_ent, a_state), plist in by_trigger.items():
+        keys = [(p.entity_id, p.to_state) for p in plist]
+        if is_fan_out(keys, effects, max_lag_seconds, min_confidence):
+            reason = reason_fan_out(a_ent, a_state, len(plist))
+            for p in plist:
+                drop(RULE_FAN_OUT, p, reason, {"effects": len(plist)})
+            for key in {(p.entity_id, p.to_state) for p in plist}:
+                candidates[key] = [p for p in candidates[key] if (p.trigger_entity, p.trigger_state) != (a_ent, a_state)]
+            fan_groups.append(({(a_ent, a_state), *keys}, a_ent, a_state))
+    # Devices that all follow the same trigger also "follow each other"; those links are the same shared trigger, not chains.
+    for key, plist in list(candidates.items()):
+        kept = []
+        for p in plist:
+            group = next((g for g in fan_groups if (p.trigger_entity, p.trigger_state) in g[0] and key in g[0]), None)
+            if group is None:
+                kept.append(p)
+            else:
+                drop(RULE_FAN_OUT, p, f"{p.trigger_entity} and {p.entity_id} both belong to the group of devices that follow "
+                                      f"{group[1]} becoming '{group[2]}'; that is one shared trigger, not a chain.", {"group_trigger": group[1]})
+        candidates[key] = kept
 
     # Two entities that always follow each other (the same blind exposed by two integrations, a group, one remote command) are
     # not a habit: automating A->B and B->A would even loop. Drop both directions.
     pairs = {(p.trigger_entity, p.entity_id) for plist in candidates.values() for p in plist}
     for key, plist in list(candidates.items()):
-        candidates[key] = [p for p in plist if (p.entity_id, p.trigger_entity) not in pairs]
+        kept = []
+        for p in plist:
+            if (p.entity_id, p.trigger_entity) in pairs:
+                drop(RULE_MIRROR, p, f"{p.trigger_entity} and {p.entity_id} always follow each other (one device exposed twice, a group or "
+                                     f"one command), so it is one movement, not a habit.")
+            else:
+                kept.append(p)
+        candidates[key] = kept
 
     out: list[MinedPattern] = []
     for plist in candidates.values():
         plist.sort(key=lambda p: (p.confidence * min(p.lift or 1.0, 20.0), p.support_days), reverse=True)
         out.extend(plist[:max_per_effect])
     out.sort(key=lambda p: (p.confidence, p.support_days), reverse=True)
-    return out
+    return out, report
 
 
 def mine_all(
@@ -330,9 +438,20 @@ def mine_all(
     data_end: datetime,
     tz: tzinfo,
 ) -> list[MinedPattern]:
+    return mine_all_report(transitions, data_start, data_end, tz)[0]
+
+
+def mine_all_report(
+    transitions: list[Transition],
+    data_start: datetime,
+    data_end: datetime,
+    tz: tzinfo,
+    cause_events: list[Transition] | None = None,
+) -> tuple[list[MinedPattern], SequenceReport]:
     if not transitions:
-        return []
-    return mine_time_habits(transitions, data_start, data_end, tz) + mine_sequences(transitions, data_start, data_end)
+        return [], SequenceReport()
+    sequences, report = mine_sequences_report(transitions, data_start, data_end, tz=tz, cause_events=cause_events)
+    return mine_time_habits(transitions, data_start, data_end, tz) + sequences, report
 
 
 def _nice_name(entity_id: str, names: dict[str, str] | None) -> str:
@@ -383,7 +502,7 @@ def automation_from_pattern(
 
     conditions: list[dict[str, Any]] = []
     # Switching things ON while nobody is home is never what a habit means.
-    if presence_entities and pattern.to_state in ("on", "heat", "cool", "open") and domain != "cover":
+    if presence_entities and pattern.to_state in ("on", "heat", "cool", "open", SCRIPT_RUN_STATE) and domain != "cover":
         homes = [{"condition": "state", "entity_id": p, "state": "home"} for p in presence_entities[:6]]
         conditions.append(homes[0] if len(homes) == 1 else {"condition": "or", "conditions": homes})
 
