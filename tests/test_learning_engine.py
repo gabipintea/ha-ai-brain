@@ -17,8 +17,10 @@ from ha_ai_brain.domain.automation_rules import (
     RuleAction,
     RuleExpectation,
     find_equivalent_rule,
+    is_state_automated,
     parse_automation_config,
     pattern_covered_by,
+    resolve_rule_targets,
 )
 from ha_ai_brain.domain.backtest import Timeline, backtest_automation
 from ha_ai_brain.domain.baselines import NumericBaseline
@@ -161,6 +163,31 @@ class TestAutomationRules(unittest.TestCase):
         other = {"alias": "x", "trigger": [{"platform": "time", "at": "06:00:00"}], "action": self.CONFIG["action"]}
         self.assertIsNone(find_equivalent_rule([rule], other))
 
+    def test_device_actions_parallel_and_target_resolution(self) -> None:
+        from ha_ai_brain.domain.twins import EntityFacts
+
+        cfg = {
+            "id": "climate_dry",
+            "alias": "Dehumidify study",
+            "triggers": [{"trigger": "numeric_state", "entity_id": "sensor.study_humidity", "above": 60}],
+            "actions": [
+                {
+                    "parallel": [
+                        {"domain": "climate", "device_id": "dev_ac", "entity_id": "reg_ac_uuid", "type": "set_hvac_mode", "hvac_mode": "dry"},
+                        {"action": "climate.turn_off", "target": {"area_id": "study"}},
+                    ]
+                }
+            ],
+        }
+        rule = parse_automation_config(cfg)
+        facts = [EntityFacts(entity_id="climate.study_ac", device_id="dev_ac", registry_id="reg_ac_uuid")]
+        states = {"climate.study_heater": EntityState(entity_id="climate.study_heater", state="off", area_id="study")}
+        resolve_rule_targets([rule], states=states, facts=facts)
+        self.assertEqual(rule.targets(), ["climate.study_ac", "climate.study_heater"])
+        self.assertTrue(is_state_automated("climate.study_ac", "dry", [rule], since=NOW - timedelta(minutes=30), now=NOW, tz=UTC))
+        self.assertTrue(is_state_automated("climate.study_heater", "off", [rule], since=NOW - timedelta(minutes=30), now=NOW, tz=UTC))
+        self.assertFalse(is_state_automated("climate.study_ac", "heat", [rule], since=NOW - timedelta(minutes=30), now=NOW, tz=UTC))
+
 
 class TestBacktest(unittest.TestCase):
     def _proposal(self, at_time: str) -> NativeAutomationProposal:
@@ -226,6 +253,56 @@ class TestExceptions(unittest.TestCase):
         now = NOW  # noon: the door is normally unlocked
         lock = EntityState(entity_id="lock.front_door", state="unlocked", last_changed=now - timedelta(hours=3))
         self.assertEqual(find_routine_deviations({lock.entity_id: lock}, self._lock_timeline(), now, UTC, NOW - timedelta(days=11)), [])
+
+    def test_state_set_by_native_automation_or_rule_is_not_a_routine_deviation(self) -> None:
+        trans: list[Transition] = []
+        for d in range(1, 10):
+            trans.append(Transition("climate.study_ac", at(d, 8, 0), "dry", "off", "human_or_physical"))
+            trans.append(Transition("climate.study_heater", at(d, 8, 0), "off", "heat", "human_or_physical"))
+        now = NOW.replace(hour=16, minute=42)
+        changed = now - timedelta(minutes=33)
+        ac = EntityState(entity_id="climate.study_ac", state="dry", last_changed=changed)
+        heater = EntityState(entity_id="climate.study_heater", state="off", last_changed=changed)
+        states = {ac.entity_id: ac, heater.entity_id: heater}
+
+        # 1. Without an automation rule or automated transition origin, both deviate from the 9-day routine
+        tl_manual = Timeline(trans + [
+            Transition("climate.study_ac", changed, "off", "dry", "human_or_physical"),
+            Transition("climate.study_heater", changed, "heat", "off", "human_or_physical"),
+        ])
+        self.assertEqual(len(find_routine_deviations(states, tl_manual, now, UTC, NOW - timedelta(days=10))), 2)
+
+        # 2. When the transition into the current state came from ha_automation, it is not flagged
+        tl_auto = Timeline(trans + [
+            Transition("climate.study_ac", changed, "off", "dry", "ha_automation"),
+            Transition("climate.study_heater", changed, "heat", "off", "ha_automation"),
+        ])
+        self.assertEqual(find_routine_deviations(states, tl_auto, now, UTC, NOW - timedelta(days=10)), [])
+
+        # 3. Even if the hardware integration did not preserve event context (origin='human_or_physical'),
+        #    an enabled HA automation rule that sets those states suppresses the false routine deviation
+        rule = parse_automation_config(
+            {
+                "id": "study_dehumidify",
+                "alias": "Study dehumidify",
+                "trigger": [{"platform": "numeric_state", "entity_id": "sensor.study_humidity", "above": 60}],
+                "action": [
+                    {"service": "climate.set_hvac_mode", "target": {"entity_id": "climate.study_ac"}, "data": {"hvac_mode": "dry"}},
+                    {"service": "climate.set_hvac_mode", "target": {"entity_id": "climate.study_heater"}, "data": {"hvac_mode": "off"}},
+                ],
+            }
+        )
+        self.assertEqual(
+            find_routine_deviations(states, tl_manual, now, UTC, NOW - timedelta(days=10), rules=[rule]),
+            [],
+        )
+
+        # 4. Safety entities (such as a lock unlocked at night) still alert even if an automation unlocked them
+        night = NOW.replace(hour=3)
+        lock_tl = self._lock_timeline()
+        lock_tl.extend([Transition("lock.front_door", night - timedelta(minutes=60), "locked", "unlocked", "ha_automation")])
+        lock = EntityState(entity_id="lock.front_door", state="unlocked", last_changed=night - timedelta(minutes=60))
+        self.assertEqual(len(find_routine_deviations({lock.entity_id: lock}, lock_tl, night, UTC, NOW - timedelta(days=11))), 1)
 
     def test_security_while_away(self) -> None:
         person = EntityState(entity_id="person.a", state="not_home", last_changed=NOW - timedelta(minutes=40))
@@ -334,6 +411,32 @@ class TestSmallDomainModules(unittest.TestCase):
             deployed_at=NOW - timedelta(days=9), state=on, fires=fires, **{**kwargs, "tl": fought}
         )
         self.assertEqual(overridden.verdict, "overridden")
+
+    def test_automation_last_triggered_attribute_marks_child_events_as_ha_automation(self) -> None:
+        from ha_ai_brain.adapters.ha_websocket_rest import HomeAssistantAdapter
+        from ha_ai_brain.domain.models import EventOrigin
+
+        adapter = HomeAssistantAdapter("http://localhost:8123", "", "token")
+        auto_evt = {
+            "data": {
+                "entity_id": "automation.study_dehumidify",
+                "old_state": {"entity_id": "automation.study_dehumidify", "state": "on", "attributes": {"last_triggered": "2026-10-29T16:00:00Z"}},
+                "new_state": {"entity_id": "automation.study_dehumidify", "state": "on", "attributes": {"last_triggered": "2026-10-30T16:09:00Z"}},
+            },
+            "context": {"id": "ctx_auto_1", "parent_id": "ctx_sensor_1", "user_id": None},
+        }
+        adapter._parse_state_changed(auto_evt["data"], auto_evt["context"])
+        child_evt = {
+            "data": {
+                "entity_id": "climate.study_ac",
+                "old_state": {"entity_id": "climate.study_ac", "state": "off", "attributes": {}},
+                "new_state": {"entity_id": "climate.study_ac", "state": "dry", "attributes": {}},
+            },
+            "context": {"id": "ctx_call_1", "parent_id": "ctx_auto_1", "user_id": None},
+        }
+        parsed = adapter._parse_state_changed(child_evt["data"], child_evt["context"])
+        assert parsed is not None
+        self.assertEqual(parsed.origin, EventOrigin.HA_AUTOMATION)
 
 
 class TestTelemetryStore(unittest.IsolatedAsyncioTestCase):
@@ -560,6 +663,85 @@ class TestOrchestratorIntegration(unittest.IsolatedAsyncioTestCase):
     async def test_housekeeping_tick_bootstraps_without_errors(self) -> None:
         await self.orch.housekeeping_tick()
         self.assertTrue(self.orch._bootstrapped)
+
+    async def test_detect_exceptions_skips_automated_states_and_extends_cached_timeline(self) -> None:
+        from ha_ai_brain.domain.twins import EntityFacts
+
+        trans = []
+        for d in range(1, 10):
+            trans.append(Transition("climate.study_ac", at(d, 9, 0, self.now), "off", "cool", "human_or_physical"))
+            trans.append(Transition("climate.study_ac", at(d, 12, 0, self.now), "cool", "off", "human_or_physical"))
+            trans.append(Transition("climate.study_heater", at(d, 8, 0, self.now), "off", "heat", "human_or_physical"))
+            trans.append(Transition("climate.study_heater", at(d, 22, 0, self.now), "heat", "off", "human_or_physical"))
+        await self.orch.telemetry.record_transitions(trans)
+        now = at(0, 16, 42, self.now)
+
+        # Warm the cached snapshot before the automation fires at 16:09
+        await self.orch.learning._learned_snapshot(now - timedelta(minutes=34))
+
+        # Automation fires at 16:09 (after snapshot was cached) and sets study_ac to 'dry'
+        await self.orch.telemetry.record_transitions(
+            [Transition("climate.study_ac", now - timedelta(minutes=33), "off", "dry", "ha_automation")]
+        )
+
+        # And a UI device-action automation rule covers study_heater -> off
+        states = {
+            "climate.study_ac": EntityState(
+                entity_id="climate.study_ac", state="dry", last_changed=now - timedelta(minutes=33)
+            ),
+            "climate.study_heater": EntityState(
+                entity_id="climate.study_heater", state="off", last_changed=now - timedelta(minutes=33)
+            ),
+        }
+        facts = {
+            "climate.study_heater": EntityFacts(
+                entity_id="climate.study_heater",
+                device_id="dev_heater_1",
+                registry_id="reg_heater_1",
+            )
+        }
+        async def _fake_configs():
+            return [
+                {
+                    "id": "study_humidity_dehumidify",
+                    "alias": "Study dehumidify",
+                    "triggers": [{"trigger": "numeric_state", "entity_id": "sensor.study_humidity", "above": 60}],
+                    "actions": [
+                        {
+                            "domain": "climate",
+                            "type": "set_hvac_mode",
+                            "device_id": "dev_heater_1",
+                            "entity_id": "reg_heater_1",
+                            "hvac_mode": "off",
+                        }
+                    ],
+                }
+            ]
+
+        async def _fake_facts():
+            return list(facts.values())
+
+        self.orch.smart_home.get_automation_configs = _fake_configs  # type: ignore[method-assign]
+        self.orch.smart_home.get_entity_device_facts = _fake_facts  # type: ignore[attr-defined]
+        await self.orch.learning.refresh_rules(states, force=True)
+
+        from ha_ai_brain.domain.models import SemanticEventFrame, StateChangedEvent
+
+        findings = await self.orch.learning.detect_exceptions(states, now)
+        self.assertEqual([f.entity_id for f in findings], [])
+        frame = SemanticEventFrame(
+            target_agent_id="climate_thermal_agent",
+            trigger_events=[
+                StateChangedEvent(
+                    entity_id="climate.study_heater",
+                    new_state=states["climate.study_heater"],
+                    timestamp=now,
+                )
+            ],
+        )
+        wake, reason = await self.orch.learning.should_wake_agent(frame, now)
+        self.assertFalse(wake)
+        self.assertIn("Study dehumidify", reason)
 
 
 class TestLearningApi(unittest.IsolatedAsyncioTestCase):

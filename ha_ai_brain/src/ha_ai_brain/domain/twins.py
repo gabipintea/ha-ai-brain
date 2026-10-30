@@ -34,6 +34,7 @@ class EntityFacts:
     area_id: str | None = None
     disabled: bool = False
     hidden: bool = False
+    registry_id: str = ""
 
 
 @dataclass

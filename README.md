@@ -17,7 +17,7 @@
 * Discovers entities, areas, devices, services and notification targets — nothing to configure.
 * Imports your recent Home Assistant history and keeps its own compact long-term record of state changes and hourly sensor values.
 * Knows who is home, the time of day, sun, weather and forecast, and electricity-price / solar-forecast sensors.
-* You add context in plain words: a site description, permanent notes the AI must obey, and an ignore list.
+* You add context in plain words: a site description and permanent notes the AI agents must obey, plus an ignore list (`*` wildcards) that excludes self-managed devices from both local detectors and the AI.
 
 **Learns locally — no AI tokens**
 * Finds your **habits** ("this goes off around 23:00 on weekdays", "this follows that within minutes", "you run this script around 21:00"). Devices that merely react to the same trigger (for example several automations that all start at sunset) are not mistaken for a habit, the same device exposed by two integrations (for example Matter and HomeKit) is recognised by its serial number and counted once, and the Learned tab lists what was ignored or merged and why.
@@ -28,7 +28,7 @@
 
 **Tells you when something is unusual** (no device list to maintain)
 * Broken routines, states that last far too long, entities that went silent, flapping devices, sensors far out of range, sensors that stopped reporting, many entities unavailable at once, automations that did not run, and "the house is open while everyone is away".
-* Learns from your reactions: dismiss an alert and it waits longer, reject it and it stays muted.
+* Learns from your reactions: dismiss an alert and it waits longer, reject it and it stays muted for that entity (and states set by your own Home Assistant automations are not flagged as broken routines).
 
 **Your own automations in plain language**
 * Describe an automation in a sentence; the AI writes a native Home Assistant automation, you review and edit the YAML, then create or cancel.

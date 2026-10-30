@@ -19,6 +19,7 @@ from ha_ai_brain.domain.expectations import (
     NON_STATES,
     ExceptionFinding,
     classify_severity,
+    is_automated_hold,
     is_safety_entity,
 )
 from ha_ai_brain.domain.models import EntityState, Transition
@@ -143,6 +144,10 @@ def find_dwell_anomalies(
     now: datetime,
     tz: tzinfo,
     household: dict[str, Any] | None = None,
+    *,
+    tl: Any = None,
+    rules: list[Any] | None = None,
+    twins: Any = None,
 ) -> list[ExceptionFinding]:
     """An entity has stayed in a non-resting state far longer than it ever (or almost ever) did before."""
     out: list[ExceptionFinding] = []
@@ -150,6 +155,8 @@ def find_dwell_anomalies(
     for eid, prof in profiles.items():
         st = states.get(eid)
         if st is None or st.state in NON_STATES or prof.rest_state is None or st.state == prof.rest_state:
+            continue
+        if is_automated_hold(eid, st, tl, now, rules=rules, tz=tz, twins=twins):
             continue
         stats = prof.dwell.get(st.state)
         if not stats or stats[0] < MIN_DWELL_SAMPLES:

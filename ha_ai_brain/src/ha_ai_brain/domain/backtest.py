@@ -55,6 +55,21 @@ class _Timeline:
             return rows[0].old_state or None
         return rows[idx - 1].new_state
 
+    def last_transition_at(self, entity_id: str, ts: datetime) -> Transition | None:
+        rows = self.by_entity.get(entity_id)
+        if not rows:
+            return None
+        idx = bisect_right(self._times[entity_id], ts)
+        return rows[idx - 1] if idx > 0 else None
+
+    def extend(self, transitions: list[Transition]) -> None:
+        """Append newer transitions that occurred after this timeline was built."""
+        for t in sorted(transitions, key=lambda t: t.ts):
+            rows = self.by_entity[t.entity_id]
+            if not rows or t.ts > rows[-1].ts:
+                rows.append(t)
+                self._times.setdefault(t.entity_id, []).append(t.ts)
+
     def between(self, entity_id: str, start: datetime, end: datetime) -> list[Transition]:
         rows = self.by_entity.get(entity_id, [])
         times = self._times.get(entity_id, [])

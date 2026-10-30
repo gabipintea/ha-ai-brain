@@ -67,6 +67,16 @@ class TestGenericDetectors(unittest.TestCase):
             self.assertEqual(find_dwell_anomalies(normal, profiles, NOW, UTC), [])
             resting = {eid: state(eid, "off", timedelta(days=3))}
             self.assertEqual(find_dwell_anomalies(resting, profiles, NOW, UTC), [])
+            from ha_ai_brain.domain.automation_rules import parse_automation_config
+            auto_rule = parse_automation_config(
+                {
+                    "id": "r",
+                    "alias": "Keep on",
+                    "trigger": [{"platform": "state", "entity_id": "binary_sensor.motion", "to": "on"}],
+                    "action": [{"service": "homeassistant.turn_on", "target": {"entity_id": eid}}],
+                }
+            )
+            self.assertEqual(find_dwell_anomalies(long_on, profiles, NOW, UTC, rules=[auto_rule]), [])
 
     def test_silent_entity_and_flapping(self) -> None:
         trans = []

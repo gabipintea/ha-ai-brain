@@ -240,6 +240,7 @@ class HomeAssistantAdapter(SmartHomePort):
                     area_id=e.get("area_id") or dev.get("area_id"),
                     disabled=bool(e.get("disabled_by") or dev.get("disabled_by")),
                     hidden=bool(e.get("hidden_by")),
+                    registry_id=str(e.get("id") or ""),
                 )
             )
         return facts
@@ -643,6 +644,10 @@ class HomeAssistantAdapter(SmartHomePort):
 
         ctx_id = ctx.get("id")
         parent_id = ctx.get("parent_id")
+        if eid.startswith("automation."):
+            old_attrs = (old_raw.get("attributes") or {}) if isinstance(old_raw, dict) else {}
+            if new_attrs.get("last_triggered") and new_attrs.get("last_triggered") != old_attrs.get("last_triggered"):
+                self._track_automation_context(ctx_id, eid)
         # A script's own state change carries the run's context: it is the run itself, only its parent says who started it.
         auto_eid_matched = (
             (self._automation_context_map.get(ctx_id) if ctx_id and not eid.startswith("script.") else None)

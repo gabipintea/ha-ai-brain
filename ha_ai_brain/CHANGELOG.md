@@ -2,6 +2,16 @@
 
 All notable changes to **HA AI Brain** are documented in this file.
 
+## 0.2.12 - 2026-10-30
+
+### Fixed
+- **Automated states are no longer flagged as broken routines.** When a native Home Assistant automation (or the brain) sets a device's state — such as turning an AC to dehumidify or turning off heating zones during high humidity — the local exception detector now recognises that automated hold (up to 12 hours) and suppresses false `Unusual:` broken-routine and dwell-anomaly alerts.
+- **Support for Home Assistant UI device actions and entity registry targets.** Automation rule parsing now fully recognizes device-level actions (`set_hvac_mode`, `turn_on`, `turn_off`, `open_cover`, etc.), `parallel` action blocks, `choose.default`, and targets defined by `device_id`, `area_id`, or entity registry UUIDs.
+- **Live automation event attribution.** Triggered automations that update their `last_triggered` timestamp attribute now reliably link subsequent child device transitions as automated in the real-time event stream.
+
+### Changed
+- **Clearer documentation for self-managed devices and context notes.** Clarified in the user guide and FAQ that free-text Context Notes and alert rejection notes guide AI agents when reasoning, whereas self-managed entities (such as heating manifold outputs and boiler relays driven by thermostats or external logic) should be added to *Ignored entities & devices* (`*` wildcards supported) to exclude them from local statistical detectors as well.
+
 ## 0.2.11 - 2026-10-29
 
 ### Added

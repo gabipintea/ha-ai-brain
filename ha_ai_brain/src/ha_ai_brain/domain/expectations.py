@@ -7,9 +7,10 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, tzinfo
 from typing import Any
 
-from ha_ai_brain.domain.automation_rules import RuleExpectation
+from ha_ai_brain.domain.automation_rules import AutomationRule, RuleExpectation, is_state_automated
 from ha_ai_brain.domain.backtest import Timeline
 from ha_ai_brain.domain.models import EntityState
+from ha_ai_brain.domain.patterns import AUTOMATED_ORIGINS
 from ha_ai_brain.domain.timeutil import day_class, format_minute, local_at, minute_of_day, to_local
 
 NON_STATES = frozenset({"unavailable", "unknown", ""})
@@ -29,6 +30,7 @@ PERIMETER_NAME_HINTS = ("garage", "gate", "door")
 DEFAULT_GRACE_MINUTES = 30
 MIN_GRACE_MINUTES = 15
 MAX_GRACE_MINUTES = 180
+MAX_AUTOMATED_HOLD = timedelta(hours=12)
 
 
 @dataclass
@@ -124,6 +126,26 @@ def derived_grace_minutes(profile: Any, state_value: str) -> int:
     return DEFAULT_GRACE_MINUTES
 
 
+def is_automated_hold(
+    eid: str,
+    st: EntityState,
+    tl: Timeline | None,
+    now: datetime,
+    rules: list[AutomationRule] | None = None,
+    tz: tzinfo | None = None,
+    twins: Any = None,
+) -> bool:
+    """True when a non-safety entity's current state was set by an automation or the brain within the last 12 hours."""
+    if is_safety_entity(st) or now - st.last_changed > MAX_AUTOMATED_HOLD:
+        return False
+    if tl is not None:
+        lookup_id = twins.canonical(eid) if twins is not None and hasattr(twins, "canonical") else eid
+        last_tr = tl.last_transition_at(lookup_id, now) or (tl.last_transition_at(eid, now) if lookup_id != eid else None)
+        if last_tr is not None and last_tr.new_state == st.state and last_tr.origin in AUTOMATED_ORIGINS:
+            return True
+    return is_state_automated(eid, st.state, rules, since=st.last_changed, now=now, tz=tz, twins=twins)
+
+
 def find_routine_deviations(
     states: dict[str, EntityState],
     tl: Timeline,
@@ -134,6 +156,8 @@ def find_routine_deviations(
     min_days: int = 3,
     profiles: dict[str, Any] | None = None,
     household: dict[str, Any] | None = None,
+    rules: list[AutomationRule] | None = None,
+    twins: Any = None,
 ) -> list[ExceptionFinding]:
     """Any entity with recorded behaviour whose current state contradicts what it reliably is at this hour."""
     findings: list[ExceptionFinding] = []
@@ -143,6 +167,8 @@ def find_routine_deviations(
             continue
         grace = derived_grace_minutes((profiles or {}).get(eid), st.state)
         if now - st.last_changed < timedelta(minutes=grace):
+            continue
+        if is_automated_hold(eid, st, tl, now, rules=rules, tz=tz, twins=twins):
             continue
         learned = expected_state_now(tl, eid, now, tz, data_start)
         if learned is None:

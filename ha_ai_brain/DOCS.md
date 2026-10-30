@@ -148,8 +148,8 @@ Good to know:
 * **Area resolution** from the area/device/entity registries, with a name-based fallback for entities without an area.
 * **History import** at startup (switchable entities up to 240 h; numeric sensors up to 96 h as hourly aggregates; up to 300 entities, configurable).
 * **Site & Building Context**: free text describing your home that is given to the agents.
-* **Context notes** (*Memory & Rules*): permanent instructions such as hardware limits or preferences. Agents must obey them.
-* **Ignore list** (*Memory & Rules*): patterns (`sensor.vendor_*`, `*device_name*`, exact IDs) that are removed from triage, learning and agent context entirely.
+* **Context notes** (*Memory & Rules → Context for the Brain*): permanent natural-language instructions such as hardware limits or preferences (for example *"Never operate the bedroom AC after 21:00"* or *"The circulation pump is managed by the heating manifold; do not touch its logic"*). Read **by the AI agents** whenever they reason; not read by the local no-AI detectors (habit miner and unusual-situation detector).
+* **Ignore list** (*Memory & Rules → Ignored entities & devices*): entity IDs or `*` wildcard patterns (`sensor.vendor_*`, `switch.heating_zone_*`, `*device_name*`) that are filtered out **locally first** — before triage, habit mining, unusual-situation alerts, and AI agent runs.
 * **Minimum change per sensor** (*Memory & Rules*): for a noisy numeric sensor you name (exact ID or a wildcard such as `sensor.*_voltage`), moves smaller than the value you set are not treated as significant live events, so they never wake an AI agent. They are still recorded for learning. Nothing is applied automatically: only the sensors you list. Slow drift still counts, because each new value is compared with the last one that mattered.
 * **Household context** built locally: who is home, part of day, weekday/weekend, sun, weather and hourly forecast, electricity price and solar-forecast sensors (found by their names/classes).
 
@@ -190,8 +190,8 @@ Checked every 5 minutes without AI. There is **no list of devices or situations 
 
 | Detector | Fires when |
 |---|---|
-| Broken routine | An entity is, for a while, in a state that contradicts what it reliably is at this hour (e.g. ≥ 90 % of comparable days) |
-| Abnormally long state | An entity stays in a non-resting state far longer than it ever (or almost ever) did |
+| Broken routine | An entity is, for a while, in a state that contradicts what it reliably is at this hour (e.g. ≥ 90 % of comparable days), and the state was not set by one of your automations or the brain |
+| Abnormally long state | An entity stays in a non-resting state far longer than it ever (or almost ever) did, unless held there by an automation |
 | Gone silent | An entity that normally changes several times a day has not changed for much longer than its longest usual pause |
 | Flapping | Far more state changes in the last hour than this entity normally produces |
 | Out-of-range sensor | A numeric sensor is far outside its usual range for this hour, in two consecutive readings |
@@ -203,6 +203,12 @@ Checked every 5 minutes without AI. There is **no list of devices or situations 
 Alerts appear in *Activity & Insights* and as a push notification (security alerts are time-sensitive and ignore quiet hours). An agent is then asked what to do about it — only for that situation — and, where a device can fix it, proposes the **direct action** (for example *lock the front door now*). In Co-pilot mode that arrives as a second push with **Approve once / Always allow / Dismiss / Reject** (for critical situations it also breaks through quiet hours); in Autonomous mode for that device type it is simply done and you are told. If no device can fix it (for example a window without a motor), you only get the alert. Controls: at most 5 new alerts per check and 20 non-critical per day; calm alerts are held back while the house is empty; cumulative counters (energy totals) are ignored.
 
 **It learns from you:** *Dismiss* an alert and the same alert waits twice as long next time (up to 14 days). *Reject* it and it is muted until you unmute it under *Learned → Muted alerts*.
+
+**How local alerts, rejections, Context notes and the Ignore list interact:**
+* **Native Home Assistant automations are respected automatically:** when an enabled Home Assistant automation (or the brain itself) sets a non-safety device's state — for example an automation that switches `climate.study_ac` to `dry` or `climate.study_heater` to `off` when humidity is high — the local detector recognises that automated hold (up to 12 hours) and does not report it as a broken routine or abnormally long state.
+* **Context notes are for the AI, not the local detector:** `Unusual:` alerts are generated locally without AI, **before** an AI agent is consulted. Free-text notes in *Memory & Rules → Context for the Brain* (or in a rejection reason) are read only by the AI agents: they stop the agent from proposing a follow-up action on that device, but they cannot be read by the local statistical detector and will not prevent `Unusual:` cards from appearing.
+* **Rejecting an `Unusual:` alert mutes only that one entity:** pressing *Reject* on `Unusual: Heating Zone 3 is on` mutes that detector for `switch.heating_zone_3` alone (listed under *Learned → Muted alerts*). Any text reason you type is stored for the AI agents; the local detector does not parse the text to mute `switch.heating_zone_1` or `switch.heating_zone_2`.
+* **Devices driven by thermostats or external controllers belong on the Ignore list:** if you have entities whose state is governed by temperature dynamics, a `generic_thermostat` integration, or external hardware logic (for example underfloor heating manifold outputs `switch.heating_zone_*` or a boiler relay `switch.boiler_relay`) and you never want the brain to alert on them or touch them, add a pattern such as `switch.heating_zone_*` under *Memory & Rules → Ignored entities & devices*. The local engine filters ignored entities deterministically before checking for unusual situations, mining habits, or waking the AI.
 
 ### 4.6 Watches — your own alerts in plain language
 In *Memory & Rules → Watches* describe what you want to be told about: what, for how long, when, and whether someone must be home. The AI turns it into a precise rule **once**; you see how it understood you, which entities it matched, and how often the rule would have fired over your recent history, then you save it. From then on it runs locally every minute at no token cost.
@@ -530,10 +536,10 @@ Yes. Use the same model for both slots. Smaller models may return malformed answ
 *Pause brain* in the header: it keeps recording and learning and still alerts, but does not act, and does not call the AI for live events. Manual approvals still work.
 
 **What can I do if an alert is wrong?**
-Dismiss it (quieter next time) or reject it (muted). If it is a recurring false alarm for a whole device, add the device to the ignore list.
+Dismiss it (quieter next time) or reject it (muted for that entity under *Learned → Muted alerts*). If a whole device or group of devices has external or thermostat-driven logic that should never trigger `Unusual:` alerts, habit proposals or AI actions, add an entity ID or `*` wildcard (for example `switch.heating_zone_*`) under *Memory & Rules → Ignored entities & devices*.
 
 **Can I tell it things the AI cannot know?**
-Yes — *Context notes* ("the second fan is only for noise, never run it at night"), the *Site Context* text, and rejection notes. Agents must obey them.
+Yes — *Context for the Brain* ("the second fan is only for noise, never run it at night"), the *Site Context* text, and rejection notes. The **AI agents** read and obey these whenever they reason. Note that the local no-AI detectors (habit mining and `Unusual:` alerts) do not read free-text English notes; to exclude devices from local detectors as well, use *Ignored entities & devices*.
 
 **Does research do anything on its own?**
 No. Research only produces proposals. A finding influences agents only after you press Keep, and you can remove it at any time.

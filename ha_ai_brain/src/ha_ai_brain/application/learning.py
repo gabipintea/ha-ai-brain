@@ -17,7 +17,9 @@ from ha_ai_brain.domain.automation_rules import (
     find_equivalent_rule,
     parse_automation_config,
     pattern_covered_by,
+    resolve_rule_targets,
     rule_expectations,
+    rule_produces_state,
 )
 from ha_ai_brain.domain.backtest import Timeline, backtest_automation
 from ha_ai_brain.domain.baselines import NumericBaseline
@@ -301,6 +303,13 @@ class LearningEngine:
             logger.warning("Could not load automation definitions: %s", exc)
             return self.rules
         rules = [parse_automation_config(c) for c in configs if isinstance(c, dict)]
+        facts: list[Any] = []
+        if hasattr(self.smart_home, "get_entity_device_facts"):
+            try:
+                facts = await self.smart_home.get_entity_device_facts()
+            except Exception as exc:
+                logger.debug("Could not read entity facts for rule target resolution: %s", exc)
+        resolve_rule_targets(rules, states=states, facts=facts)
         if states:
             by_id = {str(s.attributes.get("id")): s for s in states.values() if s.domain == "automation" and s.attributes.get("id")}
             for r in rules:
@@ -498,7 +507,7 @@ class LearningEngine:
                 (
                     r.alias
                     for r in self.rules
-                    if r.enabled and any(a.entity_id == st.entity_id and a.result_state == st.state for a in r.actions)
+                    if rule_produces_state(r, st.entity_id, st.state, twins=self.twins)
                 ),
                 None,
             )
@@ -589,16 +598,21 @@ class LearningEngine:
         if await self.baseline_ready(now):
             win = await self.window(now)
             snap = await self._learned_snapshot(now)
+            recent = [t for t in await self.telemetry.get_transitions(since=now - timedelta(hours=1)) if t.new_state != SCRIPT_RUN_STATE]
+            if self.twins:
+                recent = canonicalize_transitions(recent, self.twins)
+            snap.timeline.extend(recent)
             if win:
                 findings += find_routine_deviations(
                     states, snap.timeline, now, self.tz, win[0],
                     min_days=self.settings.baseline_min_days, profiles=snap.profiles, household=household,
+                    rules=self.rules, twins=self.twins,
                 )
-            findings += find_dwell_anomalies(states, snap.profiles, now, self.tz, household)
+            findings += find_dwell_anomalies(
+                states, snap.profiles, now, self.tz, household,
+                tl=snap.timeline, rules=self.rules, twins=self.twins,
+            )
             findings += find_silent_entities(states, snap.profiles, now, self.tz, household)
-            recent = [t for t in await self.telemetry.get_transitions(since=now - timedelta(hours=1)) if t.new_state != SCRIPT_RUN_STATE]
-            if self.twins:
-                recent = canonicalize_transitions(recent, self.twins)
             recent_counts = Counter(t.entity_id for t in recent)
             findings += find_flapping(dict(recent_counts), states, snap.profiles, now, self.tz, household)
             findings += find_numeric_anomalies(states, snap.numeric_rows, snap.baselines, now, self.tz, household)
