@@ -26,8 +26,10 @@ from ha_ai_brain.domain.models import EntityState, Transition
 from ha_ai_brain.domain.timeutil import parse_iso, to_local
 
 MIN_DWELL_SAMPLES = 6
+MIN_BASELINE_DAYS = 3
 MIN_ACTIVE_DAYS = 5
 CUMULATIVE_STATE_CLASSES = frozenset({"total", "total_increasing"})
+DEVICE_COLLAPSE_KINDS = frozenset({"flapping", "silent_entity", "stale_sensor", "stuck_unavailable"})
 SEVERITY_RANK = {"critical": 0, "warning": 1, "info": 2}
 
 
@@ -68,17 +70,18 @@ def build_discrete_profiles(transitions: list[Transition], window_start: datetim
     by_entity: dict[str, list[Transition]] = defaultdict(list)
     for t in transitions:
         by_entity[t.entity_id].append(t)
-    total_hours = max(1.0, (now - window_start).total_seconds() / 3600.0)
+    recent_cutoff = now - timedelta(hours=1)
     profiles: dict[str, DiscreteProfile] = {}
     for eid, rows in by_entity.items():
         rows.sort(key=lambda t: t.ts)
         if len(rows) < 3:
             continue
+        first_seen = max(window_start, rows[0].ts)
         dwell_lists: dict[str, list[float]] = defaultdict(list)
         share: dict[str, float] = defaultdict(float)
         first = rows[0]
         if first.old_state and first.old_state not in NON_STATES:
-            share[first.old_state] += max(0.0, (first.ts - window_start).total_seconds())
+            share[first.old_state] += max(0.0, (first.ts - first_seen).total_seconds())
         for cur, nxt in zip(rows, rows[1:]):
             seconds = (nxt.ts - cur.ts).total_seconds()
             if cur.new_state not in NON_STATES and seconds >= 0:
@@ -88,21 +91,30 @@ def build_discrete_profiles(transitions: list[Transition], window_start: datetim
         if last.new_state not in NON_STATES:
             share[last.new_state] += max(0.0, (now - last.ts).total_seconds())
         gaps = [(b.ts - a.ts).total_seconds() for a, b in zip(rows, rows[1:])]
-        buckets: dict[int, int] = defaultdict(int)
-        for t in rows:
-            buckets[int(t.ts.timestamp() // 3600)] += 1
         n = len(rows)
-        mean = n / total_hours
+        # Measure each entity over its own observed lifetime (not the whole store's window) and exclude
+        # the last hour from the hourly rate baseline when prior history exists so a burst is not compared against itself.
+        prior_rows = [t for t in rows if t.ts < recent_cutoff]
+        if recent_cutoff > first_seen and (recent_cutoff - first_seen).total_seconds() >= 3600.0:
+            rate_rows = prior_rows
+            rate_hours = max(1.0, (recent_cutoff - first_seen).total_seconds() / 3600.0)
+        else:
+            rate_rows = rows
+            rate_hours = max(1.0, (now - first_seen).total_seconds() / 3600.0)
+        buckets: dict[int, int] = defaultdict(int)
+        for t in rate_rows:
+            buckets[int(t.ts.timestamp() // 3600)] += 1
+        mean = len(rate_rows) / rate_hours
         sumsq = sum(c * c for c in buckets.values())
-        std = math.sqrt(max(0.0, sumsq / total_hours - mean * mean))
-        days = max(1.0, (rows[-1].ts - rows[0].ts).total_seconds() / 86400.0)
+        std = math.sqrt(max(0.0, sumsq / rate_hours - mean * mean))
+        days_active = max(0.0, (rows[-1].ts - rows[0].ts).total_seconds() / 86400.0)
         profiles[eid] = DiscreteProfile(
             entity_id=eid,
             n_transitions=n,
-            days_active=days,
+            days_active=days_active,
             rest_state=max(share, key=share.get) if share else None,
             dwell={s: (len(v), _percentile(v, 0.5), _percentile(v, 0.9)) for s, v in dwell_lists.items() if v},
-            per_day=n / days,
+            per_day=n / max(1.0, days_active),
             gap_p95=_percentile(gaps, 0.95) if gaps else None,
             gap_max=max(gaps) if gaps else None,
             hourly_mean=mean,
@@ -148,11 +160,14 @@ def find_dwell_anomalies(
     tl: Any = None,
     rules: list[Any] | None = None,
     twins: Any = None,
+    min_days: float = MIN_BASELINE_DAYS,
 ) -> list[ExceptionFinding]:
     """An entity has stayed in a non-resting state far longer than it ever (or almost ever) did before."""
     out: list[ExceptionFinding] = []
     local_now = to_local(now, tz)
     for eid, prof in profiles.items():
+        if prof.days_active < min_days:
+            continue
         st = states.get(eid)
         if st is None or st.state in NON_STATES or prof.rest_state is None or st.state == prof.rest_state:
             continue
@@ -211,13 +226,15 @@ def find_flapping(
     now: datetime,
     tz: tzinfo,
     household: dict[str, Any] | None = None,
+    *,
+    min_days: float = MIN_BASELINE_DAYS,
 ) -> list[ExceptionFinding]:
     """Far more state changes in the last hour than this entity ever produces (chattering contact, cycling device)."""
     out: list[ExceptionFinding] = []
     local_now = to_local(now, tz)
     for eid, count in recent_counts.items():
         prof, st = profiles.get(eid), states.get(eid)
-        if prof is None or st is None:
+        if prof is None or st is None or prof.days_active < min_days:
             continue
         if count >= max(8, prof.hourly_mean + 4 * prof.hourly_std):
             out.append(
@@ -254,6 +271,7 @@ def find_stuck_unavailable(
                 summary=f"Exception: {len(stuck)} entities have been unavailable for over {min_minutes} min (for example {_label(first)}) - "
                         "this usually points to one integration, hub or network problem.",
                 expected_state="available", current_state=first.state, since=first.last_changed,
+                title=f"Unusual: {len(stuck)} entities are unavailable",
             )
         ]
     return [
@@ -301,6 +319,8 @@ def find_numeric_anomalies(
     now: datetime,
     tz: tzinfo,
     household: dict[str, Any] | None = None,
+    *,
+    min_days: float = MIN_BASELINE_DAYS,
 ) -> list[ExceptionFinding]:
     """Sensors far outside their usual range for this hour (sustained over two readings) and sensors that went quiet."""
     out: list[ExceptionFinding] = []
@@ -313,6 +333,9 @@ def find_numeric_anomalies(
             continue
         rows = hourly_rows.get(eid)
         if not rows or len(rows) < 12:
+            continue
+        first_ts = parse_iso(rows[0][0])
+        if first_ts is not None and (now - first_ts).total_seconds() < min_days * 86400:
             continue
 
         # Stale: a sensor that reports at least every ~30 min has been silent for hours
@@ -363,6 +386,59 @@ def _day_class(local: datetime) -> str:
 
 
 SUPPRESS_WHEN_AWAY = frozenset({"silent_entity", "routine_deviation", "dwell_anomaly"})
+
+
+def collapse_device_findings(
+    findings: list[ExceptionFinding],
+    device_by_entity: dict[str, str] | None = None,
+) -> list[ExceptionFinding]:
+    """When several sibling entities on the same physical device raise the same non-critical alert at once, keep one."""
+    if not device_by_entity or len(findings) < 2:
+        return findings
+    grouped: dict[tuple[str, str], list[ExceptionFinding]] = defaultdict(list)
+    for f in findings:
+        dev = device_by_entity.get(f.entity_id)
+        if dev and f.kind in DEVICE_COLLAPSE_KINDS and f.severity != "critical":
+            grouped[(f.kind, dev)].append(f)
+    if not any(len(g) > 1 for g in grouped.values()):
+        return findings
+
+    chosen: dict[tuple[str, str], ExceptionFinding] = {}
+    for key, members in grouped.items():
+        if len(members) < 2:
+            continue
+        ordered = sorted(members, key=lambda f: (SEVERITY_RANK.get(f.severity, 3), -f.confidence, f.entity_id))
+        primary = ordered[0]
+        others = ordered[1:]
+        extra = tuple(dict.fromkeys([*primary.also_entities, *(o.entity_id for o in others)]))
+        noun = "entity" if len(others) == 1 else "entities"
+        suffix = f" ({len(others)} other {noun} on the same device also affected.)"
+        summary = primary.summary if suffix in primary.summary else primary.summary + suffix
+        chosen[key] = ExceptionFinding(
+            kind=primary.kind,
+            entity_id=primary.entity_id,
+            severity=primary.severity,
+            summary=summary,
+            expected_state=primary.expected_state,
+            current_state=primary.current_state,
+            confidence=primary.confidence,
+            since=primary.since,
+            title=primary.title,
+            also_entities=extra,
+        )
+
+    out: list[ExceptionFinding] = []
+    emitted: set[tuple[str, str]] = set()
+    for f in findings:
+        dev = device_by_entity.get(f.entity_id)
+        key = (f.kind, dev or "")
+        if key in chosen:
+            if key not in emitted:
+                emitted.add(key)
+                out.append(chosen[key])
+        else:
+            out.append(f)
+    return out
 
 
 def prioritise(

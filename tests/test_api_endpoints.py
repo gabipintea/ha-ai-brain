@@ -271,6 +271,110 @@ class TestControlPlaneAPI(unittest.IsolatedAsyncioTestCase):
             self.assertIn('id="ignoredTargetsList"', pane_memory)
             pane_settings = dash_html.split('id="pane-settings"')[1].split('</div>\n\n  <script>')[0] if '</div>\n\n  <script>' in dash_html else dash_html.split('id="pane-settings"')[1]
             self.assertNotIn('id="ignoredTargetsList"', pane_settings)
+            self.assertIn("setAgentEnabled", dash_html)
+            self.assertIn("deleteCustomAgent", dash_html)
+
+    async def test_agent_enable_disable_and_custom_agent_delete_lifecycle(self) -> None:
+        import yaml
+
+        agents_dir = Path(self._tmp_dir.name) / "custom_agents"
+        db_file = str(Path(self._tmp_dir.name) / "agents_lifecycle.db")
+        settings = BrainSettings(
+            use_simulator=True,
+            operating_mode=OperatingMode.HYBRID,
+            default_autonomy=AutonomyLevel.COPILOT,
+            db_path=db_file,
+            custom_agents_dir=str(agents_dir),
+            bundled_agents_dir="agents",
+            realtime_coalesce_seconds=0,
+        )
+        app = create_app(settings=settings)
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            # 1. Disable a built-in agent and verify it is no longer active
+            res_dis = await client.post("/api/agents/climate_thermal_agent/enabled", json={"enabled": False})
+            self.assertEqual(res_dis.status_code, 200)
+            self.assertEqual(res_dis.json()["status"], "disabled")
+            self.assertFalse(res_dis.json()["agent"]["enabled"])
+            self.assertFalse(res_dis.json()["agent"]["is_custom"])
+
+            # Built-in agents cannot be deleted
+            res_del_builtin = await client.delete("/api/agents/climate_thermal_agent")
+            self.assertEqual(res_del_builtin.status_code, 400)
+
+            # Simulating a climate event while climate_thermal_agent is disabled wakes 0 agents
+            res_sim = await client.post("/api/events/simulate", json={"scenario": "condensation_risk"})
+            self.assertEqual(res_sim.status_code, 200)
+            self.assertEqual(res_sim.json()["run_logs"], [])
+
+            # 2. Register a custom agent, toggle its enabled state, and verify YAML on disk updates
+            custom_payload = {
+                "agent_id": "pool_garden_agent",
+                "name": "Pool & Garden Agent",
+                "specialty": "Irrigation and pool filtration efficiency",
+                "description": "Monitors pool temperature and garden valves.",
+                "monitored_domains": ["sensor", "switch"],
+                "controllable_domains": ["switch", "notify"],
+                "goals": ["Save water and energy"],
+                "enabled": True,
+            }
+            res_reg = await client.post("/api/agents/custom", json=custom_payload)
+            self.assertEqual(res_reg.status_code, 200)
+            self.assertTrue(res_reg.json()["agent"]["is_custom"])
+            self.assertTrue(res_reg.json()["agent"]["enabled"])
+            yaml_file = agents_dir / "pool_garden_agent.yaml"
+            self.assertTrue(yaml_file.is_file())
+
+            # Disable the custom agent -> YAML on disk reflects enabled: false
+            res_custom_dis = await client.post("/api/agents/pool_garden_agent/enabled", json={"enabled": False})
+            self.assertEqual(res_custom_dis.status_code, 200)
+            self.assertFalse(res_custom_dis.json()["agent"]["enabled"])
+            self.assertFalse(yaml.safe_load(yaml_file.read_text(encoding="utf-8"))["enabled"])
+
+            # Re-enable the custom agent -> YAML on disk reflects enabled: true
+            res_custom_en = await client.post("/api/agents/pool_garden_agent/enabled", json={"enabled": True})
+            self.assertEqual(res_custom_en.status_code, 200)
+            self.assertTrue(res_custom_en.json()["agent"]["enabled"])
+            self.assertTrue(yaml.safe_load(yaml_file.read_text(encoding="utf-8"))["enabled"])
+
+            # Enable a bundled example custom agent (solar_energy_agent)
+            res_bundled_en = await client.post("/api/agents/solar_energy_agent/enabled", json={"enabled": True})
+            self.assertEqual(res_bundled_en.status_code, 200)
+            self.assertTrue(res_bundled_en.json()["agent"]["enabled"])
+
+            # Delete the bundled custom agent beer_brewery_agent
+            res_del_bundled = await client.delete("/api/agents/beer_brewery_agent")
+            self.assertEqual(res_del_bundled.status_code, 200)
+            self.assertNotIn("beer_brewery_agent", [a["agent_id"] for a in res_del_bundled.json()["agents"]])
+
+        app.state.orchestrator.memory._conn.close()
+
+        # 3. Restart (new app on same DB and custom_agents_dir): choices persist
+        app2 = create_app(settings=settings)
+        transport2 = httpx.ASGITransport(app=app2)
+        async with httpx.AsyncClient(transport=transport2, base_url="http://testserver") as client2:
+            agents_map = {a["agent_id"]: a for a in (await client2.get("/api/status")).json()["agents"]}
+            self.assertFalse(agents_map["climate_thermal_agent"]["enabled"])
+            self.assertTrue(agents_map["pool_garden_agent"]["enabled"])
+            self.assertTrue(agents_map["solar_energy_agent"]["enabled"])
+            self.assertNotIn("beer_brewery_agent", agents_map)
+
+            # Re-enable built-in agent and delete the custom pool_garden_agent
+            res_re_en = await client2.post("/api/agents/climate_thermal_agent/enabled", json={"enabled": True})
+            self.assertEqual(res_re_en.status_code, 200)
+            self.assertTrue(res_re_en.json()["agent"]["enabled"])
+
+            res_del = await client2.delete("/api/agents/pool_garden_agent")
+            self.assertEqual(res_del.status_code, 200)
+            self.assertEqual(res_del.json()["status"], "deleted")
+            self.assertFalse(yaml_file.exists())
+            self.assertNotIn("pool_garden_agent", [a["agent_id"] for a in res_del.json()["agents"]])
+
+            # Deleting or toggling a missing agent returns 404
+            self.assertEqual((await client2.delete("/api/agents/pool_garden_agent")).status_code, 404)
+            self.assertEqual((await client2.post("/api/agents/pool_garden_agent/enabled", json={"enabled": True})).status_code, 404)
+
+        app2.state.orchestrator.memory._conn.close()
 
 
 if __name__ == "__main__":

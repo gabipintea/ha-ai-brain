@@ -9,7 +9,6 @@ from typing import Any
 
 from ha_ai_brain.domain.privacy import PrivacyScrubber
 from ha_ai_brain.adapters.quota_monitor import BaseQuotaMonitorAdapter, create_quota_monitor_for_model
-from ha_ai_brain.ports.billing import LicensePort
 from ha_ai_brain.ports.llm import REASONING_DEFAULT, REASONING_LOW, REASONING_OFF, LLMProviderPort, LLMQuotaAndUsageSnapshot, ResearchResult
 
 logger = logging.getLogger(__name__)
@@ -77,7 +76,6 @@ class LiteLLMAdapter(LLMProviderPort):
         fast_model: str,
         api_key: str = "",
         managed_proxy_url: str = "",
-        license_port: LicensePort | None = None,
         fallback_models: list[str] | None = None,
         fallback_policy: str = "auto",
         privacy_scrub: bool = True,
@@ -90,7 +88,6 @@ class LiteLLMAdapter(LLMProviderPort):
         self._fallback_models = list(fallback_models or [])
         self.api_key = api_key.strip()
         self.managed_proxy_url = managed_proxy_url
-        self.license_port = license_port
         self.quota_monitor: BaseQuotaMonitorAdapter = create_quota_monitor_for_model(
             model=model,
             api_key=self.api_key,
@@ -291,12 +288,6 @@ class LiteLLMAdapter(LLMProviderPort):
                 completion_tokens=c_tok,
                 headers=headers_dict,
             )
-            if usage and self.license_port:
-                await self.license_port.record_token_usage(
-                    agent_id=agent_id,
-                    prompt_tokens=p_tok,
-                    completion_tokens=c_tok,
-                )
             choices = getattr(resp, "choices", []) or []
             content = choices[0].message.content if choices else ""
             parsed = self._parse_json_safely(content or "")
@@ -372,8 +363,6 @@ class LiteLLMAdapter(LLMProviderPort):
                         usage = data.get("usageMetadata", {})
                         p_tok, c_tok = int(usage.get("promptTokenCount", 0)), _output_tokens(usage)
                         self.quota_monitor.record_success(model=m_id, prompt_tokens=p_tok, completion_tokens=c_tok, headers=dict(resp.headers))
-                        if self.license_port:
-                            await self.license_port.record_token_usage(agent_id=agent_id, prompt_tokens=p_tok, completion_tokens=c_tok)
                         result = parse_grounded_response(data)
                         logger.info(
                             "[GEMINI research %s] tokens=%d sources=%d coverage=%.0f%%",
@@ -467,12 +456,6 @@ class LiteLLMAdapter(LLMProviderPort):
                                 completion_tokens=c_tok,
                                 headers=dict(resp.headers),
                             )
-                            if self.license_port:
-                                await self.license_port.record_token_usage(
-                                    agent_id=agent_id,
-                                    prompt_tokens=p_tok,
-                                    completion_tokens=c_tok,
-                                )
                             candidates = data.get("candidates") or []
                             if candidates:
                                 parts = (candidates[0].get("content") or {}).get("parts") or []

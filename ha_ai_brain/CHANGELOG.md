@@ -2,6 +2,21 @@
 
 All notable changes to **HA AI Brain** are documented in this file.
 
+## 0.2.13 - 2026-10-31
+
+### Added
+- **Enable, disable and delete agents in Settings.** Under *Settings → Active Specialized Domain Agents*, you can now enable or disable any built-in or custom agent (including the bundled solar/energy and brewery example agents) at any time, and delete custom agents. Your choices persist across restarts and are included in *Backup & restore*.
+
+### Changed
+- **Clearer `Unusual:` alert titles and next steps.** Exception cards now describe the actual anomaly in their headline and recommended action — such as *"Unusual: Living Room Blind is changing state repeatedly"*, *"Unusual: Outdoor Temperature has stopped reporting"*, *"Unusual: Kitchen Ceiling has stayed on longer than usual"*, or *"Unusual: 7 entities are unavailable"* — instead of always showing `Unusual: <name> is <state>`. State-independent alerts (flapping, stale or out-of-range sensors, silent entities) also no longer duplicate if the entity changes state while the alert is still open.
+- **Improved hint and example for *Context for the Brain*.** Updated the guidance on *Memory & Rules → Context for the Brain* to explain that notes are standing facts, preferences, or boundaries that sensors alone cannot show (read by every AI agent), while pointing to the ignore list for hiding broken or unwanted devices.
+- **Removed unused `license_key` option.** Removed the placeholder `license_key` add-on option and status label.
+
+### Fixed
+- **No more false "usually 0.0" alerts when adding a new device.** Newly paired devices and entities now require at least `baseline_min_days` (3 days by default) of their own recorded history before statistical anomaly detectors (flapping, abnormally long state, stale or out-of-range sensor) can fire, and each entity's hourly change rate is measured over its own observed lifetime rather than the whole database window.
+- **Sibling entities on the same device collapse into one alert.** When multiple entities belonging to the same physical device trigger the same non-critical alert (`flapping`, `silent_entity`, `stale_sensor`, `stuck_unavailable`) in one check, they are combined into a single alert and share the cooldown.
+- **SQLite incremental auto-vacuum frees all reclaimed pages.** Fixed `run_maintenance` so `PRAGMA incremental_vacuum` steps through and returns all freed pages to the filesystem instead of stopping after the first page.
+
 ## 0.2.12 - 2026-10-30
 
 ### Fixed
@@ -147,7 +162,7 @@ All notable changes to **HA AI Brain** are documented in this file.
 
 ### Security
 - **Ingress-only access inside the add-on**: when running under the Supervisor, requests from anything other than the Supervisor proxy are rejected (override with `BRAIN_TRUSTED_PROXIES` / `BRAIN_ALLOW_ANY_CLIENT`). `/api/health` stays open for the watchdog.
-- **Settings API no longer leaks secrets**: `ha_token` and `license_key` were previously returned by `/api/status`; short API keys are now fully masked.
+- **Settings API no longer leaks secrets**: `ha_token` was previously returned by `/api/status`; short API keys are now fully masked.
 - **Arbitrary-code domains blocked**: `shell_command`, `python_script`, `pyscript`, `command_line`, `rest_command`, `hassio`, `script`, `recorder` can never be called from an LLM proposal.
 - **Agents are confined to their declared `controllable_domains`**; proposals targeting unknown (hallucinated) entities are rejected before execution.
 - LLM-proposed priorities are capped below human-override / life-safety tiers, so an agent cannot out-rank the Conflict Arbiter.
@@ -174,7 +189,7 @@ All notable changes to **HA AI Brain** are documented in this file.
 - Shared pooled HTTP client for Home Assistant REST calls; WebSocket subscribes only to the 4 event types it consumes instead of every event on the bus; bounded memory for AI context ids and sent-notification history.
 - Scheduled batches honor the previous run after a restart (no token spend on every restart) and are skipped during a quota cooldown.
 - SQLite runs in WAL mode; prompts cap the number of entities sent to the LLM; LLM calls have a request timeout.
-- Added `/api/health` + Supervisor watchdog; exposed `managed_cloud_proxy_url` / `license_key` options; declared the `python-dotenv` dependency.
+- Added `/api/health` + Supervisor watchdog; exposed `managed_cloud_proxy_url` option; declared the `python-dotenv` dependency.
 
 ## 0.1.25 - 2026-10-25
 

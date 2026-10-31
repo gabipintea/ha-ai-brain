@@ -455,9 +455,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           <h2>Context for the Brain</h2>
           <span class="pill info" id="contextNotesCountBadge" style="display:none;">0</span>
         </div>
-        <div class="hint">Tell all agents about hardware quirks or personal rules (e.g. broken humidifier). Applied immediately across all agents.</div>
+        <div class="hint">Facts, preferences, or boundaries that sensors alone cannot show. Every AI agent reads these notes and must respect them when proposing actions, automations, or insights (to hide a broken/unwanted device, use the ignore list feature).</div>
         <div class="fields">
-          <textarea id="contextNoteInput" rows="2" placeholder="e.g. The humidifier on the bedroom air purifier is broken; I only use it to purify air."></textarea>
+          <textarea id="contextNoteInput" rows="2" placeholder="e.g. Never adjust the nursery climate after 20:00, or: The office plug powers a home server and must stay on."></textarea>
           <div class="inline-form">
             <input type="text" id="contextEntitiesInput" placeholder="Related entity IDs (optional, comma-separated)" />
             <button class="primary" onclick="addContextNote()">Save note</button>
@@ -662,7 +662,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       <div class="card">
         <div class="card-head"><h2>AI provider & Quota</h2><span class="pill" id="quotaPill">-</span></div>
         <div id="quotaBox" class="kv"></div>
-        <div id="licenseBox" class="muted" style="margin-top:12px;"></div>
       </div>
     </div>
 
@@ -766,7 +765,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     <div class="grid">
       <div class="card">
         <div class="card-head"><h2>Active Specialized Domain Agents</h2><span class="pill" id="agentsCountBadge">0</span></div>
-        <div class="hint">Specialized cognitive agents that analyze both real-time stream events and periodic historical batch patterns.</div>
+        <div class="hint">Specialized cognitive agents that analyze both real-time stream events and periodic historical batch patterns. Built-in and custom agents can be enabled or disabled at any time; custom agents can also be deleted.</div>
         <div id="agentsList" style="margin-top:14px;"></div>
       </div>
     </div>
@@ -1287,7 +1286,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         ob.style.display = needsOnboard ? 'block' : 'none';
       }
     }
-    $('licenseBox').textContent = `Plan: ${data.license.plan_tier} | Tokens used: ${data.license.tokens_used_this_period} (current container session)`;
 
     pausedState = !!(data.settings && data.settings.paused);
     $('pausedBanner').style.display = pausedState ? 'block' : 'none';
@@ -1466,12 +1464,19 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     if (aList) {
       aList.innerHTML = agents.length ? agents.map(a => `
         <div class="item">
-          <div class="row">
+          <div style="display:flex; justify-content:space-between; gap:8px; align-items:flex-start; flex-wrap:wrap;">
             <div>
-              <strong>${esc(a.name)}</strong>
-              <div class="muted" style="font-size:12px;">${esc(a.specialty)}</div>
+              <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
+                <strong>${esc(a.name)}</strong>
+                <span class="pill">${a.is_custom ? 'Custom' : 'Built-in'}</span>
+                <span class="pill ${a.enabled ? 'ok' : ''}">${esc(a.enabled ? 'Active' : 'Disabled')}</span>
+              </div>
+              <div class="muted" style="font-size:12px; margin-top:2px;">${esc(a.specialty)}</div>
             </div>
-            <span class="pill ${a.enabled ? 'ok' : ''}">${esc(a.enabled ? 'Active' : 'Disabled')}</span>
+            <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
+              <button class="icon" data-id="${esc(a.agent_id)}" onclick="setAgentEnabled(this.dataset.id, ${!a.enabled})">${a.enabled ? 'Disable' : 'Enable'}</button>
+              ${a.is_custom ? `<button class="danger icon" data-id="${esc(a.agent_id)}" data-name="${esc(a.name)}" onclick="deleteCustomAgent(this.dataset.id, this.dataset.name)">Delete</button>` : ''}
+            </div>
           </div>
           <div class="muted" style="font-size:12px; margin:6px 0;">${esc(a.description)}</div>
           <div class="muted" style="font-size:11px;">
@@ -2322,6 +2327,25 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   }
 
   async function deleteMinChange(id) { await fetch('./api/min-change/' + id, {method: 'DELETE'}); await refreshAll(); }
+
+  async function setAgentEnabled(agentId, enabled) {
+    const res = await post('./api/agents/' + encodeURIComponent(agentId) + '/enabled', {enabled});
+    if (!res.ok) {
+      const b = await res.json().catch(() => ({}));
+      alert(typeof b.detail === 'string' ? b.detail : 'Could not update the agent.');
+    }
+    await refreshAll();
+  }
+
+  async function deleteCustomAgent(agentId, name) {
+    if (!confirm('Delete custom agent "' + (name || agentId) + '"? This cannot be undone.')) return;
+    const res = await fetch('./api/agents/' + encodeURIComponent(agentId), {method: 'DELETE'});
+    if (!res.ok) {
+      const b = await res.json().catch(() => ({}));
+      alert(typeof b.detail === 'string' ? b.detail : 'Could not delete the agent.');
+    }
+    await refreshAll();
+  }
 
   async function loadMoreLogs() {
     if (isLoadingMoreLogs) return;

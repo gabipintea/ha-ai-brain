@@ -111,7 +111,7 @@ Habit-based automation proposals and the agents' periodic analyses are produced 
 All six are **enabled** by default and appear in the Settings tab. Things that apply to every agent:
 * **Permission = "May act on".** An action in any other domain is blocked and shown in the activity log. `automation` means the agent may propose new native automations (they always need your approval); an agent without it is told so and suggests ideas as insights instead. `notify` and `homeassistant` are generic and never count as "owning devices".
 * **"Runs when"** is for the scheduled analysis: an agent with nothing to look at in your home is skipped without an AI call. Real-time reactions additionally need a significant, non-routine event in its field.
-* **Change one** by saving a file with the same `agent_id` in `/config/ha_ai_brain/agents/` (section 11). **Add your own** the same way. Two disabled examples (solar/energy and brewery) ship as templates.
+* **Change one** by saving a file with the same `agent_id` in `/config/ha_ai_brain/agents/` (section 11). **Add your own** the same way. Two disabled examples (solar/energy and brewery) ship as templates. Any built-in or custom agent can be **enabled or disabled** from the *Settings* tab, and custom agents can also be **deleted** from there.
 * Besides the agents, some sources appear in the logs that are not AI agents (see below).
 
 Each agent is a persona with goals, the entity types it watches and the services it is allowed to call. An agent can only act through the device types it is declared to control. You can add your own (section 11). Every agent run follows the same pipeline: gather context → consult its expert notes (generated once per setup and cached; this is separate from the weekly *Research* tab) → compute derived signals (sandboxed Python written by the AI, run in an isolated process) → synthesise actions or insights.
@@ -200,7 +200,7 @@ Checked every 5 minutes without AI. There is **no list of devices or situations 
 | Automation did not run | A time-based automation promised a state that is not there and nobody changed it since |
 | Open house while away | Nobody home for 10+ minutes and a lock is unlocked, an alarm disarmed, or a door/garage/window is open |
 
-Alerts appear in *Activity & Insights* and as a push notification (security alerts are time-sensitive and ignore quiet hours). An agent is then asked what to do about it — only for that situation — and, where a device can fix it, proposes the **direct action** (for example *lock the front door now*). In Co-pilot mode that arrives as a second push with **Approve once / Always allow / Dismiss / Reject** (for critical situations it also breaks through quiet hours); in Autonomous mode for that device type it is simply done and you are told. If no device can fix it (for example a window without a motor), you only get the alert. Controls: at most 5 new alerts per check and 20 non-critical per day; calm alerts are held back while the house is empty; cumulative counters (energy totals) are ignored.
+Alerts appear in *Activity & Insights* and as a push notification (security alerts are time-sensitive and ignore quiet hours), with a headline and next step that describe the specific anomaly (for example *"Unusual: Living Room Blind is changing state repeatedly"* or *"Unusual: Outdoor Temperature has stopped reporting"*). Each entity needs at least 3 days of recorded history (`baseline_min_days`) before statistical detectors (flapping, abnormally long state, out-of-range or stale sensor) raise alerts on it, so newly added devices can settle without false warnings; if several entities on the same physical device trigger the same non-critical alert at once, they are combined into one card. An agent is then asked what to do about it — only for that situation — and, where a device can fix it, proposes the **direct action** (for example *lock the front door now*). In Co-pilot mode that arrives as a second push with **Approve once / Always allow / Dismiss / Reject** (for critical situations it also breaks through quiet hours); in Autonomous mode for that device type it is simply done and you are told. If no device can fix it (for example a window without a motor), you only get the alert. Controls: at most 5 new alerts per check and 20 non-critical per day; calm alerts are held back while the house is empty; cumulative counters (energy totals) are ignored.
 
 **It learns from you:** *Dismiss* an alert and the same alert waits twice as long next time (up to 14 days). *Reject* it and it is muted until you unmute it under *Learned → Muted alerts*.
 
@@ -286,7 +286,7 @@ Any model supported by LiteLLM: Google Gemini, OpenAI, Anthropic, OpenRouter, lo
 | **Memory & Rules** | Always-allow rules (revoke); rejected actions and insights (unblock); **Create an automation**; **Watches**; context notes; ignore list; minimum-change rules |
 | **Learned** | Learning progress and statistics; recent autonomous actions (Undo); habits found (with *Propose automation*); muted alerts; automations the brain does not track yet (adopt); automation health with Disable / Enable / Delete |
 | **Research** | Research status and controls; findings waiting for your review; approved knowledge; upcoming topics |
-| **Settings** | Operating mode, autonomy, quota fallback, notification target; AI provider and quota; site context; Learning & Safety; list of agents; **Backup & restore** |
+| **Settings** | Operating mode, autonomy, quota fallback, notification target; AI provider and quota; site context; Learning & Safety; list of agents (enable/disable built-in or custom agents, delete custom agents); **Backup & restore** |
 
 ---
 
@@ -317,7 +317,7 @@ Any model supported by LiteLLM: Google Gemini, OpenAI, Anthropic, OpenRouter, lo
 | `log_level` | `info` | `debug`, `info` or `warning`. `debug` logs every single state change (noisy, more CPU/disk) |
 | `quiet_hours_start` / `_end` | empty | `HH:MM` local time |
 | `timezone` | empty | IANA name; empty = use Home Assistant's |
-| `managed_cloud_proxy_url`, `license_key` | empty | Optional; the license key currently only changes a label |
+| `managed_cloud_proxy_url` | empty | Optional AI proxy endpoint |
 
 Settings you change in the dashboard are saved in the brain's database and **take precedence over the add-on options** afterwards.
 
@@ -409,7 +409,7 @@ Only `agent_id`, `name`, `specialty` and `description` are required; everything 
 
 **What an agent may do is decided by `controllable_domains`.** It is a hard permission enforced in code: any action in another domain is blocked ("blocked_domain_not_permitted" in the activity log), whatever the AI says. The special domain `automation` is the permission to *propose new native automations*; an agent without it is told so in its prompt and returns ideas as insights instead. The text in `goals` and `custom_domain_rules_prompt` only guides the AI; it never grants or removes permissions. The same goes for notes you write on the *Memory & Rules* tab and the note you type when rejecting a proposal (the latter is kept for the agent that made it).
 
-Save it as `/config/ha_ai_brain/agents/pool_agent.yaml` (that is the `ha_ai_brain/agents` folder inside your Home Assistant configuration folder; the **File editor**, **Samba share** or **SSH & Web Terminal** add-ons can reach it) and restart the add-on. A file there with the same `agent_id` as a bundled example overrides it — that is how you **enable** the two bundled examples (a solar/energy agent and a brewery agent ship disabled): copy the example into that folder and set `enabled: true`. Agents registered through `POST /api/agents/custom` are saved in the same folder. Agents cannot be switched on or off from the dashboard yet.
+Save it as `/config/ha_ai_brain/agents/pool_agent.yaml` (that is the `ha_ai_brain/agents` folder inside your Home Assistant configuration folder; the **File editor**, **Samba share** or **SSH & Web Terminal** add-ons can reach it) and restart the add-on. Agents registered through `POST /api/agents/custom` are saved in the same folder. In *Settings → Active Specialized Domain Agents* you can **enable or disable** any built-in or custom agent (including the two bundled examples — a solar/energy agent and a brewery agent — which ship disabled), and **delete** custom agents.
 
 **Changing a built-in agent** (for example stopping the Repair & Diagnostics agent from proposing automations, or giving the Security agent permission to). Built-in agents are defined inside the add-on, but a file in `/config/ha_ai_brain/agents/` with the **same `agent_id`** replaces them. Save the complete definition with your change, then restart the add-on:
 
@@ -477,7 +477,6 @@ Approved research and your own notes are used together with this file-based know
 * Optional cited web research is Gemini-only. Research without it is the AI's general knowledge and is not verified.
 * Automation health and the Disable/Delete buttons cover only automations the brain created (or adopted), not your other automations. An automation whose habit has faded is only noticed when you start reverting it.
 * The add-on's data is erased on uninstall; use *Backup & restore* or a Home Assistant backup to keep your decisions.
-* The `license_key` option is informational in this version; nothing is locked behind it.
 * Habit/exception learning covers switchable, binary and presence entities and numeric sensors. Text, enum and media states are not learned.
 
 ---
@@ -554,7 +553,7 @@ No model is configured. Any provider works; add an API key (or an `ollama/` mode
 The AI is used once to translate your sentence into a structured rule (entities, condition, duration, schedule, severity). After that the rule is checked by plain code every minute.
 
 **How do I enable one of the bundled example agents?**
-Create a file with the same `agent_id` in `/config/ha_ai_brain/agents/` and set `enabled: true`, then restart the add-on (see section 11). The two examples are a solar/energy agent (`solar_energy_agent`) and a brewery agent (`beer_brewery_agent`).
+Open *Settings → Active Specialized Domain Agents* and press **Enable** on the agent (or create a file with the same `agent_id` in `/config/ha_ai_brain/agents/` with `enabled: true`; see section 11). The two examples are a solar/energy agent (`solar_energy_agent`) and a brewery agent (`beer_brewery_agent`).
 
 **Does it support several phones or people?**
 Pick a notification service that reaches everyone you want (a Home Assistant `notify` group works). Presence-aware features use all `person` entities.
@@ -567,9 +566,6 @@ Yes: the add-on's `/data` folder is part of normal Home Assistant add-on backups
 
 **Can I upgrade or downgrade safely?**
 Upgrades migrate the database in place. Take a backup first. Going back to an older version keeps working, but newer data (telemetry, watches, research) is simply ignored by it.
-
-**Does the license key do anything?**
-Not in this version: it only changes the plan label shown in Settings. Nothing is locked.
 
 **Where do I see why it did something?**
 *Activity & Insights*: each run lists the research, the calculated signals, the proposed actions, and the outcome of each. Approval cards link to the reasoning, and the add-on log shows details.

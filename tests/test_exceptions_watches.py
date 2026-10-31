@@ -17,6 +17,7 @@ from ha_ai_brain.application.watch_service import WatchService
 from ha_ai_brain.config import BrainSettings
 from ha_ai_brain.domain.anomaly import (
     build_discrete_profiles,
+    collapse_device_findings,
     find_dwell_anomalies,
     find_flapping,
     find_numeric_anomalies,
@@ -25,7 +26,7 @@ from ha_ai_brain.domain.anomaly import (
     prioritise,
 )
 from ha_ai_brain.domain.baselines import NumericBaseline
-from ha_ai_brain.domain.expectations import ExceptionFinding, classify_severity
+from ha_ai_brain.domain.expectations import ExceptionFinding, classify_severity, exception_action, exception_title
 from ha_ai_brain.domain.models import EntityState, Transition
 from ha_ai_brain.domain.watches import (
     WatchCondition,
@@ -93,6 +94,51 @@ class TestGenericDetectors(unittest.TestCase):
         self.assertEqual([f.kind for f in flap], ["flapping"])
         self.assertEqual(find_flapping({"binary_sensor.s": 2}, fine, profiles, NOW, UTC), [])
 
+    def test_newly_added_entities_do_not_trigger_flapping_dwell_or_stale_alerts(self) -> None:
+        # A brand-new device added 30 minutes ago in a home with 30 days of history
+        new_trans = [
+            Transition(
+                "switch.new_plug",
+                NOW - timedelta(minutes=30 - i * 2),
+                "off" if i % 2 == 0 else "on",
+                "on" if i % 2 == 0 else "off",
+                "human_or_physical",
+            )
+            for i in range(12)
+        ]
+        profiles = build_discrete_profiles(new_trans, NOW - timedelta(days=30), NOW)
+        prof = profiles["switch.new_plug"]
+        self.assertLess(prof.days_active, 0.1)
+        # Hourly rate reflects the entity's own observed span, not 12 / (30 * 24) = 0.0
+        self.assertGreaterEqual(prof.hourly_mean, 10.0)
+        states = {"switch.new_plug": state("switch.new_plug", "on", timedelta(hours=2))}
+        self.assertEqual(find_flapping({"switch.new_plug": 12}, states, profiles, NOW, UTC), [])
+        self.assertEqual(find_dwell_anomalies(states, profiles, NOW, UTC), [])
+
+        # A sensor added 20 hours ago (under the 3-day warm-up) does not raise stale_sensor
+        short_rows = self._numeric_rows(hours=20)
+        short_base = {"sensor.new_temp": NumericBaseline(short_rows, UTC)}
+        stale_new = {"sensor.new_temp": state("sensor.new_temp", "22.0", timedelta(hours=5), updated=NOW - timedelta(hours=5))}
+        self.assertEqual(find_numeric_anomalies(stale_new, {"sensor.new_temp": short_rows}, short_base, NOW, UTC), [])
+
+    def test_sibling_entities_on_same_device_collapse_into_one_finding(self) -> None:
+        findings = [
+            ExceptionFinding("flapping", "switch.strip_socket_1", "info", "Socket 1 changed 12 times.", "stable", "on", 0.6),
+            ExceptionFinding("flapping", "switch.strip_socket_2", "info", "Socket 2 changed 15 times.", "stable", "on", 0.75),
+            ExceptionFinding("flapping", "switch.strip_socket_3", "info", "Socket 3 changed 10 times.", "stable", "off", 0.5),
+            ExceptionFinding("flapping", "switch.other_device", "info", "Other changed 9 times.", "stable", "on", 0.45),
+        ]
+        devices = {
+            "switch.strip_socket_1": "dev_power_strip",
+            "switch.strip_socket_2": "dev_power_strip",
+            "switch.strip_socket_3": "dev_power_strip",
+            "switch.other_device": "dev_other",
+        }
+        collapsed = collapse_device_findings(findings, devices)
+        self.assertEqual([f.entity_id for f in collapsed], ["switch.strip_socket_2", "switch.other_device"])
+        self.assertIn("2 other entities on the same device", collapsed[0].summary)
+        self.assertEqual(set(collapsed[0].also_entities), {"switch.strip_socket_1", "switch.strip_socket_3"})
+
     def _numeric_rows(self, mean: float = 22.0, hours: int = 40 * 24, n: int = 6) -> list[tuple[str, int, float]]:
         # ascending in time, like the telemetry store returns them
         return [((NOW - timedelta(hours=h)).replace(minute=0).isoformat(), n, mean + (0.2 if h % 2 else -0.2)) for h in range(hours - 1, 0, -1)]
@@ -128,9 +174,48 @@ class TestGenericDetectors(unittest.TestCase):
         found = find_stuck_unavailable(many, NOW, UTC)
         self.assertEqual(len(found), 1)
         self.assertIn("7 entities", found[0].summary)
+        self.assertEqual(exception_title(found[0], "L0"), "Unusual: 7 entities are unavailable")
         one = {"light.x": state("light.x", "unavailable", timedelta(hours=3))}
-        self.assertEqual(len(find_stuck_unavailable(one, NOW, UTC)), 1)
+        single = find_stuck_unavailable(one, NOW, UTC)
+        self.assertEqual(len(single), 1)
+        self.assertEqual(exception_title(single[0], "Kitchen Light"), "Unusual: Kitchen Light is unavailable")
         self.assertEqual(find_stuck_unavailable({"light.x": state("light.x", "unavailable", timedelta(minutes=5))}, NOW, UTC), [])
+
+    def test_exception_titles_and_actions_describe_the_actual_anomaly(self) -> None:
+        cover = state("cover.living_room_blind", "open", attributes={"friendly_name": "Living Room Blind"})
+        flap = ExceptionFinding("flapping", cover.entity_id, "info", "s", "stable", "open", 0.5)
+        self.assertEqual(exception_title(flap, "Living Room Blind", cover), "Unusual: Living Room Blind is changing state repeatedly")
+        self.assertIn("chattering", exception_action(flap, "Living Room Blind"))
+        self.assertEqual(flap.dedupe_key, "flapping:cover.living_room_blind")
+
+        temp = state("sensor.outdoor_temperature", "14.6", unit_of_measurement="°C", attributes={"friendly_name": "Outdoor Temperature"})
+        stale = ExceptionFinding("stale_sensor", temp.entity_id, "info", "s", "reporting regularly", "14.6", 0.8)
+        self.assertEqual(exception_title(stale, "Outdoor Temperature", temp), "Unusual: Outdoor Temperature has stopped reporting")
+        self.assertIn("battery", exception_action(stale, "Outdoor Temperature"))
+        self.assertEqual(stale.dedupe_key, "stale_sensor:sensor.outdoor_temperature")
+
+        silent = ExceptionFinding("silent_entity", "binary_sensor.hall_motion", "info", "s", "changing regularly", "off", 0.8)
+        self.assertEqual(exception_title(silent, "Hall Motion"), "Unusual: Hall Motion has stopped changing")
+        self.assertIn("connected", exception_action(silent, "Hall Motion"))
+
+        dwell = ExceptionFinding("dwell_anomaly", "light.kitchen_ceiling", "info", "s", "off", "on", 0.9)
+        self.assertEqual(exception_title(dwell, "Kitchen Ceiling"), "Unusual: Kitchen Ceiling has stayed on longer than usual")
+        self.assertIn("by mistake", exception_action(dwell, "Kitchen Ceiling"))
+
+        excursion = ExceptionFinding("numeric_excursion", temp.entity_id, "info", "s", "about 21.0°C", "35.2", 0.9)
+        self.assertEqual(exception_title(excursion, "Outdoor Temperature", temp), "Unusual: Outdoor Temperature is out of range (35.2°C)")
+        self.assertIn("about 21.0°C", exception_action(excursion, "Outdoor Temperature"))
+        self.assertEqual(excursion.dedupe_key, "numeric_excursion:sensor.outdoor_temperature")
+
+        missed = ExceptionFinding("automation_missed", "light.porch", "info", "s", "off", "on", 1.0)
+        self.assertEqual(exception_title(missed, "Porch Light"), "Unusual: Porch Light is still on (missed automation)")
+
+        door = state("binary_sensor.front_door", "on", device_class="door")
+        away = ExceptionFinding("security_while_away", door.entity_id, "critical", "s", "secured", "on", 1.0)
+        self.assertEqual(exception_title(away, "Front Door", door), "Unusual: Front Door is open while away")
+
+        routine = ExceptionFinding("routine_deviation", "lock.front_door", "critical", "s", "locked", "unlocked", 0.95)
+        self.assertEqual(exception_title(routine, "Front Door Lock"), "Unusual: Front Door Lock is unlocked (usually locked)")
 
     def test_severity_is_contextual_and_prioritisation_is_bounded(self) -> None:
         lock = state("lock.x", "unlocked")
@@ -355,6 +440,70 @@ class TestExceptionFeedbackLearning(unittest.IsolatedAsyncioTestCase):
             for o in (orch, fresh):
                 o.memory._conn.close()
                 o.telemetry.close()
+
+    async def test_flapping_and_stale_exceptions_do_not_duplicate_when_state_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            orch = build_orchestrator(BrainSettings(use_simulator=True, db_path=str(Path(tmp) / "t.db"), custom_agents_dir=tmp, timezone="UTC"))
+            states = await orch.smart_home.get_all_states()
+            flap_open = ExceptionFinding("flapping", "light.kitchen_ceiling", "info", "Changed 10 times.", "stable", "on", 0.5)
+            flap_closed = ExceptionFinding("flapping", "light.kitchen_ceiling", "info", "Changed 11 times.", "stable", "off", 0.55)
+            await orch._handle_exception(flap_open, states, [], NOW)
+            await orch._handle_exception(flap_closed, states, [], NOW)
+            active = [i for i in await orch.memory.get_advisory_insights(status="active") if i.category == "exception"]
+            self.assertEqual(len(active), 1)
+            self.assertIn("changing state repeatedly", active[0].title)
+            self.assertNotIn("Review the situation.", active[0].recommended_human_action)
+            orch.memory._conn.close()
+            orch.telemetry.close()
+
+    async def test_new_device_entities_and_same_device_siblings_in_detect_exceptions(self) -> None:
+        from ha_ai_brain.domain.twins import EntityFacts
+
+        with tempfile.TemporaryDirectory() as tmp:
+            orch = build_orchestrator(BrainSettings(use_simulator=True, db_path=str(Path(tmp) / "t.db"), custom_agents_dir=tmp, timezone="UTC"))
+            eng = orch.learning
+            # Established 8-day history for two sibling switches on one existing device
+            trans: list[Transition] = []
+            for d in range(1, 9):
+                for eid in ("switch.dev_a", "switch.dev_b"):
+                    trans.append(Transition(eid, NOW - timedelta(days=d, hours=4), "off", "on", "human_or_physical"))
+                    trans.append(Transition(eid, NOW - timedelta(days=d, hours=3), "on", "off", "human_or_physical"))
+            # Brand-new device with 3 entities added 25 minutes ago, each toggling 10 times in the last hour
+            for i in range(10):
+                ts = NOW - timedelta(minutes=25 - i * 2)
+                for eid in ("switch.new_1", "switch.new_2", "binary_sensor.new_3"):
+                    trans.append(Transition(eid, ts, "off" if i % 2 == 0 else "on", "on" if i % 2 == 0 else "off", "human_or_physical"))
+                # Established sibling entities also flap 10 times in the last hour
+                for eid in ("switch.dev_a", "switch.dev_b"):
+                    trans.append(Transition(eid, ts, "off" if i % 2 == 0 else "on", "on" if i % 2 == 0 else "off", "human_or_physical"))
+            await orch.telemetry.record_transitions(trans)
+
+            async def _facts() -> list[EntityFacts]:
+                return [
+                    EntityFacts(entity_id="switch.dev_a", device_id="dev_existing"),
+                    EntityFacts(entity_id="switch.dev_b", device_id="dev_existing"),
+                    EntityFacts(entity_id="switch.new_1", device_id="dev_brand_new"),
+                    EntityFacts(entity_id="switch.new_2", device_id="dev_brand_new"),
+                    EntityFacts(entity_id="binary_sensor.new_3", device_id="dev_brand_new"),
+                ]
+
+            eng.smart_home.get_entity_device_facts = _facts  # type: ignore[attr-defined]
+            states = {
+                "switch.dev_a": state("switch.dev_a", "on"),
+                "switch.dev_b": state("switch.dev_b", "on"),
+                "switch.new_1": state("switch.new_1", "on"),
+                "switch.new_2": state("switch.new_2", "on"),
+                "binary_sensor.new_3": state("binary_sensor.new_3", "on"),
+            }
+            await eng.refresh_twins(states, NOW, force=True)
+            findings = await eng.detect_exceptions(states, NOW)
+            # Brand-new entities produce zero alerts; the two established siblings collapse into a single alert
+            self.assertEqual([(f.kind, f.entity_id) for f in findings], [("flapping", "switch.dev_a")])
+            eng.mark_reported(findings[0], NOW)
+            # Even if only the sibling entity flaps on the next check 5 minutes later, it is already on cooldown
+            self.assertEqual(await eng.detect_exceptions({"switch.dev_b": states["switch.dev_b"]}, NOW + timedelta(minutes=5)), [])
+            orch.memory._conn.close()
+            orch.telemetry.close()
 
 
 if __name__ == "__main__":

@@ -9,7 +9,6 @@ from typing import Any, ClassVar
 
 from pydantic import BaseModel, Field
 
-from ha_ai_brain.adapters.billing_license import CommercialLicenseAdapter
 from ha_ai_brain.adapters.ha_simulator import SmartHomeSimulatorAdapter
 from ha_ai_brain.adapters.ha_websocket_rest import HomeAssistantAdapter
 from ha_ai_brain.adapters.llm_litellm import LiteLLMAdapter
@@ -136,6 +135,10 @@ class AutomationEnabledRequest(BaseModel):
     enabled: bool
 
 
+class AgentEnabledRequest(BaseModel):
+    enabled: bool
+
+
 class HabitProposeRequest(BaseModel):
     pattern_id: str = Field(min_length=1, max_length=100)
 
@@ -189,18 +192,15 @@ def build_orchestrator(settings: BrainSettings | None = None) -> BrainOrchestrat
             history_max_entities=cfg.history_max_entities,
         )
 
-    license_adapter = CommercialLicenseAdapter(initial_license_key=cfg.license_key)
-
     has_live_llm = bool(cfg.llm_api_key or cfg.managed_proxy_url or cfg.llm_model.startswith("ollama/"))
     if cfg.use_simulator and not has_live_llm:
-        llm_adapter: LLMProviderPort = SimulatorMockLLMAdapter(license_port=license_adapter)
+        llm_adapter: LLMProviderPort = SimulatorMockLLMAdapter()
     else:
         llm_adapter = LiteLLMAdapter(
             model=cfg.llm_model,
             fast_model=cfg.llm_fast_model,
             api_key=cfg.llm_api_key,
             managed_proxy_url=cfg.managed_proxy_url,
-            license_port=license_adapter,
             fallback_models=cfg.llm_fallback_models,
             fallback_policy=cfg.llm_fallback_policy.value,
             privacy_scrub=cfg.privacy_scrub,
@@ -224,7 +224,6 @@ def build_orchestrator(settings: BrainSettings | None = None) -> BrainOrchestrat
         memory=memory_adapter,
         notification=notification_adapter,
         mcp_client=mcp_adapter,
-        license_port=license_adapter,
         telemetry=SQLiteTelemetryStore(cfg.db_path),
     )
 
@@ -443,7 +442,6 @@ def create_app(settings: BrainSettings | None = None) -> Any:
 
     @app.get("/api/status")
     async def get_status() -> dict[str, Any]:
-        lic = await orchestrator.license_port.verify_license(orchestrator.settings.license_key)
         quota = await orchestrator.llm.get_quota_status()
         if orchestrator._cached_states:
             entity_count = len(orchestrator._cached_states)
@@ -473,7 +471,6 @@ def create_app(settings: BrainSettings | None = None) -> Any:
             "research_pending_review": len(await orchestrator.research.store.items(status="proposed")),
             "settings": orchestrator.settings.public_dict(),
             "available_notify_services": notify_services,
-            "license": lic.model_dump(),
             "llm_quota": quota.to_status_dict(),
             "agents": [a.model_dump() for a in orchestrator.registry.list_agents()],
             "entity_count": entity_count,
@@ -765,9 +762,39 @@ def create_app(settings: BrainSettings | None = None) -> Any:
 
     @app.post("/api/agents/custom")
     async def register_custom_agent(spec: AgentSpec) -> dict[str, Any]:
-        registered = orchestrator.registry.register_custom_agent(spec)
-        orchestrator.invalidate_context_caches()
-        return {"status": "registered", "agent": registered.model_dump()}
+        registered = await orchestrator.register_custom_agent(spec)
+        return {
+            "status": "registered",
+            "agent": registered.model_dump(),
+            "agents": [a.model_dump() for a in orchestrator.registry.list_agents()],
+        }
+
+    @app.post("/api/agents/{agent_id}/enabled")
+    async def set_agent_enabled(agent_id: str, req: AgentEnabledRequest) -> dict[str, Any]:
+        try:
+            spec = await orchestrator.set_agent_enabled(agent_id, req.enabled)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Agent not found") from exc
+        return {
+            "status": "enabled" if spec.enabled else "disabled",
+            "agent": spec.model_dump(),
+            "agents": [a.model_dump() for a in orchestrator.registry.list_agents()],
+        }
+
+    @app.delete("/api/agents/custom/{agent_id}")
+    @app.delete("/api/agents/{agent_id}")
+    async def delete_custom_agent(agent_id: str) -> dict[str, Any]:
+        try:
+            await orchestrator.delete_custom_agent(agent_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Agent not found") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {
+            "status": "deleted",
+            "agent_id": agent_id,
+            "agents": [a.model_dump() for a in orchestrator.registry.list_agents()],
+        }
 
     @app.post("/api/context-notes")
     async def add_context_note(req: UserContextNoteRequest) -> dict[str, Any]:

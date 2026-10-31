@@ -17,7 +17,6 @@ if [ -f "$OPTIONS_FILE" ]; then
     export BRAIN_LLM_FAST_MODEL="$(opt llm_fast_model gemini/gemini-3.5-flash)"
     export BRAIN_LLM_API_KEY="$(opt llm_api_key '')"
     export BRAIN_MANAGED_PROXY_URL="$(opt managed_cloud_proxy_url '')"
-    export BRAIN_LICENSE_KEY="$(opt license_key DEV-TRIAL-KEY)"
     export BRAIN_SITE_CONTEXT="$(opt site_context '')"
     export BRAIN_NOTIFICATIONS_ENABLED="$(opt enable_actionable_notifications true)"
     export BRAIN_NOTIFICATION_SERVICE="$(opt notification_service notify.notify)"

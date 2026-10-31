@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import Any
 
 from ha_ai_brain.adapters.quota_monitor import BaseQuotaMonitorAdapter
-from ha_ai_brain.ports.billing import LicensePort
 from ha_ai_brain.ports.llm import LLMProviderPort, LLMQuotaAndUsageSnapshot
 
 
@@ -117,8 +116,7 @@ class SimulatorMockLLMAdapter(LLMProviderPort):
     allowing offline unit tests and simulator demos to run without network access.
     """
 
-    def __init__(self, license_port: LicensePort | None = None) -> None:
-        self.license_port = license_port
+    def __init__(self) -> None:
         self.quota_monitor = BaseQuotaMonitorAdapter(provider="simulator_mock", default_model="simulator-mock")
 
     @property
@@ -136,12 +134,6 @@ class SimulatorMockLLMAdapter(LLMProviderPort):
         context_hint: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         self.quota_monitor.record_success(model="simulator-mock", prompt_tokens=200, completion_tokens=150)
-        if self.license_port:
-            await self.license_port.record_token_usage(
-                agent_id=str((context_hint or {}).get("agent_id", "climate_thermal_agent")),
-                prompt_tokens=200,
-                completion_tokens=150,
-            )
 
         hint = context_hint or {}
         task = hint.get("task", "")

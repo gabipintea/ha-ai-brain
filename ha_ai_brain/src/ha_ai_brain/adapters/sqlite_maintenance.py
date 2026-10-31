@@ -42,7 +42,8 @@ def run_maintenance(conn: sqlite3.Connection) -> None:
     """Return freed pages to the filesystem and truncate the write-ahead log."""
     try:
         conn.commit()
-        conn.execute("PRAGMA incremental_vacuum").fetchall()  # the pragma frees pages as its rows are consumed
-        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        # PRAGMA incremental_vacuum yields a 0-column SQLITE_ROW per freed page; CPython's Cursor.execute() stops after
+        # the first step when column_count == 0 (freeing only 1 page), whereas executescript() steps via sqlite3_exec() until SQLITE_DONE.
+        conn.executescript("PRAGMA incremental_vacuum; PRAGMA wal_checkpoint(TRUNCATE);")
     except sqlite3.Error as exc:
         logger.warning("Database maintenance skipped: %s", exc)

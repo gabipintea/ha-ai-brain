@@ -140,6 +140,21 @@ def get_builtin_agents() -> list[AgentSpec]:
     ]
 
 
+BUILTIN_AGENT_IDS: frozenset[str] = frozenset(a.agent_id for a in get_builtin_agents())
+BUNDLED_EXAMPLE_IDS: frozenset[str] = frozenset({"solar_energy_agent", "beer_brewery_agent"})
+
+
+def _shipped_agents_dirs() -> frozenset[Path]:
+    parents = Path(__file__).resolve().parents
+    out: set[Path] = set()
+    for idx in (3, 4):
+        if idx < len(parents):
+            candidate = parents[idx] / "agents"
+            if candidate.is_dir():
+                out.add(candidate.resolve())
+    return frozenset(out)
+
+
 class AgentRegistry:
     """Manages active built-in agents and user-defined custom agents (YAML / API)."""
 
@@ -148,6 +163,15 @@ class AgentRegistry:
         self.bundled_agents_dir = Path(bundled_agents_dir) if bundled_agents_dir else None
         self._agents: dict[str, AgentSpec] = {a.agent_id: a for a in get_builtin_agents()}
         self.load_custom_agents_from_disk()
+
+    def _is_shipped_template_file(self, agent_id: str, path: Path) -> bool:
+        """Never overwrite or delete the shipped template YAML files inside the repo or container image."""
+        if agent_id not in BUNDLED_EXAMPLE_IDS:
+            return False
+        parent = path.parent.resolve()
+        if self.bundled_agents_dir and parent == self.bundled_agents_dir.resolve():
+            return True
+        return parent in _shipped_agents_dirs()
 
     def load_custom_agents_from_disk(self) -> None:
         """Load declarative custom agent YAML files (shipped examples first, then the user's persisted agents)."""
@@ -162,7 +186,7 @@ class AgentRegistry:
                 try:
                     raw = yaml.safe_load(yaml_path.read_text(encoding="utf-8"))
                     if isinstance(raw, dict) and "agent_id" in raw:
-                        raw["is_custom"] = True
+                        raw["is_custom"] = str(raw["agent_id"]) not in BUILTIN_AGENT_IDS
                         spec = AgentSpec.model_validate(raw)
                         self._agents[spec.agent_id] = spec
                 except Exception as exc:
@@ -170,12 +194,40 @@ class AgentRegistry:
 
     def register_custom_agent(self, spec: AgentSpec, persist_to_disk: bool = True) -> AgentSpec:
         """Register a new user-defined specialized agent dynamically."""
-        spec.is_custom = True
+        spec.is_custom = spec.agent_id not in BUILTIN_AGENT_IDS
         self._agents[spec.agent_id] = spec
         if persist_to_disk:
             self.custom_agents_dir.mkdir(parents=True, exist_ok=True)
             out_path = self.custom_agents_dir / f"{spec.agent_id}.yaml"
             out_path.write_text(yaml.safe_dump(spec.model_dump(), sort_keys=False, allow_unicode=True), encoding="utf-8")
+        return spec
+
+    def set_agent_enabled(self, agent_id: str, enabled: bool, persist_to_disk: bool = True) -> AgentSpec:
+        """Enable or disable a built-in or custom agent."""
+        spec = self._agents.get(agent_id)
+        if spec is None:
+            raise KeyError(agent_id)
+        spec.enabled = bool(enabled)
+        if persist_to_disk:
+            out_path = self.custom_agents_dir / f"{spec.agent_id}.yaml"
+            if out_path.is_file() and not self._is_shipped_template_file(spec.agent_id, out_path):
+                out_path.write_text(yaml.safe_dump(spec.model_dump(), sort_keys=False, allow_unicode=True), encoding="utf-8")
+        return spec
+
+    def delete_custom_agent(self, agent_id: str, remove_from_disk: bool = True) -> AgentSpec:
+        """Delete a custom agent; built-in agents cannot be deleted."""
+        if agent_id in BUILTIN_AGENT_IDS:
+            raise ValueError(f"Built-in agent '{agent_id}' cannot be deleted; disable it instead.")
+        spec = self._agents.get(agent_id)
+        if spec is None:
+            raise KeyError(agent_id)
+        if not spec.is_custom:
+            raise ValueError(f"Built-in agent '{agent_id}' cannot be deleted; disable it instead.")
+        del self._agents[agent_id]
+        if remove_from_disk:
+            out_path = self.custom_agents_dir / f"{agent_id}.yaml"
+            if out_path.is_file() and not self._is_shipped_template_file(agent_id, out_path):
+                out_path.unlink(missing_ok=True)
         return spec
 
     def get_agent(self, agent_id: str) -> AgentSpec | None:

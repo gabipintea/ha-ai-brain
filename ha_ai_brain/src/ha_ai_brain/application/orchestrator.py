@@ -33,7 +33,7 @@ from ha_ai_brain.domain.automation_draft import (
     validate_draft,
 )
 from ha_ai_brain.domain.automation_rules import AutomationRule, RuleAction, _collect_actions, find_equivalent_rule, parse_automation_config
-from ha_ai_brain.domain.expectations import ExceptionFinding, is_safety_entity
+from ha_ai_brain.domain.expectations import ExceptionFinding, exception_action, exception_title, is_safety_entity
 from ha_ai_brain.domain.min_change import MinChangeRule, find_rule, is_below_min_change
 from ha_ai_brain.domain.lifecycle import AutomationReview, review_deployed_automation, review_sort_key
 from ha_ai_brain.domain.outcomes import evaluate_outcome
@@ -64,7 +64,6 @@ from ha_ai_brain.domain.models import (
 )
 from ha_ai_brain.domain.service_resolver import normalize_automation_proposal
 from ha_ai_brain.domain.triage import EdgeSignalTriage, matches_device_class_or_heuristics
-from ha_ai_brain.ports.billing import LicensePort
 from ha_ai_brain.ports.llm import LLMProviderPort
 from ha_ai_brain.ports.mcp import McpClientPort
 from ha_ai_brain.ports.memory import MemoryStorePort
@@ -101,7 +100,6 @@ class BrainOrchestrator:
         memory: MemoryStorePort,
         notification: NotificationPort,
         mcp_client: McpClientPort,
-        license_port: LicensePort,
         registry: AgentRegistry | None = None,
         telemetry: TelemetryStorePort | None = None,
     ) -> None:
@@ -113,7 +111,6 @@ class BrainOrchestrator:
         self.memory = memory
         self.notification = notification
         self.mcp_client = mcp_client
-        self.license_port = license_port
 
         self.registry = registry or AgentRegistry(
             custom_agents_dir=settings.custom_agents_dir,
@@ -377,8 +374,82 @@ class BrainOrchestrator:
                 self.settings.domain_autonomy = {str(d): AutonomyLevel(v) for d, v in raw.items()}
             except (ValueError, TypeError, AttributeError):
                 pass
+        if "deleted_custom_agents" in prefs:
+            try:
+                deleted_ids = json.loads(prefs["deleted_custom_agents"])
+                if isinstance(deleted_ids, list):
+                    for aid in deleted_ids:
+                        aid_str = str(aid)
+                        spec = self.registry.get_agent(aid_str)
+                        if spec is not None and spec.is_custom:
+                            custom_file = self.registry.custom_agents_dir / f"{aid_str}.yaml"
+                            if not custom_file.is_file() or self.registry._is_shipped_template_file(aid_str, custom_file):
+                                self.registry.delete_custom_agent(aid_str, remove_from_disk=False)
+            except (ValueError, TypeError):
+                pass
+        if "agent_enabled" in prefs:
+            try:
+                raw_agents = json.loads(prefs["agent_enabled"])
+                if isinstance(raw_agents, dict):
+                    for aid, en in raw_agents.items():
+                        if self.registry.get_agent(str(aid)) is not None and isinstance(en, bool):
+                            self.registry.set_agent_enabled(str(aid), en, persist_to_disk=False)
+            except (ValueError, TypeError):
+                pass
         if hasattr(self.llm, "privacy_scrub"):
             self.llm.privacy_scrub = self.settings.privacy_scrub
+
+    async def _agent_enabled_prefs(self) -> dict[str, bool]:
+        prefs = await self.memory.get_ui_preferences()
+        try:
+            raw = json.loads(prefs.get("agent_enabled", "{}"))
+            return {str(k): bool(v) for k, v in raw.items()} if isinstance(raw, dict) else {}
+        except (ValueError, TypeError):
+            return {}
+
+    async def _deleted_custom_agents_prefs(self) -> list[str]:
+        prefs = await self.memory.get_ui_preferences()
+        try:
+            raw = json.loads(prefs.get("deleted_custom_agents", "[]"))
+            return [str(x) for x in raw if x] if isinstance(raw, list) else []
+        except (ValueError, TypeError):
+            return []
+
+    async def set_agent_enabled(self, agent_id: str, enabled: bool) -> AgentSpec:
+        """Enable or disable a built-in or custom agent and persist the choice."""
+        spec = self.registry.set_agent_enabled(agent_id, enabled, persist_to_disk=True)
+        enabled_map = await self._agent_enabled_prefs()
+        enabled_map[spec.agent_id] = spec.enabled
+        await self.memory.save_ui_preference("agent_enabled", json.dumps(enabled_map))
+        self.invalidate_context_caches()
+        return spec
+
+    async def register_custom_agent(self, spec: AgentSpec) -> AgentSpec:
+        """Register or update a custom agent and persist it to disk and preferences."""
+        registered = self.registry.register_custom_agent(spec, persist_to_disk=True)
+        deleted = await self._deleted_custom_agents_prefs()
+        if registered.agent_id in deleted:
+            deleted = [a for a in deleted if a != registered.agent_id]
+            await self.memory.save_ui_preference("deleted_custom_agents", json.dumps(deleted))
+        enabled_map = await self._agent_enabled_prefs()
+        enabled_map[registered.agent_id] = registered.enabled
+        await self.memory.save_ui_preference("agent_enabled", json.dumps(enabled_map))
+        self.invalidate_context_caches()
+        return registered
+
+    async def delete_custom_agent(self, agent_id: str) -> AgentSpec:
+        """Delete a custom agent from the registry and disk (built-in agents cannot be deleted)."""
+        removed = self.registry.delete_custom_agent(agent_id, remove_from_disk=True)
+        enabled_map = await self._agent_enabled_prefs()
+        if agent_id in enabled_map:
+            del enabled_map[agent_id]
+            await self.memory.save_ui_preference("agent_enabled", json.dumps(enabled_map))
+        deleted = await self._deleted_custom_agents_prefs()
+        if agent_id not in deleted:
+            deleted.append(agent_id)
+            await self.memory.save_ui_preference("deleted_custom_agents", json.dumps(deleted))
+        self.invalidate_context_caches()
+        return removed
 
     async def update_runtime_settings(self, changes: dict[str, Any]) -> None:
         """Validate, apply and persist the learning / safety settings editable from the dashboard."""
@@ -1855,16 +1926,19 @@ class BrainOrchestrator:
         self.learning.mark_reported(finding, now)
         st = states[finding.entity_id]
         label = str(st.attributes.get("friendly_name") or finding.entity_id)
-        title = f"Unusual: {label} is {finding.current_state}"[:120]
+        title = exception_title(finding, label, st)
         active = await self.memory.get_advisory_insights(limit=100, status="active")
-        if any(i.title == title for i in active):
+        if any(
+            i.title == title
+            or (
+                i.category == "exception"
+                and (i.evidence_metrics or {}).get("kind") == finding.kind
+                and (i.evidence_metrics or {}).get("entity_id") == finding.entity_id
+            )
+            for i in active
+        ):
             return  # still unacknowledged: do not nag
         agent = self._agent_for_entity(finding.entity_id, st)
-        actions = {
-            "security_while_away": f"Check and secure {label} now - nobody appears to be home.",
-            "automation_missed": "Open Home Assistant > Settings > Automations and check the automation's trace to see why it did not run.",
-            "routine_deviation": f"Check whether {label} is meant to stay {finding.current_state}; if so you can ignore this.",
-        }
         insight = AdvisoryInsight(
             agent_id=agent.agent_id if agent else "exception_monitor",
             category="exception",
@@ -1878,7 +1952,7 @@ class BrainOrchestrator:
                 "confidence": round(finding.confidence, 2),
                 "severity": finding.severity,
             },
-            recommended_human_action=actions.get(finding.kind, "Review the situation."),
+            recommended_human_action=exception_action(finding, label),
             estimated_impact="Safety / security" if finding.severity == "critical" else "Comfort / energy",
         )
         await self.memory.save_advisory_insight(insight)

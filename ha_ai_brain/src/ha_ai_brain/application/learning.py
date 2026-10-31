@@ -27,6 +27,7 @@ from ha_ai_brain.domain.context import build_household_context
 from ha_ai_brain.domain.anomaly import (
     DiscreteProfile,
     build_discrete_profiles,
+    collapse_device_findings,
     find_dwell_anomalies,
     find_flapping,
     find_numeric_anomalies,
@@ -161,6 +162,7 @@ class LearningEngine:
         self._tr_buffer: list[Transition] = []
         self.twins: TwinMap = TwinMap()
         self._twins_at: datetime | None = None
+        self._device_by_entity: dict[str, str] = {}
         self._suppressed: list[dict[str, Any]] = []
         self._suppression_stats: dict[str, int] = {}
         self._num_buffer: dict[tuple[str, datetime], list[float]] = {}
@@ -309,6 +311,8 @@ class LearningEngine:
                 facts = await self.smart_home.get_entity_device_facts()
             except Exception as exc:
                 logger.debug("Could not read entity facts for rule target resolution: %s", exc)
+        if facts:
+            self._device_by_entity = {f.entity_id: f.device_id for f in facts if getattr(f, "entity_id", "") and getattr(f, "device_id", "")}
         resolve_rule_targets(rules, states=states, facts=facts)
         if states:
             by_id = {str(s.attributes.get("id")): s for s in states.values() if s.domain == "automation" and s.attributes.get("id")}
@@ -383,6 +387,7 @@ class LearningEngine:
         except Exception as exc:  # the registry is optional: without it nothing is merged
             logger.warning("Could not read device registry facts for twin detection: %s", exc)
             facts = []
+        self._device_by_entity = {f.entity_id: f.device_id for f in facts if getattr(f, "entity_id", "") and getattr(f, "device_id", "")}
         prefs = await self.memory.get_ui_preferences() if self.memory is not None else {}
         twins = build_twin_map(facts, states, load_splits(prefs.get(self.TWIN_SPLITS_KEY)))
         before = {(g.group_id, g.canonical) for g in self.twins.groups}
@@ -602,22 +607,24 @@ class LearningEngine:
             if self.twins:
                 recent = canonicalize_transitions(recent, self.twins)
             snap.timeline.extend(recent)
+            min_days = self.settings.baseline_min_days
             if win:
                 findings += find_routine_deviations(
                     states, snap.timeline, now, self.tz, win[0],
-                    min_days=self.settings.baseline_min_days, profiles=snap.profiles, household=household,
+                    min_days=min_days, profiles=snap.profiles, household=household,
                     rules=self.rules, twins=self.twins,
                 )
             findings += find_dwell_anomalies(
                 states, snap.profiles, now, self.tz, household,
-                tl=snap.timeline, rules=self.rules, twins=self.twins,
+                tl=snap.timeline, rules=self.rules, twins=self.twins, min_days=min_days,
             )
             findings += find_silent_entities(states, snap.profiles, now, self.tz, household)
             recent_counts = Counter(t.entity_id for t in recent)
-            findings += find_flapping(dict(recent_counts), states, snap.profiles, now, self.tz, household)
-            findings += find_numeric_anomalies(states, snap.numeric_rows, snap.baselines, now, self.tz, household)
+            findings += find_flapping(dict(recent_counts), states, snap.profiles, now, self.tz, household, min_days=min_days)
+            findings += find_numeric_anomalies(states, snap.numeric_rows, snap.baselines, now, self.tz, household, min_days=min_days)
 
         findings = self._one_finding_per_twin_group(findings)
+        findings = collapse_device_findings(findings, self._device_by_entity)
         allowed: list[ExceptionFinding] = []
         for f in findings:
             if self._exception_feedback.get(f.feedback_key, {}).get("muted"):
@@ -642,7 +649,9 @@ class LearningEngine:
 
     def mark_reported(self, finding: ExceptionFinding, now: datetime) -> None:
         self._reported[finding.dedupe_key] = now
-        if len(self._reported) > 500:
+        for other_id in finding.also_entities:
+            self._reported[finding.dedupe_key_for(other_id)] = now
+        while len(self._reported) > 500:
             self._reported.pop(next(iter(self._reported)))
 
     # --------------------------------------------------------------- backtest

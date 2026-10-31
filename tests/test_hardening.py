@@ -63,9 +63,9 @@ class TestSettingsFromEnv(unittest.TestCase):
         self.assertIn("Smart property", cfg.site_context)
 
     def test_public_dict_never_contains_secrets(self) -> None:
-        cfg = BrainSettings(llm_api_key="sk-abcdefghijklmnopqrstuvwxyz", ha_token="tok", license_key="PRO-MONTHLY-x")
+        cfg = BrainSettings(llm_api_key="sk-abcdefghijklmnopqrstuvwxyz", ha_token="tok")
         public = cfg.public_dict()
-        for secret_field in ("llm_api_key", "ha_token", "license_key"):
+        for secret_field in ("llm_api_key", "ha_token"):
             self.assertNotIn(secret_field, public)
         self.assertNotIn("abcdefghijklmnopqrstuv", str(public))
         self.assertTrue(public["has_api_key"])

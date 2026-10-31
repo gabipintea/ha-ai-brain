@@ -111,8 +111,7 @@ class BrainSettings(BaseModel):
         description="Whether to auto-switch to fallback & auto-return to primary ('auto'), ask user confirmation ('confirm'), or disable fallback ('disabled')",
     )
     llm_api_key: str = Field(default="", description="API Key for BYOK mode")
-    managed_proxy_url: str = Field(default="", description="Optional commercial SaaS Managed AI Proxy endpoint")
-    license_key: str = Field(default="DEV-TRIAL-KEY", description="Commercial license or subscription key")
+    managed_proxy_url: str = Field(default="", description="Optional AI proxy endpoint")
 
     site_context: str = Field(
         default=DEFAULT_SITE_CONTEXT,
@@ -180,7 +179,7 @@ class BrainSettings(BaseModel):
     privacy_scrub: bool = Field(default=True, description="Replace people / phones / network identifiers before data leaves for a cloud LLM")
 
     # Fields that must never be returned by the HTTP API.
-    SECRET_FIELDS: ClassVar[tuple[str, ...]] = ("llm_api_key", "ha_token", "license_key")
+    SECRET_FIELDS: ClassVar[tuple[str, ...]] = ("llm_api_key", "ha_token")
 
     def public_dict(self) -> dict[str, object]:
         """Settings safe to expose over HTTP: secrets are removed and replaced with presence flags / a masked API key."""
@@ -190,7 +189,6 @@ class BrainSettings(BaseModel):
         raw_key = self.llm_api_key
         data["has_api_key"] = bool(raw_key)
         data["masked_api_key"] = mask_secret(raw_key)
-        data["has_license_key"] = bool(self.license_key) and self.license_key != "DEV-TRIAL-KEY"
         return data
 
     @classmethod
@@ -238,7 +236,6 @@ class BrainSettings(BaseModel):
             llm_fallback_policy=_env_enum("BRAIN_LLM_FALLBACK_POLICY", FallbackPolicy, FallbackPolicy.AUTO_SWITCH_AND_RECOVER),
             llm_api_key=(os.getenv("BRAIN_LLM_API_KEY") or os.getenv("OPENAI_API_KEY") or "").strip(),
             managed_proxy_url=os.getenv("BRAIN_MANAGED_PROXY_URL", "").strip(),
-            license_key=os.getenv("BRAIN_LICENSE_KEY") or "DEV-TRIAL-KEY",
             site_context=os.getenv("BRAIN_SITE_CONTEXT") or DEFAULT_SITE_CONTEXT,
             notifications_enabled=_env_bool("BRAIN_NOTIFICATIONS_ENABLED", True),
             notification_service=os.getenv("BRAIN_NOTIFICATION_SERVICE") or "notify.notify",

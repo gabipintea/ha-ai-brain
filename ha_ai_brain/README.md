@@ -2,7 +2,6 @@
 
 [![Home Assistant Add-on](https://img.shields.io/badge/Home%20Assistant-Add--on-blue.svg?logo=home-assistant)](https://github.com/gabipintea/ha-ai-brain)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/)
-[![License: Proprietary](https://img.shields.io/badge/license-Proprietary-green.svg)]()
 [![Multi-Provider AI](https://img.shields.io/badge/AI%20Providers-Gemini%20%7C%20OpenAI%20%7C%20Claude%20%7C%20OpenRouter%20%7C%20Ollama-orange.svg)]()
 
 **A background brain for Home Assistant.** It watches what happens in your home, learns what is normal for *your* house, turns your own recurring habits into native Home Assistant automations, tells you when something is unusual, and lets specialised AI agents think about the harder questions — always within safety limits you control.
@@ -37,7 +36,7 @@
 * Describe a condition in a sentence; the AI interprets it once, shows how it understood you and how often it would have fired on your history; from then on it runs locally for free.
 
 **Specialised AI agents**
-* Climate, Lighting, Security, Energy & Solar, Shading and Repair & Diagnostics agents, plus your own custom agents.
+* Climate, Lighting, Security, Energy & Solar, Shading and Repair & Diagnostics agents, plus your own custom agents (enable or disable any agent from Settings, and delete custom ones).
 * **Regular analysis of the whole picture**: every few hours each agent studies your entities, trends and existing automations and proposes insights, recommendations and new automation ideas — even when nothing is wrong (for example condensation risk from indoor humidity/temperature and the outdoor temperature). Calculations run in a sandbox.
 * Real-time reactions to unusual events.
 * In real time, only called when local learning says it is worth it — routine events, normal readings and things already automated never reach the AI.
@@ -94,8 +93,6 @@ Connection to Home Assistant is automatic. Leave autonomy on **Co-pilot** at fir
 
 **What if it proposes something I already automate?** Automations written in YAML cannot be read in detail (only UI-made ones), so it may; reject the proposal and it will not return.
 
-**Does the license key unlock anything?** Not in this version.
-
 ---
 
 ## 🛠️ Local development
@@ -116,7 +113,7 @@ Open `http://localhost:8099`. Without a Home Assistant token the brain runs agai
 
 ---
 
-## 📄 License & Maintainer
+## 📄 Maintainer
 
 * **Author**: Gabriel Pintea ([@gabipintea](https://github.com/gabipintea))
 * **Repository**: [https://github.com/gabipintea/ha-ai-brain](https://github.com/gabipintea/ha-ai-brain)

@@ -32,9 +32,6 @@ configuration:
   managed_cloud_proxy_url:
     name: "Managed AI Proxy URL"
     description: "Optional managed AI proxy endpoint. Leave empty to call your configured provider directly with your own API key."
-  license_key:
-    name: "License Key"
-    description: "Optional commercial license key. Leave empty to run in evaluation mode."
   realtime_gating:
     name: "Smart AI Wake-ups"
     description: "Once routines are learned, only call the AI for genuinely unusual events instead of every change (saves tokens)."

@@ -43,15 +43,67 @@ class ExceptionFinding:
     current_state: str
     confidence: float = 1.0
     since: datetime | None = None
+    title: str = ""
+    also_entities: tuple[str, ...] = ()
 
     @property
     def dedupe_key(self) -> str:
-        return f"{self.kind}:{self.entity_id}:{self.current_state}"
+        return self.dedupe_key_for(self.entity_id, self.current_state)
+
+    def dedupe_key_for(self, entity_id: str, current_state: str | None = None) -> str:
+        if self.kind in ("flapping", "stale_sensor", "silent_entity", "numeric_excursion"):
+            return f"{self.kind}:{entity_id}"
+        return f"{self.kind}:{entity_id}:{current_state if current_state is not None else self.current_state}"
 
     @property
     def feedback_key(self) -> str:
         """Key used to learn from the user's dismissals: independent of the current state value."""
         return f"{self.kind}:{self.entity_id}"
+
+
+def exception_title(finding: ExceptionFinding, label: str, state: EntityState | None = None) -> str:
+    """Short, user-facing headline describing what is actually unusual."""
+    if finding.title:
+        return finding.title[:120]
+    kind = finding.kind
+    cur = finding.current_state
+    if kind == "flapping":
+        text = f"Unusual: {label} is changing state repeatedly"
+    elif kind == "stale_sensor":
+        text = f"Unusual: {label} has stopped reporting"
+    elif kind == "silent_entity":
+        text = f"Unusual: {label} has stopped changing"
+    elif kind == "dwell_anomaly":
+        text = f"Unusual: {label} has stayed {cur} longer than usual"
+    elif kind == "numeric_excursion":
+        unit = (state.unit_of_measurement if state is not None else None) or ""
+        text = f"Unusual: {label} is out of range ({cur}{unit})"
+    elif kind == "automation_missed":
+        text = f"Unusual: {label} is still {cur} (missed automation)"
+    elif kind == "security_while_away":
+        cond = (_open_risk(state) if state is not None else None) or cur
+        text = f"Unusual: {label} is {cond} while away"
+    elif kind == "routine_deviation" and finding.expected_state:
+        text = f"Unusual: {label} is {cur} (usually {finding.expected_state})"
+    else:
+        text = f"Unusual: {label} is {cur}"
+    return text[:120]
+
+
+def exception_action(finding: ExceptionFinding, label: str) -> str:
+    """Plain-language next step for an exception card."""
+    actions = {
+        "security_while_away": f"Check and secure {label} now - nobody appears to be home.",
+        "automation_missed": "Open Home Assistant > Settings > Automations and check the automation's trace to see why it did not run.",
+        "routine_deviation": f"Check whether {label} is meant to stay {finding.current_state}; if so you can ignore this.",
+        "dwell_anomaly": f"Check whether {label} was left {finding.current_state} by mistake.",
+        "flapping": f"Check {label} for a loose or chattering contact, weak wireless signal, or two automations fighting each other.",
+        "stale_sensor": f"Check the battery, power or wireless connection of {label}.",
+        "silent_entity": f"Check whether {label} is still working and connected (battery, power or wireless link).",
+        "numeric_excursion": f"Check the area or equipment measured by {label} (normally {finding.expected_state} at this hour).",
+        "stuck_unavailable": "Check the device's power, network or Home Assistant integration under Settings > Devices & services.",
+    }
+    return actions.get(finding.kind, "Review the situation.")
 
 
 def is_safety_entity(state: EntityState) -> bool:
