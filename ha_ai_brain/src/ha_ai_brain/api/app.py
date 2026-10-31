@@ -24,7 +24,7 @@ from ha_ai_brain.application.orchestrator import BrainOrchestrator
 from ha_ai_brain.config import AutonomyLevel, BrainSettings, FallbackPolicy, OperatingMode
 from ha_ai_brain.domain.watches import WatchRule
 from ha_ai_brain.domain.models import AgentSpec, FeedbackEpisode, FeedbackPolarity, IgnoredTarget, UserContextNote
-from ha_ai_brain.domain.research import is_rejected_topic
+from ha_ai_brain.domain.research import is_rejected_topic, repair_item
 from ha_ai_brain.ports.llm import LLMProviderPort
 
 
@@ -401,11 +401,22 @@ def create_app(settings: BrainSettings | None = None) -> Any:
         approved = await orchestrator.research.store.items(status="approved")
         rejected = await orchestrator.research.store.items(status="rejected")
         agents = {a.agent_id: a.name for a in orchestrator.registry.list_agents()}
+
+        def _approved_card(item: KnowledgeItem) -> dict[str, Any]:
+            # Compact view for cards: full details are loaded on-demand via GET /api/research/items/{item_id}
+            data = item.model_dump(mode="json")
+            data["key_points"] = []
+            data["how_to_apply"] = ""
+            data["caveats"] = ""
+            data["references"] = []
+            data["sources"] = []
+            return data
+
         return {
             **status,
             "agent_names": agents,
             "proposed": [i.model_dump(mode="json") for i in proposed],
-            "approved": [i.model_dump(mode="json") for i in approved],
+            "approved": [_approved_card(i) for i in approved],
             "rejected": [{**i.model_dump(mode="json"), "kind": "topic" if is_rejected_topic(i) else "knowledge"} for i in rejected],
             "rejected_count": len(rejected),
         }
@@ -461,9 +472,17 @@ def create_app(settings: BrainSettings | None = None) -> Any:
         orchestrator.invalidate_context_caches()
         return {"status": item.status, "item": item.model_dump(mode="json")}
 
+    @app.get("/api/research/items/{item_id}")
+    async def get_research_item(item_id: str) -> dict[str, Any]:
+        """Fetch full research details for a single finding on-demand."""
+        item = await orchestrator.research.store.get_item(item_id)
+        if item is None:
+            raise HTTPException(status_code=404, detail="Research item not found")
+        return repair_item(item).model_dump(mode="json")
+
     @app.delete("/api/research/items/{item_id}")
     async def delete_research_item(item_id: str) -> dict[str, Any]:
-        if not await orchestrator.research.store.delete_item(item_id):
+        if not await orchestrator.research.remove_item(item_id):
             raise HTTPException(status_code=404, detail="Research item not found")
         orchestrator.invalidate_context_caches()
         return {"status": "deleted", "item_id": item_id}

@@ -19,6 +19,7 @@ from ha_ai_brain.application.research_agenda import ResearchAgenda, approved_kno
 from ha_ai_brain.config import BrainSettings
 from ha_ai_brain.domain.models import AgentSpec
 from ha_ai_brain.domain.research import (
+    KnowledgeItem,
     ResearchTopic,
     capability_profile,
     device_seed_topics,
@@ -433,6 +434,50 @@ class TestResearchAgenda(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(await self.agenda.unblock_rejected(waiting.item_id))
         self.assertIsNone(await self.agenda.unblock_rejected("missing"))
 
+    async def test_remove_item_auto_unblocks_topic(self) -> None:
+        states = await self.orch.smart_home.get_all_states()
+        profile = capability_profile(states, INVENTORY, AGENT)
+        await self.agenda.plan_topics(AGENT, profile, INVENTORY)
+        pending = await self.agenda.store.topics("pending", AGENT.agent_id)
+        topic = pending[0]
+
+        # Researched topic produces findings and marks topic done
+        await self.agenda.run_topic(topic.topic_id)
+        done_topic = await self.agenda.store.get_topic(topic.topic_id)
+        assert done_topic is not None
+        self.assertEqual(done_topic.status, "done")
+        findings = [i for i in await self.agenda.store.items() if i.topic_id == topic.topic_id]
+        self.assertGreaterEqual(len(findings), 1)
+
+        # Approve the first finding
+        finding = findings[0]
+        await self.agenda.decide(finding.item_id, "approve")
+        self.assertIn(topic.title, await self.agenda.store.known_titles())
+
+        # Calling remove_item on the approved finding removes it and auto-unblocks the topic
+        self.assertTrue(await self.agenda.remove_item(finding.item_id))
+        self.assertFalse(await self.agenda.remove_item(finding.item_id))  # already deleted
+        self.assertIsNone(await self.agenda.store.get_item(finding.item_id))
+        self.assertIsNone(await self.agenda.store.get_topic(topic.topic_id))
+        self.assertNotIn(topic.title, await self.agenda.store.known_titles())
+        self.assertNotIn(finding.title, await self.agenda.store.known_titles())
+
+        # Multi-finding case: removing finding 1 keeps topic until finding 2 is also removed
+        topic2 = pending[1]
+        topic2.status = "done"
+        await self.agenda.store.save_topic(topic2)
+        f1 = KnowledgeItem(agent_id=AGENT.agent_id, topic_id=topic2.topic_id, topic_title=topic2.title, title="Finding 1", summary="S1", status="approved")
+        f2 = KnowledgeItem(agent_id=AGENT.agent_id, topic_id=topic2.topic_id, topic_title=topic2.title, title="Finding 2", summary="S2", status="approved")
+        await self.agenda.store.save_item(f1)
+        await self.agenda.store.save_item(f2)
+        # Remove f1 -> topic2 is preserved because f2 is still active
+        await self.agenda.remove_item(f1.item_id)
+        self.assertIsNotNone(await self.agenda.store.get_topic(topic2.topic_id))
+        # Remove f2 -> topic2 is now deleted and unblocked
+        await self.agenda.remove_item(f2.item_id)
+        self.assertIsNone(await self.agenda.store.get_topic(topic2.topic_id))
+        self.assertNotIn(topic2.title, await self.agenda.store.known_titles())
+
 
 class TestResearchApi(unittest.IsolatedAsyncioTestCase):
     async def test_endpoints(self) -> None:
@@ -525,9 +570,30 @@ class TestResearchApi(unittest.IsolatedAsyncioTestCase):
                 item_id = after_rej["proposed"][0]["item_id"]
                 self.assertEqual((await client.post(f"/api/research/items/{item_id}/decision", json={"decision": "bogus"})).status_code, 422)
                 self.assertEqual((await client.post(f"/api/research/items/{item_id}/decision", json={"decision": "approve"})).json()["status"], "approved")
-                self.assertEqual(len((await client.get("/api/research")).json()["approved"]), 1)
+
+                # GET /api/research returns compact card data (heavy research details stripped until on-demand fetch)
+                approved_list = (await client.get("/api/research")).json()["approved"]
+                self.assertEqual(len(approved_list), 1)
+                self.assertEqual(approved_list[0]["item_id"], item_id)
+                self.assertEqual(approved_list[0]["key_points"], [])
+                self.assertEqual(approved_list[0]["how_to_apply"], "")
+                self.assertTrue(bool(approved_list[0]["summary"]))
+
+                # On-demand GET /api/research/items/{item_id} brings the full research data
+                detail_resp = await client.get(f"/api/research/items/{item_id}")
+                self.assertEqual(detail_resp.status_code, 200)
+                detail_data = detail_resp.json()
+                self.assertEqual(detail_data["item_id"], item_id)
+                self.assertGreater(len(detail_data["key_points"]), 0)
+                self.assertTrue(bool(detail_data["how_to_apply"]))
+                self.assertEqual((await client.get("/api/research/items/missing")).status_code, 404)
+
+                # DELETE /api/research/items/{item_id} deletes finding and auto-unblocks topic
                 self.assertEqual((await client.delete(f"/api/research/items/{item_id}")).status_code, 200)
                 self.assertEqual((await client.delete(f"/api/research/items/{item_id}")).status_code, 404)
+                self.assertNotIn(detail_data["title"], await orch.research.store.known_titles())
+                if detail_data.get("topic_title"):
+                    self.assertNotIn(detail_data["topic_title"], await orch.research.store.known_titles())
                 self.assertTrue((await client.get("/api/research")).json()["can_research"])
                 llm.available = False
                 self.assertEqual((await client.post("/api/research/run")).json()["status"], "unavailable")

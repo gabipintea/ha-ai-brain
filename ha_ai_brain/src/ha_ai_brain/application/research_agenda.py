@@ -228,6 +228,41 @@ class ResearchAgenda:
     async def remove_topic(self, topic_id: str) -> bool:
         return await self.store.delete_topic(topic_id)
 
+    async def remove_item(self, item_id: str) -> bool:
+        """Remove a research finding and auto-unblock its topic so it may be researched or proposed again."""
+        item = await self.store.get_item(item_id)
+        if item is None:
+            return False
+        await self.store.delete_item(item.item_id)
+        target_topic_id = item.topic_id
+        target_title = item.topic_title or item.title
+
+        # Check if any other active items (waiting for review or approved) still depend on this topic
+        active_items = [
+            i
+            for i in await self.store.items()
+            if i.item_id != item.item_id
+            and i.status in ("proposed", "approved")
+            and (
+                (target_topic_id and i.topic_id == target_topic_id)
+                or (target_title and is_similar_title(i.topic_title or i.title, target_title))
+            )
+        ]
+        if not active_items:
+            # Auto-unblock: remove the completed/skipped topic record(s) so deduplication no longer blocks it
+            if target_topic_id:
+                await self.store.delete_topic(target_topic_id)
+            if target_title:
+                for topic in await self.store.topics():
+                    if topic.status in ("done", "skipped") and (
+                        topic.topic_id == target_topic_id
+                        or is_similar_title(topic.title, target_title)
+                    ):
+                        await self.store.delete_topic(topic.topic_id)
+        return True
+
+    delete_item = remove_item
+
     async def reject_topic(self, topic_id: str) -> KnowledgeItem | None:
         topic = await self.store.get_topic(topic_id)
         if topic is None:

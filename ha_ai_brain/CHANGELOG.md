@@ -2,6 +2,16 @@
 
 All notable changes to **HA AI Brain** are documented in this file.
 
+## 0.2.16 - 2026-10-31
+
+### Added
+- **Instant loading spinner and double-click protection on all buttons.** Clicking any action button across all dashboard pages (approving, rejecting, dismissing, deleting, generating automations with natural language, toggling or compiling watches, adopting automations, managing twins, running research, updating settings, etc.) now instantly replaces the button's content with an animated loading spinner. Sibling action buttons are immediately disabled (`pointer-events: none; cursor: wait`) to prevent accidental double-clicks or duplicate submissions while operations or LLM calls are in flight.
+- **On-demand detail loading for approved research knowledge.** Approved findings in *Research → Approved knowledge* now show a compact summary view. Clicking the card or the **Show details** toggle loads and expands complete key points, practical application steps, and sources on demand.
+
+### Changed
+- **Automatic topic unblocking on research deletion.** Removing an approved research item with **Remove** now automatically deletes and unblocks the corresponding research topic from known topics, allowing agents to propose or investigate that subject again in future research planning.
+- **Background refreshes pause during active actions.** Automatic background polling updates on the dashboard now pause while an action is actively running to prevent layout shifts or interrupting pending UI interactions.
+
 ## 0.2.15 - 2026-10-31
 
 ### Added

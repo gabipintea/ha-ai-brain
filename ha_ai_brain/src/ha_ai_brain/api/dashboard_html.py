@@ -133,6 +133,39 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
     button:hover { border-color: var(--accent); }
     button:active { transform: scale(0.98); }
+    button:disabled {
+      opacity: 0.65;
+      cursor: not-allowed;
+      transform: none !important;
+      pointer-events: none;
+    }
+    button.btn-loading {
+      cursor: wait !important;
+      position: relative;
+      display: inline-flex !important;
+      align-items: center !important;
+      justify-content: center !important;
+      text-align: center !important;
+    }
+    button.btn-loading:disabled {
+      cursor: wait !important;
+      opacity: 0.92;
+    }
+    @keyframes btnSpin {
+      to { transform: rotate(360deg); }
+    }
+    .btn-spinner {
+      display: inline-block;
+      width: 1.05em;
+      height: 1.05em;
+      border: 2px solid currentColor;
+      border-right-color: transparent;
+      border-radius: 50%;
+      vertical-align: -0.15em;
+      animation: btnSpin 0.65s linear infinite;
+      box-sizing: border-box;
+      pointer-events: none;
+    }
     button.primary { background: var(--accent); border-color: var(--accent); color: #07101f; }
     button.success { background: var(--ok); border-color: var(--ok); color: #05150e; }
     button.danger { background: transparent; border-color: var(--danger); color: var(--danger); }
@@ -291,8 +324,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap; justify-content:flex-end;">
         <span class="pill" id="modeBadge">Loading...</span>
         <span class="pill ok" id="llmBadge"><span class="dot"></span><span id="llmBadgeText">AI ready</span></span>
-        <button onclick="triggerBatch()" id="batchBtn">Run analysis now</button>
-        <button class="icon" onclick="togglePause()" id="pauseBtn" title="Kill switch: keep learning but never act or call the AI in real time">Pause brain</button>
+        <button onclick="triggerBatch(this)" id="batchBtn">Run analysis now</button>
+        <button class="icon" onclick="togglePause(this)" id="pauseBtn" title="Kill switch: keep learning but never act or call the AI in real time">Pause brain</button>
       </div>
       <div id="nextBatchHeader" class="muted" style="font-size:11px; white-space:nowrap; display:none;"></div>
     </div>
@@ -344,7 +377,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         <div class="card-head">
           <h2>Pending approvals</h2>
           <div style="display:flex; align-items:center; gap:8px;">
-            <button id="dismissAllBtn" class="icon" style="display:none; font-size:12px; padding:4px 8px;" onclick="dismissAllApprovals()">Dismiss all</button>
+            <button id="dismissAllBtn" class="icon" style="display:none; font-size:12px; padding:4px 8px;" onclick="dismissAllApprovals(this)">Dismiss all</button>
             <span class="pill warn" id="pendingCount" style="display:none;">0</span>
           </div>
         </div>
@@ -364,7 +397,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
             <div id="nextBatchActivity" class="muted" style="font-size:11px; margin-top:2px; font-weight:normal;"></div>
           </div>
           <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
-            <button id="clearLogsBtn" class="icon" style="display:none; font-size:11px; padding:3px 8px;" onclick="clearActivityLogs()">Clear logs</button>
+            <button id="clearLogsBtn" class="icon" style="display:none; font-size:11px; padding:3px 8px;" onclick="clearActivityLogs(this)">Clear logs</button>
             <span class="pill" id="logsCountBadge">0</span>
           </div>
         </div>
@@ -372,7 +405,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           <div id="logsList"></div>
           <div id="logsEmpty" class="empty">No agent activity yet.</div>
           <div id="logsLoadMoreContainer" style="text-align:center; margin:10px 0 2px; display:none;">
-            <button id="loadMoreLogsBtn" onclick="loadMoreLogs()">Load older activity</button>
+            <button id="loadMoreLogsBtn" onclick="loadMoreLogs(this)">Load older activity</button>
           </div>
         </div>
       </div>
@@ -381,8 +414,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         <div class="card-head">
           <h2>Insights and recommendations</h2>
           <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
-            <button id="dismissAllInsightsBtn" class="icon" style="display:none; font-size:11px; padding:3px 8px;" onclick="dismissAllInsights()">Dismiss all</button>
-            <button id="clearAllInsightsBtn" class="icon" style="display:none; font-size:11px; padding:3px 8px;" onclick="clearAllInsights()">Clear all</button>
+            <button id="dismissAllInsightsBtn" class="icon" style="display:none; font-size:11px; padding:3px 8px;" onclick="dismissAllInsights(this)">Dismiss all</button>
+            <button id="clearAllInsightsBtn" class="icon" style="display:none; font-size:11px; padding:3px 8px;" onclick="clearAllInsights(this)">Clear all</button>
             <span class="pill info" id="activeInsightsCountBadge" style="display:none;">0</span>
           </div>
         </div>
@@ -429,7 +462,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         <div class="hint">Describe it in your own words. The AI writes a native Home Assistant automation; you review and edit the YAML, then create or cancel. Nothing is created until you press Create.</div>
         <textarea id="autoText" rows="2" maxlength="1500" style="width:100%; box-sizing:border-box; margin-top:8px; background:var(--bg); color:var(--text); border:1px solid var(--border); border-radius:6px; padding:8px 10px; font-family:inherit; font-size:13px;" placeholder="e.g. Close the kitchen blind at sunset on weekdays, but only when someone is home"></textarea>
         <div class="btn-row" style="align-items:center;">
-          <button class="primary" id="autoDraftBtn" onclick="draftAutomation()">Write automation</button>
+          <button class="primary" id="autoDraftBtn" onclick="draftAutomation(this)">Write automation</button>
           <span id="autoMsg" class="muted"></span>
         </div>
         <div id="autoDraft"></div>
@@ -441,7 +474,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         <div class="hint">Describe in your own words what you want to be told about. The AI interprets it once; from then on it is checked every minute without using any AI tokens.</div>
         <textarea id="watchText" rows="2" maxlength="1000" style="width:100%; box-sizing:border-box; margin-top:8px; background:var(--bg); color:var(--text); border:1px solid var(--border); border-radius:6px; padding:8px 10px; font-family:inherit; font-size:13px;" placeholder="What should trigger an alert, for how long, and when does it apply?"></textarea>
         <div class="btn-row" style="align-items:center;">
-          <button class="primary" id="watchCompileBtn" onclick="compileWatch()">Interpret</button>
+          <button class="primary" id="watchCompileBtn" onclick="compileWatch(this)">Interpret</button>
           <span id="watchMsg" class="muted"></span>
         </div>
         <div id="watchDraft"></div>
@@ -460,7 +493,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           <textarea id="contextNoteInput" rows="2" placeholder="e.g. Never adjust the nursery climate after 20:00, or: The office plug powers a home server and must stay on."></textarea>
           <div class="inline-form">
             <input type="text" id="contextEntitiesInput" placeholder="Related entity IDs (optional, comma-separated)" />
-            <button class="primary" onclick="addContextNote()">Save note</button>
+            <button class="primary" onclick="addContextNote(this)">Save note</button>
           </div>
         </div>
         <div id="contextNotesList" class="scroll" style="margin-top:14px;"></div>
@@ -477,7 +510,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         <div class="inline-form">
           <input type="text" id="ignorePatternInput" placeholder="e.g. sensor.vendor_* or *device_name*" />
           <input type="text" id="ignoreReasonInput" placeholder="Reason (optional)" />
-          <button class="primary" onclick="addIgnoredTarget()">Add to ignore list</button>
+          <button class="primary" onclick="addIgnoredTarget(this)">Add to ignore list</button>
         </div>
         <div id="ignoredTargetsList" class="scroll" style="margin-top:14px;"></div>
       </div>
@@ -494,7 +527,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           <input type="text" id="minChangePatternInput" placeholder="e.g. sensor.mains_voltage" />
           <input type="number" id="minChangeValueInput" min="0" step="any" placeholder="Minimum change, e.g. 5" />
           <input type="text" id="minChangeReasonInput" placeholder="Reason (optional)" />
-          <button class="primary" onclick="addMinChange()">Add</button>
+          <button class="primary" onclick="addMinChange(this)">Add</button>
         </div>
         <div id="minChangeList" class="scroll" style="margin-top:14px;"></div>
       </div>
@@ -558,7 +591,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         <div class="card-head"><h2>Automations found that the brain does not track</h2></div>
         <div class="hint">These automations have the brain's id prefix (ai_brain_) in Home Assistant, but the brain has no record of them, for example after a reinstall. Tick the ones that are really the brain's and start tracking them so their health is reviewed. Nothing is changed in Home Assistant.</div>
         <div id="adoptList" style="margin-top:8px;"></div>
-        <div class="btn-row"><button class="primary" onclick="adoptSelected()">Track selected</button></div>
+        <div class="btn-row"><button class="primary" onclick="adoptSelected(this)">Track selected</button></div>
       </div>
     </div>
     <div class="grid" style="margin-top:16px;">
@@ -583,7 +616,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           <label class="field" style="flex-direction:row; align-items:center; gap:6px;">every
             <input type="number" min="1" max="90" id="researchIntervalInput" style="width:70px;" onchange="setRuntime('research_interval_days', parseInt(this.value || '7', 10))" /> days
           </label>
-          <button class="primary" id="researchRunBtn" onclick="runResearchNow()">Research now</button>
+          <button class="primary" id="researchRunBtn" onclick="runResearchNow(this)">Research now</button>
         </div>
         <label class="check" style="margin-top:8px;"><input type="checkbox" id="researchWebCheck" onchange="setRuntime('research_web_search', this.checked)" /> Optional deep research with web search and cited sources (Google Gemini only, uses noticeably more tokens)</label>
       </div>
@@ -598,7 +631,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     <div class="grid" style="margin-top:16px;">
       <div class="card">
         <div class="card-head"><h2>Approved knowledge</h2><span class="pill ok" id="researchApprovedCount">0</span></div>
-        <div class="hint">Used by the matching agent in its reasoning.</div>
+        <div class="hint">Used by the matching agent in its reasoning. Click an item or Show details to review full research data, or Remove to delete it and unblock the topic for future research.</div>
         <div id="researchApproved" class="scroll" style="margin-top:8px;"></div>
       </div>
     </div>
@@ -703,7 +736,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
             <textarea id="siteContextInput" rows="4" style="width:100%; box-sizing:border-box; background:var(--bg); color:var(--text); border:1px solid var(--border); border-radius:6px; padding:8px 10px; font-family:inherit; font-size:13px; line-height:1.4;" placeholder="Describe your home, rooms, HVAC setup, window orientations, occupants..."></textarea>
           </label>
           <div style="margin-top:8px;">
-            <button class="primary" id="saveAiBtn" onclick="saveAiConfig()">Save & Apply AI Settings</button>
+            <button class="primary" id="saveAiBtn" onclick="saveAiConfig(this)">Save & Apply AI Settings</button>
             <span id="saveAiMsg" class="muted" style="margin-left:12px;"></span>
           </div>
         </div>
@@ -746,7 +779,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           </div>
           <div class="hint" style="margin:4px 0 10px; display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
             <span id="quietHint">Quiet hours are off.</span>
-            <button class="icon" type="button" onclick="clearQuietHours()">Clear quiet hours</button>
+            <button class="icon" type="button" onclick="clearQuietHours(this)">Clear quiet hours</button>
           </div>
           <label class="field">Extra doors, gates or devices that always need approval to open
             <input type="text" id="criticalInput" maxlength="2000" placeholder="e.g. cover.driveway, *carport*, barn" onchange="setRuntime('critical_openings', this.value)" />
@@ -761,7 +794,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
                 <option value="copilot">Co-pilot</option>
                 <option value="autonomous">Autonomous</option>
               </select>
-              <button class="primary" onclick="addDomainAutonomy()">Set</button>
+              <button class="primary" onclick="addDomainAutonomy(this)">Set</button>
             </div>
             <div id="domainAutonomyList" style="margin-top:8px;"></div>
           </div>
@@ -807,6 +840,55 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   }
   const $ = id => document.getElementById(id);
+
+  let activeActionCount = 0;
+
+  function resolveButton(btn) {
+    if (btn && (btn instanceof Element || btn.nodeType === 1)) return btn;
+    if (typeof event !== 'undefined' && event && event.target && event.target.closest) {
+      const b = event.target.closest('button');
+      if (b) return b;
+    }
+    return null;
+  }
+
+  async function withButtonLoading(btn, asyncFn) {
+    btn = resolveButton(btn);
+    if (!btn) return await asyncFn();
+    if (btn.disabled || btn.classList.contains('btn-loading')) return;
+
+    const originalHtml = btn.innerHTML;
+    const originalDisabled = btn.disabled;
+    const originalWidth = btn.offsetWidth;
+    const originalHeight = btn.offsetHeight;
+
+    const row = btn.closest('.btn-row') || btn.closest('.insight-actions') || btn.parentElement;
+    const siblings = row ? Array.from(row.querySelectorAll('button:not([disabled])')).filter(b => b !== btn) : [];
+
+    btn.classList.add('btn-loading');
+    btn.disabled = true;
+    if (originalWidth) btn.style.minWidth = originalWidth + 'px';
+    if (originalHeight) btn.style.minHeight = originalHeight + 'px';
+    btn.style.maxWidth = '100%';
+    btn.innerHTML = '<span class="btn-spinner" role="status" aria-label="Loading"></span>';
+    siblings.forEach(s => { s.disabled = true; });
+
+    activeActionCount++;
+    try {
+      return await asyncFn();
+    } finally {
+      activeActionCount = Math.max(0, activeActionCount - 1);
+      if (document.body.contains(btn)) {
+        btn.classList.remove('btn-loading');
+        btn.disabled = originalDisabled;
+        btn.style.minWidth = '';
+        btn.style.minHeight = '';
+        btn.style.maxWidth = '';
+        btn.innerHTML = originalHtml;
+        siblings.forEach(s => { s.disabled = false; });
+      }
+    }
+  }
 
   function formatRelativeSchedule(isoString) {
     if (!isoString) return null;
@@ -1151,10 +1233,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       ${contentHtml}
       <input type="text" id="note_${esc(p.approval_id)}" autocomplete="off" placeholder="Optional note for the Brain (saved if you reject)" style="margin-top:6px;" />
       <div class="btn-row" style="align-items:center;">
-        <button class="primary" onclick="decideApproval('${esc(p.approval_id)}', 'approved_once')">Approve once</button>
-        <button class="success" onclick="decideApproval('${esc(p.approval_id)}', 'approved_repeatable')">Always allow</button>
-        <button class="icon" title="Dismiss this proposal without executing or permanently blocking" onclick="decideApproval('${esc(p.approval_id)}', 'dismissed')">Dismiss</button>
-        <button class="danger" onclick="decideApproval('${esc(p.approval_id)}', 'rejected')">Reject</button>
+        <button class="primary" onclick="decideApproval('${esc(p.approval_id)}', 'approved_once', this)">Approve once</button>
+        <button class="success" onclick="decideApproval('${esc(p.approval_id)}', 'approved_repeatable', this)">Always allow</button>
+        <button class="icon" title="Dismiss this proposal without executing or permanently blocking" onclick="decideApproval('${esc(p.approval_id)}', 'dismissed', this)">Dismiss</button>
+        <button class="danger" onclick="decideApproval('${esc(p.approval_id)}', 'rejected', this)">Reject</button>
         ${reasoningBtn}
       </div>`;
     return div;
@@ -1208,8 +1290,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       banner.className = 'banner'; banner.style.display = 'block';
       banner.innerHTML = `<strong class="t">Primary model quota reached</strong>
         <div class="muted"><code>${esc(q.primary_model)}</code> is cooling down until <strong>${esc(primUntil)}</strong>. Switch to a fallback model in the meantime?</div>
-        <div class="btn-row">${avail.map(m => `<button class="primary" data-model="${esc(m)}" onclick="decideFallback('approve_fallback', this.dataset.model)">Use ${esc(m)}</button>`).join('')}
-        <button onclick="decideFallback('wait_for_primary', null)">Wait for primary</button></div>`;
+        <div class="btn-row">${avail.map(m => `<button class="primary" data-model="${esc(m)}" onclick="decideFallback('approve_fallback', this.dataset.model, this)">Use ${esc(m)}</button>`).join('')}
+        <button onclick="decideFallback('wait_for_primary', null, this)">Wait for primary</button></div>`;
       pill.className = 'pill warn'; pill.textContent = 'Awaiting confirmation';
       llmBadge.className = 'pill warn'; llmText.textContent = 'Quota reached';
     } else if (q.using_fallback_model) {
@@ -1370,7 +1452,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         ${titleHtml}
         <div class="muted">${esc((r.target_entity_ids || []).filter(t => !String(t).startsWith('automation.ai_brain_')).join(', '))}</div>
         <div class="muted">${esc(r.execution_count)} auto-${r.execution_count === 1 ? 'run' : 'runs'}</div></div>
-        <button class="danger icon" data-sig="${esc(r.signature)}" onclick="revokeRule(this.dataset.sig)">Revoke</button></div></div>`;
+        <button class="danger icon" data-sig="${esc(r.signature)}" onclick="revokeRule(this.dataset.sig, this)">Revoke</button></div></div>`;
     }).join('')
       : '<div class="empty">No actions are set to run automatically. Choose "Always allow" on an approval to add one.</div>';
 
@@ -1405,7 +1487,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
             ${titleHtml}
             ${subHtml}
           </div>
-          <button class="icon" data-sig="${esc(e.action_signature)}" onclick="unblockRejected(this.dataset.sig)">Unblock</button>
+          <button class="icon" data-sig="${esc(e.action_signature)}" onclick="unblockRejected(this.dataset.sig, this)">Unblock</button>
         </div>
         ${noteHtml}
       </div>`;
@@ -1427,7 +1509,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
               <strong>${esc(ins.title)}</strong>
               <div class="muted" style="font-size:11px; margin-top:2px;">Category: ${esc(ins.category || 'advisory')} ${ins.resolved_at ? '&middot; Rejected ' + esc(new Date(ins.resolved_at).toLocaleDateString()) : ''}</div>
             </div>
-            <button class="icon" onclick="unblockRejectedInsight('${esc(ins.insight_id)}')">Unblock</button>
+            <button class="icon" onclick="unblockRejectedInsight('${esc(ins.insight_id)}', this)">Unblock</button>
           </div>
           ${ins.rejection_reason ? `<div class="muted" style="margin-top:6px; font-size:12px; background:rgba(255,255,255,0.04); padding:6px 8px; border-radius:4px;"><strong>Your rejection note:</strong> ${esc(ins.rejection_reason)}</div>` : ''}
         </div>`).join('') : '<div class="empty">No rejected insights. When you reject an insight, it appears here and agents will not suggest it again.</div>';
@@ -1442,7 +1524,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     $('contextNotesList').innerHTML = notes.length ? notes.map(n => `
       <div class="item row"><div><div>${esc(n.content)}</div>
         <div class="muted">${esc(n.scope || 'global')}${(n.related_entities || []).length ? ' &middot; ' + esc(n.related_entities.join(', ')) : ''}</div></div>
-        <button class="danger icon" title="Remove" onclick="deleteContextNote('${esc(n.note_id)}')">Remove</button></div>`).join('')
+        <button class="danger icon" title="Remove" onclick="deleteContextNote('${esc(n.note_id)}', this)">Remove</button></div>`).join('')
       : '<div class="empty">No notes yet.</div>';
 
     const ignored = data.ignored_targets || [];
@@ -1453,7 +1535,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
     $('ignoredTargetsList').innerHTML = ignored.length ? ignored.map(t => `
       <div class="item row"><div><code>${esc(t.pattern)}</code>${t.reason ? ` <span class="muted">${esc(t.reason)}</span>` : ''}</div>
-        <button class="danger icon" title="Remove" onclick="deleteIgnoredTarget('${esc(t.ignore_id)}')">Remove</button></div>`).join('')
+        <button class="danger icon" title="Remove" onclick="deleteIgnoredTarget('${esc(t.ignore_id)}', this)">Remove</button></div>`).join('')
       : '<div class="empty">Nothing is ignored.</div>';
 
     const minRules = data.min_change_rules || [];
@@ -1461,7 +1543,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     if (mcBadge) { mcBadge.style.display = minRules.length ? 'inline-block' : 'none'; mcBadge.textContent = minRules.length; }
     $('minChangeList').innerHTML = minRules.length ? minRules.map(r => `
       <div class="item row"><div><code>${esc(r.pattern)}</code> <span class="muted">ignore moves smaller than ${esc(String(r.min_change))}${r.reason ? ' &middot; ' + esc(r.reason) : ''}</span></div>
-        <button class="danger icon" title="Remove" onclick="deleteMinChange('${esc(r.rule_id)}')">Remove</button></div>`).join('')
+        <button class="danger icon" title="Remove" onclick="deleteMinChange('${esc(r.rule_id)}', this)">Remove</button></div>`).join('')
       : '<div class="empty">No minimum changes set.</div>';
 
     const agents = data.agents || [];
@@ -1481,8 +1563,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
               <div class="muted" style="font-size:12px; margin-top:2px;">${esc(a.specialty)}</div>
             </div>
             <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
-              <button class="icon" data-id="${esc(a.agent_id)}" onclick="setAgentEnabled(this.dataset.id, ${!a.enabled})">${a.enabled ? 'Disable' : 'Enable'}</button>
-              ${a.is_custom ? `<button class="danger icon" data-id="${esc(a.agent_id)}" data-name="${esc(a.name)}" onclick="deleteCustomAgent(this.dataset.id, this.dataset.name)">Delete</button>` : ''}
+              <button class="icon" data-id="${esc(a.agent_id)}" onclick="setAgentEnabled(this.dataset.id, ${!a.enabled}, this)">${a.enabled ? 'Disable' : 'Enable'}</button>
+              ${a.is_custom ? `<button class="danger icon" data-id="${esc(a.agent_id)}" data-name="${esc(a.name)}" onclick="deleteCustomAgent(this.dataset.id, this.dataset.name, this)">Delete</button>` : ''}
             </div>
           </div>
           <div class="muted" style="font-size:12px; margin:6px 0;">${esc(a.description)}</div>
@@ -1567,13 +1649,13 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         </div>
         ${ins.estimated_impact ? `<div class="muted" style="margin-top:6px; font-size:12px; line-height:1.35; word-break: break-word; overflow-wrap: anywhere;"><strong>Impact:</strong> ${esc(ins.estimated_impact)}</div>` : ''}
         <div class="insight-actions">
-          <button class="icon" style="font-size:11px; padding:4px 9px;" onclick="dismissInsight('${esc(ins.insight_id)}')" title="Mark as read / dismiss from active list">
+          <button class="icon" style="font-size:11px; padding:4px 9px;" onclick="dismissInsight('${esc(ins.insight_id)}', this)" title="Mark as read / dismiss from active list">
             ✓ Mark read
           </button>
-          <button class="icon" style="font-size:11px; padding:4px 9px; color:#e74c3c; border-color:rgba(231,76,60,0.35);" onclick="rejectInsightPrompt('${esc(ins.insight_id)}')" title="Reject this advice so agents never suggest it again">
+          <button class="icon" style="font-size:11px; padding:4px 9px; color:#e74c3c; border-color:rgba(231,76,60,0.35);" onclick="rejectInsightPrompt('${esc(ins.insight_id)}', this)" title="Reject this advice so agents never suggest it again">
             ✕ Reject<span class="hide-mobile"> &amp; Never suggest</span>
           </button>
-          <button class="icon" style="font-size:11px; padding:4px 8px; color:var(--muted);" onclick="deleteInsight('${esc(ins.insight_id)}')" title="Delete insight permanently">
+          <button class="icon" style="font-size:11px; padding:4px 8px; color:var(--muted);" onclick="deleteInsight('${esc(ins.insight_id)}', this)" title="Delete insight permanently">
             🗑<span class="hide-mobile"> Delete</span>
           </button>
         </div>
@@ -1588,10 +1670,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           <button class="icon primary" style="font-size:11px; padding:4px 9px;" onclick="jumpToElement('approvals', 'approval-${esc(approvalId)}')">
             ⚡ Review in Approvals
           </button>
-          <button class="icon" style="font-size:11px; padding:4px 9px; color:#e74c3c; border-color:rgba(231,76,60,0.35);" onclick="decideApproval('${esc(approvalId)}', 'rejected')" title="Reject this proposed automation">
+          <button class="icon" style="font-size:11px; padding:4px 9px; color:#e74c3c; border-color:rgba(231,76,60,0.35);" onclick="decideApproval('${esc(approvalId)}', 'rejected', this)" title="Reject this proposed automation">
             ✕ Reject
           </button>
-          <button class="icon" style="font-size:11px; padding:4px 8px; color:var(--muted);" onclick="decideApproval('${esc(approvalId)}', 'dismissed')" title="Dismiss without action">
+          <button class="icon" style="font-size:11px; padding:4px 8px; color:var(--muted);" onclick="decideApproval('${esc(approvalId)}', 'dismissed', this)" title="Dismiss without action">
             Dismiss
           </button>
         </div>` : '';
@@ -1642,37 +1724,36 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
   }
 
-  async function saveAiConfig() {
-    const btn = $('saveAiBtn');
+  async function saveAiConfig(btn) {
+    btn = btn || $('saveAiBtn');
     const msg = $('saveAiMsg');
-    btn.disabled = true; btn.textContent = 'Saving...';
     if (msg) msg.textContent = '';
-    try {
-      const payload = {
-        llm_model: $('llmModelInput').value.trim(),
-        llm_fast_model: $('llmFastModelInput').value.trim(),
-        site_context: $('siteContextInput').value.trim(),
-      };
-      const keyVal = $('llmApiKeyInput').value.trim();
-      if (keyVal) {
-        payload.llm_api_key = keyVal;
+    return withButtonLoading(btn, async () => {
+      try {
+        const payload = {
+          llm_model: $('llmModelInput').value.trim(),
+          llm_fast_model: $('llmFastModelInput').value.trim(),
+          site_context: $('siteContextInput').value.trim(),
+        };
+        const keyVal = $('llmApiKeyInput').value.trim();
+        if (keyVal) {
+          payload.llm_api_key = keyVal;
+        }
+        await post('./api/settings', payload);
+        $('llmApiKeyInput').value = '';
+        if (msg) {
+          msg.textContent = '✓ Saved and active!';
+          msg.style.color = 'var(--ok, #3fb950)';
+          setTimeout(() => { if (msg) msg.textContent = ''; }, 4000);
+        }
+        await refreshAll();
+      } catch (e) {
+        if (msg) {
+          msg.textContent = 'Error saving settings: ' + e;
+          msg.style.color = 'var(--danger, #f85149)';
+        }
       }
-      await post('./api/settings', payload);
-      $('llmApiKeyInput').value = '';
-      if (msg) {
-        msg.textContent = '✓ Saved and active!';
-        msg.style.color = 'var(--ok, #3fb950)';
-        setTimeout(() => { if (msg) msg.textContent = ''; }, 4000);
-      }
-      await refreshAll();
-    } catch (e) {
-      if (msg) {
-        msg.textContent = 'Error saving settings: ' + e;
-        msg.style.color = 'var(--danger, #f85149)';
-      }
-    } finally {
-      btn.disabled = false; btn.textContent = 'Save & Apply AI Settings';
-    }
+    });
   }
 
   let pausedState = false;
@@ -1694,17 +1775,19 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     if (!box) return;
     box.innerHTML = latestUndo.length ? latestUndo.map(u => `<div class="item"><div style="display:flex; justify-content:space-between; gap:8px; align-items:center;">
         <span>${esc(u.summary)} <span class="muted">${esc(new Date(u.created_at).toLocaleString())}</span></span>
-        <button class="icon" data-id="${esc(u.undo_id)}" onclick="undoAction(this.dataset.id)">Undo</button></div></div>`).join('')
+        <button class="icon" data-id="${esc(u.undo_id)}" onclick="undoAction(this.dataset.id, this)">Undo</button></div></div>`).join('')
       : '<div class="empty">Nothing to undo. Autonomous actions appear here for 24 hours.</div>';
   }
 
-  async function undoAction(id) {
-    const res = await fetch('./api/undo/' + encodeURIComponent(id), {method: 'POST'});
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      alert(err.detail || 'Undo failed');
-    }
-    await refreshAll();
+  async function undoAction(id, btn) {
+    return withButtonLoading(btn, async () => {
+      const res = await fetch('./api/undo/' + encodeURIComponent(id), {method: 'POST'});
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        alert(err.detail || 'Undo failed');
+      }
+      await refreshAll();
+    });
   }
 
   async function setRuntime(field, value) {
@@ -1717,7 +1800,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     await refreshAll();
   }
 
-  async function togglePause() { await setRuntime('paused', !pausedState); }
+  async function togglePause(btn) {
+    return withButtonLoading(btn || $('pauseBtn'), async () => {
+      await setRuntime('paused', !pausedState);
+    });
+  }
 
   async function saveQuietHours() {
     settingsMutationSeq++;
@@ -1725,10 +1812,12 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     await refreshAll();
   }
 
-  async function clearQuietHours() {
-    $('quietStartInput').value = '';
-    $('quietEndInput').value = '';
-    await saveQuietHours();
+  async function clearQuietHours(btn) {
+    return withButtonLoading(btn, async () => {
+      $('quietStartInput').value = '';
+      $('quietEndInput').value = '';
+      await saveQuietHours();
+    });
   }
 
   let currentDomainAutonomy = {};
@@ -1736,21 +1825,25 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     const entries = Object.entries(currentDomainAutonomy);
     $('domainAutonomyList').innerHTML = entries.length ? entries.map(([d, lvl]) => `<div class="item" style="display:flex; justify-content:space-between; align-items:center; gap:8px;">
         <span><code>${esc(d)}</code> &rarr; ${esc(lvl)}</span>
-        <button class="icon" data-d="${esc(d)}" onclick="removeDomainAutonomy(this.dataset.d)">Remove</button></div>`).join('')
+        <button class="icon" data-d="${esc(d)}" onclick="removeDomainAutonomy(this.dataset.d, this)">Remove</button></div>`).join('')
       : '<div class="muted" style="font-size:0.8rem;">No overrides: the global autonomy applies to every device type.</div>';
   }
-  async function addDomainAutonomy() {
+  async function addDomainAutonomy(btn) {
     const name = ($('domainAutoName').value || '').trim().toLowerCase();
     if (!name) return;
-    currentDomainAutonomy = Object.assign({}, currentDomainAutonomy, {[name]: $('domainAutoLevel').value});
-    $('domainAutoName').value = '';
-    await setRuntime('domain_autonomy', currentDomainAutonomy);
+    return withButtonLoading(btn, async () => {
+      currentDomainAutonomy = Object.assign({}, currentDomainAutonomy, {[name]: $('domainAutoLevel').value});
+      $('domainAutoName').value = '';
+      await setRuntime('domain_autonomy', currentDomainAutonomy);
+    });
   }
-  async function removeDomainAutonomy(domain) {
-    const next = Object.assign({}, currentDomainAutonomy);
-    delete next[domain];
-    currentDomainAutonomy = next;
-    await setRuntime('domain_autonomy', next);
+  async function removeDomainAutonomy(domain, btn) {
+    return withButtonLoading(btn, async () => {
+      const next = Object.assign({}, currentDomainAutonomy);
+      delete next[domain];
+      currentDomainAutonomy = next;
+      await setRuntime('domain_autonomy', next);
+    });
   }
 
   function syncSafetyControls(st) {
@@ -1795,6 +1888,74 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   };
   const VERDICT_PILL = {healthy: 'ok', too_new: '', never_fired: 'warn', overridden: 'warn', disabled: 'warn', missing: 'danger'};
 
+  const approvedDetailsCache = new Map();
+  const approvedExpandedIds = new Set();
+
+  function renderResearchDetails(it) {
+    const points = (it.key_points || []).map(p => `<li>${esc(p)}</li>`).join('');
+    const refs = (it.references || []).length ? `<div class="muted" style="margin-top:4px; font-size:0.8rem;">The AI says it draws on: ${esc(it.references.join('; '))} (not verified)</div>` : '';
+    const src = (it.sources || []).map(s => `<a href="${esc(s.url)}" target="_blank" rel="noopener noreferrer">${esc(s.title || s.url)}</a>${s.trust === 'low' ? ' <span class="muted">(user-generated)</span>' : ''}`).join('<br>');
+    let out = '';
+    if (points) out += `<ul style="margin:6px 0 0 18px; padding:0; font-size:0.86rem;">${points}</ul>`;
+    if (it.how_to_apply) out += `<div style="margin-top:6px; font-size:0.86rem;"><strong>Apply it:</strong> ${esc([].concat(it.how_to_apply).join(' '))}</div>`;
+    if (it.caveats) out += `<div class="muted" style="margin-top:4px; font-size:0.82rem;">Caveats: ${esc([].concat(it.caveats).join(' '))}</div>`;
+    if (refs) out += refs;
+    if (src) out += `<div style="margin-top:6px; font-size:0.82rem;">${src}</div>`;
+    if (!out) out = '<div class="muted" style="font-size:0.82rem;">No additional details recorded for this item.</div>';
+    return out;
+  }
+
+  async function toggleApprovedDetails(itemId) {
+    const container = $('approved-details-' + itemId);
+    const btn = $('btn-approved-details-' + itemId);
+    if (!container || !btn) return;
+    if (approvedExpandedIds.has(itemId)) {
+      approvedExpandedIds.delete(itemId);
+      container.style.display = 'none';
+      btn.textContent = 'Show details';
+      return;
+    }
+    approvedExpandedIds.add(itemId);
+    container.style.display = 'block';
+    btn.textContent = 'Hide details';
+    if (approvedDetailsCache.has(itemId)) {
+      container.innerHTML = renderResearchDetails(approvedDetailsCache.get(itemId));
+      return;
+    }
+    container.innerHTML = '<span class="muted" style="font-size:0.82rem;">Loading details...</span>';
+    try {
+      const res = await fetch('./api/research/items/' + encodeURIComponent(itemId));
+      if (!res.ok) throw new Error('Details not found');
+      const data = await res.json();
+      approvedDetailsCache.set(itemId, data);
+      container.innerHTML = renderResearchDetails(data);
+    } catch (e) {
+      container.innerHTML = '<span class="danger" style="font-size:0.82rem;">Could not load research details.</span>';
+    }
+  }
+
+  function renderApprovedItem(it, names) {
+    const isExpanded = approvedExpandedIds.has(it.item_id);
+    const cached = approvedDetailsCache.get(it.item_id);
+    const detailsHtml = isExpanded && cached ? renderResearchDetails(cached) : '';
+    const confClass = {high: 'ok', medium: 'warn', low: 'danger'}[it.confidence] || '';
+    const web = it.basis === 'web_sources';
+    return `<div class="item">
+      <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
+        <strong style="cursor:pointer;" title="Click to toggle details" onclick="toggleApprovedDetails('${esc(it.item_id)}')">${esc(it.title)}</strong>
+        <span class="pill">${esc(names[it.agent_id] || it.agent_id)}</span>
+        <span class="pill ${confClass}">${esc(it.confidence)} confidence</span>
+        <span class="pill ${web ? 'ok' : ''}">${web ? 'web sources' : 'AI knowledge'}</span>
+        ${web ? `<span class="pill" title="Share of the answer backed by the cited sources">${Math.round((it.grounding_coverage || 0) * 100)}% sourced</span>` : ''}
+      </div>
+      <div style="margin-top:6px; line-height:1.45;">${esc(it.summary)}</div>
+      <div id="approved-details-${esc(it.item_id)}" style="display:${isExpanded ? 'block' : 'none'}; margin-top:8px; border-top:1px solid var(--border); padding-top:8px;">${detailsHtml}</div>
+      <div class="btn-row">
+        <button class="icon" id="btn-approved-details-${esc(it.item_id)}" onclick="toggleApprovedDetails('${esc(it.item_id)}')">${isExpanded ? 'Hide details' : 'Show details'}</button>
+        <button class="danger icon" data-id="${esc(it.item_id)}" onclick="removeResearch(this.dataset.id, this)">Remove</button>
+      </div></div>`;
+  }
+
   function renderResearchItem(it, names, reviewable) {
     const confClass = {high: 'ok', medium: 'warn', low: 'danger'}[it.confidence] || '';
     const web = it.basis === 'web_sources';
@@ -1817,9 +1978,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       ${src ? `<div style="margin-top:6px; font-size:0.82rem;">${src}</div>` : ''}
       <div class="btn-row">
         ${reviewable
-          ? `<button class="success" data-id="${esc(it.item_id)}" onclick="decideResearch(this.dataset.id, 'approve')">Keep</button>
-             <button class="danger" data-id="${esc(it.item_id)}" onclick="decideResearch(this.dataset.id, 'reject')">Reject</button>`
-          : `<button class="danger icon" data-id="${esc(it.item_id)}" onclick="removeResearch(this.dataset.id)">Remove</button>`}
+          ? `<button class="success" data-id="${esc(it.item_id)}" onclick="decideResearch(this.dataset.id, 'approve', this)">Keep</button>
+             <button class="danger" data-id="${esc(it.item_id)}" onclick="decideResearch(this.dataset.id, 'reject', this)">Reject</button>`
+          : `<button class="danger icon" data-id="${esc(it.item_id)}" onclick="removeResearch(this.dataset.id, this)">Remove</button>`}
       </div></div>`;
   }
 
@@ -1853,7 +2014,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     $('researchProposedCount').textContent = (d.proposed || []).length;
     setList('researchProposed', (d.proposed || []).length ? d.proposed.map(i => renderResearchItem(i, names, true)).join('') : '<div class="empty">Nothing waiting for review.</div>');
     $('researchApprovedCount').textContent = (d.approved || []).length;
-    setList('researchApproved', (d.approved || []).length ? d.approved.map(i => renderResearchItem(i, names, false)).join('') : '<div class="empty">No approved knowledge yet.</div>');
+    setList('researchApproved', (d.approved || []).length ? d.approved.map(i => renderApprovedItem(i, names)).join('') : '<div class="empty">No approved knowledge yet.</div>');
     setList('researchBacklog', (d.backlog || []).length ? d.backlog.map(t => {
       const busy = researchingTopicIds.has(t.topic_id);
       return `<div class="item" data-topic-id="${esc(t.topic_id)}">
@@ -1893,68 +2054,77 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   async function researchTopicNow(topicId, btn) {
     if (!topicId || researchingTopicIds.has(topicId)) return;
     researchingTopicIds.add(topicId);
-    if (btn) {
-      btn.disabled = true;
-      btn.textContent = 'Researching...';
-    }
-    try {
-      const res = await post('./api/research/topics/' + encodeURIComponent(topicId) + '/run', {});
-      const r = await res.json().catch(() => ({}));
-      if (!res.ok || r.status === 'unavailable') {
-        alert(r.message || r.detail || 'Could not research this topic.');
+    return withButtonLoading(btn, async () => {
+      try {
+        const res = await post('./api/research/topics/' + encodeURIComponent(topicId) + '/run', {});
+        const r = await res.json().catch(() => ({}));
+        if (!res.ok || r.status === 'unavailable') {
+          alert(r.message || r.detail || 'Could not research this topic.');
+        }
+      } finally {
+        researchingTopicIds.delete(topicId);
+        await refreshResearch();
+        await refreshAll();
       }
-    } finally {
-      researchingTopicIds.delete(topicId);
-      await refreshResearch();
-      await refreshAll();
-    }
+    });
   }
   async function removeResearchTopic(topicId, btn) {
     if (!topicId) return;
-    if (btn) btn.disabled = true;
-    await fetch('./api/research/topics/' + encodeURIComponent(topicId), {method: 'DELETE'});
-    await refreshResearch();
+    return withButtonLoading(btn, async () => {
+      await fetch('./api/research/topics/' + encodeURIComponent(topicId), {method: 'DELETE'});
+      await refreshResearch();
+    });
   }
   async function rejectResearchTopic(topicId, btn) {
     if (!topicId) return;
-    if (btn) btn.disabled = true;
-    await post('./api/research/topics/' + encodeURIComponent(topicId) + '/reject', {});
-    await refreshResearch();
-    await refreshAll();
+    return withButtonLoading(btn, async () => {
+      await post('./api/research/topics/' + encodeURIComponent(topicId) + '/reject', {});
+      await refreshResearch();
+      await refreshAll();
+    });
   }
 
   async function restoreRejectedResearch(itemId, btn) {
     if (!itemId) return;
-    if (btn) btn.disabled = true;
-    const res = await post('./api/research/items/' + encodeURIComponent(itemId) + '/restore', {});
-    if (!res.ok) alert('Could not restore this research. Refresh and try again.');
-    await refreshResearch();
-    await refreshAll();
+    return withButtonLoading(btn, async () => {
+      const res = await post('./api/research/items/' + encodeURIComponent(itemId) + '/restore', {});
+      if (!res.ok) alert('Could not restore this research. Refresh and try again.');
+      await refreshResearch();
+      await refreshAll();
+    });
   }
   async function unblockRejectedResearch(itemId, btn) {
     if (!itemId) return;
     if (!confirm('Unblock this research? Agents may plan and research this subject again in the future.')) return;
-    if (btn) btn.disabled = true;
-    const res = await post('./api/research/items/' + encodeURIComponent(itemId) + '/unblock', {});
-    if (!res.ok) alert('Could not unblock this research. Refresh and try again.');
-    await refreshResearch();
-    await refreshAll();
+    return withButtonLoading(btn, async () => {
+      const res = await post('./api/research/items/' + encodeURIComponent(itemId) + '/unblock', {});
+      if (!res.ok) alert('Could not unblock this research. Refresh and try again.');
+      await refreshResearch();
+      await refreshAll();
+    });
   }
 
-  async function runResearchNow() {
-    $('researchRunBtn').disabled = true;
-    const res = await post('./api/research/run', {});
-    const r = await res.json().catch(() => ({}));
-    if (r.status === 'unavailable') alert(r.message);
-    await refreshResearch();
+  async function runResearchNow(btn) {
+    return withButtonLoading(btn || $('researchRunBtn'), async () => {
+      const res = await post('./api/research/run', {});
+      const r = await res.json().catch(() => ({}));
+      if (r.status === 'unavailable') alert(r.message);
+      await refreshResearch();
+    });
   }
-  async function decideResearch(id, decision) {
-    await post('./api/research/items/' + encodeURIComponent(id) + '/decision', {decision});
-    await refreshResearch(); await refreshAll();
+  async function decideResearch(id, decision, btn) {
+    return withButtonLoading(btn, async () => {
+      await post('./api/research/items/' + encodeURIComponent(id) + '/decision', {decision});
+      await refreshResearch(); await refreshAll();
+    });
   }
-  async function removeResearch(id) {
-    await fetch('./api/research/items/' + encodeURIComponent(id), {method: 'DELETE'});
-    await refreshResearch();
+  async function removeResearch(id, btn) {
+    return withButtonLoading(btn, async () => {
+      await fetch('./api/research/items/' + encodeURIComponent(id), {method: 'DELETE'});
+      approvedDetailsCache.delete(id);
+      approvedExpandedIds.delete(id);
+      await refreshResearch(); await refreshAll();
+    });
   }
 
   let watchDraft = null;
@@ -1980,19 +2150,19 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     return (w.entity_ids || []).join(', ') + ' ' + t + (extra.length ? ' (' + extra.join('; ') + ')' : '');
   }
 
-  async function compileWatch() {
+  async function compileWatch(btn) {
     const text = ($('watchText').value || '').trim();
     if (!text) return;
     $('watchMsg').textContent = 'Interpreting...';
-    $('watchCompileBtn').disabled = true;
-    let r;
-    try {
-      const res = await post('./api/watches/compile', {text});
-      r = await res.json();
-    } catch (e) { r = {errors: ['Request failed']}; }
-    $('watchCompileBtn').disabled = false;
-    $('watchMsg').textContent = '';
-    renderWatchDraft(r);
+    return withButtonLoading(btn || $('watchCompileBtn'), async () => {
+      let r;
+      try {
+        const res = await post('./api/watches/compile', {text});
+        r = await res.json();
+      } catch (e) { r = {errors: ['Request failed']}; }
+      $('watchMsg').textContent = '';
+      renderWatchDraft(r);
+    });
   }
 
   function renderWatchDraft(r) {
@@ -2007,7 +2177,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         ${r.explanation ? `<div style="font-size:0.84rem; margin-top:6px;">${esc(r.explanation)}</div>` : ''}
         ${bt && bt.episodes !== null && bt.episodes !== undefined ? `<div class="muted" style="font-size:0.8rem; margin-top:6px;">🧪 On your last ${esc(bt.days)} days it would have alerted ${esc(bt.episodes)} time(s)${bt.approximate ? ' (approximate)' : ''}. ${esc(bt.note || '')}</div>` : (bt && bt.note ? `<div class="muted" style="font-size:0.8rem; margin-top:6px;">${esc(bt.note)}</div>` : '')}
         ${(r.warnings || []).map(w => `<div class="muted" style="font-size:0.8rem; margin-top:4px;">⚠ ${esc(w)}</div>`).join('')}
-        ${watchDraft ? '<div class="btn-row"><button class="primary" onclick="saveWatchDraft()">Save watch</button><button class="icon" onclick="discardWatchDraft()">Discard</button></div>' : '<div class="btn-row"><button class="icon" onclick="discardWatchDraft()">Discard</button></div>'}
+        ${watchDraft ? '<div class="btn-row"><button class="primary" onclick="saveWatchDraft(this)">Save watch</button><button class="icon" onclick="discardWatchDraft()">Discard</button></div>' : '<div class="btn-row"><button class="icon" onclick="discardWatchDraft()">Discard</button></div>'}
       </div>`;
     }
     $('watchDraft').innerHTML = html;
@@ -2015,17 +2185,19 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
   function discardWatchDraft() { watchDraft = null; $('watchDraft').innerHTML = ''; }
 
-  async function saveWatchDraft() {
+  async function saveWatchDraft(btn) {
     if (!watchDraft) return;
-    const res = await post('./api/watches', watchDraft);
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      alert(typeof err.detail === 'string' ? err.detail : 'Could not save this watch');
-      return;
-    }
-    $('watchText').value = '';
-    discardWatchDraft();
-    await refreshWatches();
+    return withButtonLoading(btn, async () => {
+      const res = await post('./api/watches', watchDraft);
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        alert(typeof err.detail === 'string' ? err.detail : 'Could not save this watch');
+        return;
+      }
+      $('watchText').value = '';
+      discardWatchDraft();
+      await refreshWatches();
+    });
   }
 
   async function refreshWatches() {
@@ -2037,8 +2209,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         <div style="display:flex; justify-content:space-between; gap:8px; align-items:center; flex-wrap:wrap;">
           <span><strong>${esc(w.name)}</strong> <span class="pill ${w.enabled ? 'ok' : ''}">${w.enabled ? 'active' : 'paused'}</span></span>
           <span>
-            <button class="icon" data-id="${esc(w.watch_id)}" onclick="toggleWatch(this.dataset.id)">${w.enabled ? 'Pause' : 'Resume'}</button>
-            <button class="danger icon" data-id="${esc(w.watch_id)}" onclick="deleteWatch(this.dataset.id)">Remove</button>
+            <button class="icon" data-id="${esc(w.watch_id)}" onclick="toggleWatch(this.dataset.id, this)">${w.enabled ? 'Pause' : 'Resume'}</button>
+            <button class="danger icon" data-id="${esc(w.watch_id)}" onclick="deleteWatch(this.dataset.id, this)">Remove</button>
           </span>
         </div>
         <div class="muted" style="font-size:0.82rem; margin-top:3px;">${esc(describeWatch(w))}</div>
@@ -2046,38 +2218,44 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       : '<div class="empty">No watches yet.</div>';
   }
 
-  async function toggleWatch(id) { await fetch('./api/watches/' + encodeURIComponent(id) + '/toggle', {method: 'POST'}); await refreshWatches(); }
-  async function deleteWatch(id) { await fetch('./api/watches/' + encodeURIComponent(id), {method: 'DELETE'}); await refreshWatches(); }
+  async function toggleWatch(id, btn) { return withButtonLoading(btn, async () => { await fetch('./api/watches/' + encodeURIComponent(id) + '/toggle', {method: 'POST'}); await refreshWatches(); }); }
+  async function deleteWatch(id, btn) { return withButtonLoading(btn, async () => { await fetch('./api/watches/' + encodeURIComponent(id), {method: 'DELETE'}); await refreshWatches(); }); }
 
   let lastTwinSplits = [];
-  async function splitTwin(groupId, split) {
-    await post('./api/twins/split', {group_id: groupId, split});
-    await refreshLearned();
+  async function splitTwin(groupId, split, btn) {
+    return withButtonLoading(btn, async () => {
+      await post('./api/twins/split', {group_id: groupId, split});
+      await refreshLearned();
+    });
   }
-  async function restoreTwins() {
-    for (const id of lastTwinSplits) await post('./api/twins/split', {group_id: id, split: false});
-    await refreshLearned();
+  async function restoreTwins(btn) {
+    return withButtonLoading(btn, async () => {
+      for (const id of lastTwinSplits) await post('./api/twins/split', {group_id: id, split: false});
+      await refreshLearned();
+    });
   }
 
-  async function unmuteException(key) {
-    await post('./api/exceptions/unmute', {key});
-    await refreshLearned();
+  async function unmuteException(key, btn) {
+    return withButtonLoading(btn, async () => {
+      await post('./api/exceptions/unmute', {key});
+      await refreshLearned();
+    });
   }
 
   let autoDraftId = '';
   let autoDraftText = '';
 
-  async function draftAutomation() {
+  async function draftAutomation(btn) {
     const text = ($('autoText').value || '').trim();
     if (!text) return;
     $('autoMsg').textContent = 'Writing...';
-    $('autoDraftBtn').disabled = true;
-    let r;
-    try { r = await (await post('./api/automations/draft', {text})).json(); } catch (e) { r = {errors: ['Request failed']}; }
-    $('autoDraftBtn').disabled = false;
-    $('autoMsg').textContent = '';
-    autoDraftText = text;
-    renderAutomationDraft(r);
+    return withButtonLoading(btn || $('autoDraftBtn'), async () => {
+      let r;
+      try { r = await (await post('./api/automations/draft', {text})).json(); } catch (e) { r = {errors: ['Request failed']}; }
+      $('autoMsg').textContent = '';
+      autoDraftText = text;
+      renderAutomationDraft(r);
+    });
   }
 
   function renderAutomationDraft(r) {
@@ -2093,7 +2271,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         ${(r.warnings || []).map(w => `<div class="muted" style="font-size:0.8rem; margin-top:4px;">⚠ ${esc(w)}</div>`).join('')}
         <div class="muted" style="font-size:0.78rem; margin-top:8px;">Triggers, conditions and actions (YAML). You can edit it before creating.</div>
         <textarea id="autoYaml" rows="14" spellcheck="false" style="width:100%; box-sizing:border-box; margin-top:4px; background:#080d18; color:#c3cee3; border:1px solid var(--border); border-radius:6px; padding:8px 10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:12px;">${esc(r.draft.yaml)}</textarea>
-        <div class="btn-row"><button class="primary" id="autoCreateBtn" onclick="createAutomation()">Create automation</button><button class="icon" onclick="discardAutomationDraft()">Cancel</button></div>
+        <div class="btn-row"><button class="primary" id="autoCreateBtn" onclick="createAutomation(this)">Create automation</button><button class="icon" onclick="discardAutomationDraft()">Cancel</button></div>
         <div id="autoCreateMsg" class="muted" style="font-size:0.82rem; margin-top:4px;"></div>
       </div>`;
     } else if (errors.length) {
@@ -2104,21 +2282,21 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
   function discardAutomationDraft() { autoDraftId = ''; $('autoDraft').innerHTML = ''; }
 
-  async function createAutomation() {
+  async function createAutomation(btn) {
     const yamlText = $('autoYaml').value;
-    $('autoCreateBtn').disabled = true;
     $('autoCreateMsg').textContent = 'Creating...';
-    const res = await post('./api/automations/create', {yaml: yamlText, automation_id: autoDraftId, request_text: autoDraftText});
-    const body = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      $('autoCreateBtn').disabled = false;
-      $('autoCreateMsg').textContent = typeof body.detail === 'string' ? body.detail : 'Could not create this automation.';
-      return;
-    }
-    $('autoText').value = '';
-    $('autoDraft').innerHTML = `<div class="item" style="margin-top:10px;">✅ Created "${esc(body.alias)}" in Home Assistant. It is tracked under Deployed automation health.</div>`;
-    autoDraftId = '';
-    await refreshAll();
+    return withButtonLoading(btn || $('autoCreateBtn'), async () => {
+      const res = await post('./api/automations/create', {yaml: yamlText, automation_id: autoDraftId, request_text: autoDraftText});
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        $('autoCreateMsg').textContent = typeof body.detail === 'string' ? body.detail : 'Could not create this automation.';
+        return;
+      }
+      $('autoText').value = '';
+      $('autoDraft').innerHTML = `<div class="item" style="margin-top:10px;">✅ Created "${esc(body.alias)}" in Home Assistant. It is tracked under Deployed automation health.</div>`;
+      autoDraftId = '';
+      await refreshAll();
+    });
   }
 
   let importData = null;
@@ -2136,21 +2314,23 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     const rows = (body.sections || []).map(x => `<div>${esc(x.label)}: <strong>${esc(x.count)}</strong>${x.skipped ? ` <span class="muted">(${esc(x.skipped)} skipped as invalid)</span>` : ''}</div>`).join('');
     $('importPreview').innerHTML = `<div class="item" style="margin-top:10px;"><div class="muted" style="font-size:0.8rem; margin-bottom:6px;">The file contains:</div>${rows || '<div class="muted">Nothing to import.</div>'}
       ${(body.warnings || []).map(w => `<div class="muted" style="font-size:0.8rem; margin-top:6px;">⚠ ${esc(w)}</div>`).join('')}
-      <div class="btn-row">${rows ? '<button class="primary" onclick="applyImport()">Import</button>' : ''}<button class="icon" onclick="cancelImport()">Cancel</button></div></div>`;
+      <div class="btn-row">${rows ? '<button class="primary" onclick="applyImport(this)">Import</button>' : ''}<button class="icon" onclick="cancelImport()">Cancel</button></div></div>`;
   }
 
   function cancelImport() { importData = null; $('importPreview').innerHTML = ''; }
 
-  async function applyImport() {
+  async function applyImport(btn) {
     if (!importData) return;
-    const res = await post('./api/import', {data: importData, apply: true});
-    const body = await res.json().catch(() => ({}));
-    importData = null;
-    $('importPreview').innerHTML = res.ok ? '<div class="item" style="margin-top:10px;">✅ Imported. Everything was merged into the current settings and rules.</div>'
-      : `<div class="banner" style="display:block; margin:10px 0;">${esc(typeof body.detail === 'string' ? body.detail : 'Import failed.')}</div>`;
-    await refreshAll();
-    await refreshLearned();
-    await refreshWatches();
+    return withButtonLoading(btn, async () => {
+      const res = await post('./api/import', {data: importData, apply: true});
+      const body = await res.json().catch(() => ({}));
+      importData = null;
+      $('importPreview').innerHTML = res.ok ? '<div class="item" style="margin-top:10px;">✅ Imported. Everything was merged into the current settings and rules.</div>'
+        : `<div class="banner" style="display:block; margin:10px 0;">${esc(typeof body.detail === 'string' ? body.detail : 'Import failed.')}</div>`;
+      await refreshAll();
+      await refreshLearned();
+      await refreshWatches();
+    });
   }
 
   async function refreshAdoptable() {
@@ -2163,46 +2343,54 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       <span>${esc(a.alias)} <code>${esc(a.automation_id)}</code></span></label>`).join('');
   }
 
-  async function adoptSelected() {
+  async function adoptSelected(btn) {
     const ids = Array.from(document.querySelectorAll('.adoptBox:checked')).map(b => b.value);
     if (!ids.length) return;
-    await post('./api/automations/adopt', {automation_ids: ids});
-    await refreshAdoptable();
-    await refreshLearned();
+    return withButtonLoading(btn, async () => {
+      await post('./api/automations/adopt', {automation_ids: ids});
+      await refreshAdoptable();
+      await refreshLearned();
+    });
   }
 
-  async function setAutomationEnabled(id, enabled) {
-    const res = await post('./api/automations/' + encodeURIComponent(id) + '/enabled', {enabled});
-    if (!res.ok) { const b = await res.json().catch(() => ({})); alert(typeof b.detail === 'string' ? b.detail : 'Could not change the automation.'); }
-    await refreshLearned();
+  async function setAutomationEnabled(id, enabled, btn) {
+    return withButtonLoading(btn, async () => {
+      const res = await post('./api/automations/' + encodeURIComponent(id) + '/enabled', {enabled});
+      if (!res.ok) { const b = await res.json().catch(() => ({})); alert(typeof b.detail === 'string' ? b.detail : 'Could not change the automation.'); }
+      await refreshLearned();
+    });
   }
 
-  async function deleteAutomation(id, alias) {
+  async function deleteAutomation(id, alias, btn) {
     if (!confirm('Delete "' + alias + '" from Home Assistant? This cannot be undone. (Use "Never propose again" first if you do not want the brain to suggest it again.)')) return;
-    const res = await fetch('./api/automations/' + encodeURIComponent(id), {method: 'DELETE'});
-    if (!res.ok) { const b = await res.json().catch(() => ({})); alert(typeof b.detail === 'string' ? b.detail : 'Could not delete the automation.'); }
-    await refreshLearned();
+    return withButtonLoading(btn, async () => {
+      const res = await fetch('./api/automations/' + encodeURIComponent(id), {method: 'DELETE'});
+      if (!res.ok) { const b = await res.json().catch(() => ({})); alert(typeof b.detail === 'string' ? b.detail : 'Could not delete the automation.'); }
+      await refreshLearned();
+    });
   }
 
   async function proposeHabit(btn) {
     const msg = btn.closest('.item').querySelector('.habit-msg');
-    btn.disabled = true;
     if (msg) msg.textContent = 'Preparing...';
-    let r = {};
-    try {
-      const res = await post('./api/habits/propose', {pattern_id: btn.dataset.pid});
-      r = await res.json();
-      if (!res.ok) r = {status: 'error', message: typeof r.detail === 'string' ? r.detail : 'Could not propose this habit.'};
-    } catch (e) { r = {status: 'error', message: 'Request failed.'}; }
-    if (msg) msg.textContent = r.message || r.status || '';
-    if (r.status !== 'proposed' && r.status !== 'created') btn.disabled = false;
-    if (r.status === 'proposed' || r.status === 'created') await refreshAll();
+    return withButtonLoading(btn, async () => {
+      let r = {};
+      try {
+        const res = await post('./api/habits/propose', {pattern_id: btn.dataset.pid});
+        r = await res.json();
+        if (!res.ok) r = {status: 'error', message: typeof r.detail === 'string' ? r.detail : 'Could not propose this habit.'};
+      } catch (e) { r = {status: 'error', message: 'Request failed.'}; }
+      if (msg) msg.textContent = r.message || r.status || '';
+      if (r.status === 'proposed' || r.status === 'created') await refreshAll();
+    });
   }
 
-  async function forgetAutomation(id, block) {
+  async function forgetAutomation(id, block, btn) {
     if (block && !confirm('Remove it from this list and never propose this automation again?')) return;
-    await post('./api/automations/' + encodeURIComponent(id) + '/forget', {block});
-    await refreshLearned();
+    return withButtonLoading(btn, async () => {
+      await post('./api/automations/' + encodeURIComponent(id) + '/forget', {block});
+      await refreshLearned();
+    });
   }
 
   async function refreshLearned() {
@@ -2268,13 +2456,13 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         <div class="wrap"><b>${esc(g.canonical)}</b> &larr; ${g.members.filter(m => m !== g.canonical).map(esc).join(', ')}</div>
         <div class="muted wrap" style="font-size:0.85rem; margin-top:4px;">${esc(g.reason)}</div>
         <div class="muted" style="font-size:0.8rem; margin-top:4px;">${g.twin_changes ? 'Seen by both entities in ' + g.moved_together + ' of ' + g.twin_changes + ' recent changes.' : 'No recent changes to compare.'}</div>
-        <div class="btn-row" style="margin-top:6px;"><button class="icon" data-gid="${esc(g.group_id)}" onclick="splitTwin(this.dataset.gid, true)">Not the same device</button></div></div>`).join('')
+        <div class="btn-row" style="margin-top:6px;"><button class="icon" data-gid="${esc(g.group_id)}" onclick="splitTwin(this.dataset.gid, true, this)">Not the same device</button></div></div>`).join('')
       : '<div class="empty">No device is exposed twice' + (splitCount ? ' (' + splitCount + ' pair(s) split by you)' : '') + '.</div>';
-    if (splitCount) $('twinsList').insertAdjacentHTML('beforeend', '<div class="muted" style="font-size:0.8rem; margin-top:6px;">' + splitCount + ' pair(s) split by you. <a href="#" onclick="restoreTwins(); return false;">Undo all</a></div>');
+    if (splitCount) $('twinsList').insertAdjacentHTML('beforeend', '<div class="muted" style="font-size:0.8rem; margin-top:6px;">' + splitCount + ' pair(s) split by you. <a href="#" onclick="restoreTwins(this); return false;">Undo all</a></div>');
 
     const muted = d.muted_exceptions || [];
     $('mutedList').innerHTML = muted.length ? muted.map(k => `<div class="item" style="display:flex; justify-content:space-between; align-items:center; gap:8px;">
-        <code>${esc(k)}</code><button class="icon" data-k="${esc(k)}" onclick="unmuteException(this.dataset.k)">Unmute</button></div>`).join('')
+        <code>${esc(k)}</code><button class="icon" data-k="${esc(k)}" onclick="unmuteException(this.dataset.k, this)">Unmute</button></div>`).join('')
       : '<div class="muted" style="font-size:0.8rem;">Nothing muted.</div>';
 
     const reviews = d.automation_reviews || [];
@@ -2283,11 +2471,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           <span class="pill ${VERDICT_PILL[r.verdict] || ''}">${esc(String(r.verdict).replace('_', ' '))}</span></div>
         <div class="muted" style="font-size:0.82rem; margin-top:3px;">${esc(r.details)}</div>
         ${r.verdict !== 'missing' && r.entity_id ? `<div class="btn-row" style="margin-top:6px;">
-          <button class="icon" data-id="${esc(r.automation_id)}" onclick="setAutomationEnabled(this.dataset.id, ${r.verdict === 'disabled'})">${r.verdict === 'disabled' ? 'Enable' : 'Disable'}</button>
-          <button class="danger icon" data-id="${esc(r.automation_id)}" data-alias="${esc(r.alias)}" onclick="deleteAutomation(this.dataset.id, this.dataset.alias)">Delete</button></div>` : ''}
+          <button class="icon" data-id="${esc(r.automation_id)}" onclick="setAutomationEnabled(this.dataset.id, ${r.verdict === 'disabled'}, this)">${r.verdict === 'disabled' ? 'Enable' : 'Disable'}</button>
+          <button class="danger icon" data-id="${esc(r.automation_id)}" data-alias="${esc(r.alias)}" onclick="deleteAutomation(this.dataset.id, this.dataset.alias, this)">Delete</button></div>` : ''}
         ${r.verdict !== 'healthy' && r.verdict !== 'too_new' ? `<div class="btn-row" style="margin-top:6px;">
-          <button class="icon" data-id="${esc(r.automation_id)}" onclick="forgetAutomation(this.dataset.id, false)">Stop tracking</button>
-          <button class="icon" data-id="${esc(r.automation_id)}" onclick="forgetAutomation(this.dataset.id, true)">Never propose again</button></div>` : ''}</div>`).join('')
+          <button class="icon" data-id="${esc(r.automation_id)}" onclick="forgetAutomation(this.dataset.id, false, this)">Stop tracking</button>
+          <button class="icon" data-id="${esc(r.automation_id)}" onclick="forgetAutomation(this.dataset.id, true, this)">Never propose again</button></div>` : ''}</div>`).join('')
       : '<div class="empty">No automations deployed by the brain yet.</div>';
     refreshAdoptable();
   }
@@ -2299,161 +2487,211 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     await refreshAll();
   }
 
-  async function decideFallback(decision, fallbackModel) {
-    await post('./api/llm/fallback', {decision, fallback_model: fallbackModel});
-    await refreshAll();
-  }
-
-  async function triggerBatch() {
-    const btn = $('batchBtn');
-    btn.disabled = true; btn.textContent = 'Analyzing all agents...';
-    try { await post('./api/batch/analyze', {agent_id: 'all'}); }
-    finally { btn.disabled = false; btn.textContent = 'Run analysis now'; }
-    await refreshAll();
-  }
-
-  async function decideApproval(id, decision) {
-    const noteEl = document.getElementById('note_' + id);
-    const humanNote = noteEl ? noteEl.value.trim() : '';
-    latestApprovalStatuses[id] = decision;
-    activePendingApprovalIds.delete(id);
-    await post('./api/approvals/' + id + '/decide', {decision, human_note: humanNote});
-    await refreshAll();
-  }
-
-  async function dismissAllApprovals() {
-    if (!confirm('Dismiss all pending proposals?')) return;
-    activePendingApprovalIds.forEach(id => {
-      latestApprovalStatuses[id] = 'dismissed';
+  async function decideFallback(decision, fallbackModel, btn) {
+    return withButtonLoading(btn, async () => {
+      await post('./api/llm/fallback', {decision, fallback_model: fallbackModel});
+      await refreshAll();
     });
-    activePendingApprovalIds.clear();
-    await post('./api/approvals/dismiss-all', {});
-    await refreshAll();
   }
 
-  async function unblockRejected(signature) {
+  async function triggerBatch(btn) {
+    return withButtonLoading(btn || $('batchBtn'), async () => {
+      try { await post('./api/batch/analyze', {agent_id: 'all'}); }
+      finally { await refreshAll(); }
+    });
+  }
+
+  async function decideApproval(id, decision, btn) {
+    return withButtonLoading(btn, async () => {
+      const noteEl = document.getElementById('note_' + id);
+      const humanNote = noteEl ? noteEl.value.trim() : '';
+      latestApprovalStatuses[id] = decision;
+      activePendingApprovalIds.delete(id);
+      await post('./api/approvals/' + id + '/decide', {decision, human_note: humanNote});
+      await refreshAll();
+    });
+  }
+
+  async function dismissAllApprovals(btn) {
+    if (!confirm('Dismiss all pending proposals?')) return;
+    return withButtonLoading(btn || $('dismissAllBtn'), async () => {
+      activePendingApprovalIds.forEach(id => {
+        latestApprovalStatuses[id] = 'dismissed';
+      });
+      activePendingApprovalIds.clear();
+      await post('./api/approvals/dismiss-all', {});
+      await refreshAll();
+    });
+  }
+
+  async function unblockRejected(signature, btn) {
     if (!confirm('Unblock this suggestion? Agents may propose it again.')) return;
-    await fetch('./api/rejected?signature=' + encodeURIComponent(signature), {method: 'DELETE'});
-    await refreshAll();
+    return withButtonLoading(btn, async () => {
+      await fetch('./api/rejected?signature=' + encodeURIComponent(signature), {method: 'DELETE'});
+      await refreshAll();
+    });
   }
 
-  async function revokeRule(signature) {
+  async function revokeRule(signature, btn) {
     if (!confirm('Revoke this rule? The action will ask for your approval again.')) return;
-    await fetch('./api/rules?signature=' + encodeURIComponent(signature), {method: 'DELETE'});
-    await refreshAll();
+    return withButtonLoading(btn, async () => {
+      await fetch('./api/rules?signature=' + encodeURIComponent(signature), {method: 'DELETE'});
+      await refreshAll();
+    });
   }
 
-  async function clearActivityLogs() {
+  async function clearActivityLogs(btn) {
     if (!confirm('Clear all agent activity logs? This frees database storage.')) return;
-    await fetch('./api/logs', {method: 'DELETE'});
-    allLoadedLogs = [];
-    loadedLogIds.clear();
-    $('logsList').innerHTML = '';
-    await refreshAll();
+    return withButtonLoading(btn || $('clearLogsBtn'), async () => {
+      await fetch('./api/logs', {method: 'DELETE'});
+      allLoadedLogs = [];
+      loadedLogIds.clear();
+      $('logsList').innerHTML = '';
+      await refreshAll();
+    });
   }
 
-  async function dismissInsight(insightId) {
-    await post('./api/insights/' + encodeURIComponent(insightId) + '/dismiss', {});
-    await refreshAll();
+  async function dismissInsight(insightId, btn) {
+    return withButtonLoading(btn, async () => {
+      await post('./api/insights/' + encodeURIComponent(insightId) + '/dismiss', {});
+      await refreshAll();
+    });
   }
 
-  async function dismissAllInsights() {
+  async function dismissAllInsights(btn) {
     if (!confirm('Mark all active insights as read / dismissed?')) return;
-    await post('./api/insights/dismiss_all', {});
-    await refreshAll();
+    return withButtonLoading(btn || $('dismissAllInsightsBtn'), async () => {
+      await post('./api/insights/dismiss_all', {});
+      await refreshAll();
+    });
   }
 
-  async function rejectInsightPrompt(insightId) {
+  async function rejectInsightPrompt(insightId, btn) {
     const reason = prompt('Why do you want to reject this recommendation? (Optional note so agents never suggest it again):', '');
     if (reason === null) return;
-    await post('./api/insights/' + encodeURIComponent(insightId) + '/reject', {reason: reason});
-    await refreshAll();
+    return withButtonLoading(btn, async () => {
+      await post('./api/insights/' + encodeURIComponent(insightId) + '/reject', {reason: reason});
+      await refreshAll();
+    });
   }
 
-  async function deleteInsight(insightId) {
+  async function deleteInsight(insightId, btn) {
     if (!confirm('Delete this insight permanently?')) return;
-    await fetch('./api/insights/' + encodeURIComponent(insightId), {method: 'DELETE'});
-    await refreshAll();
+    return withButtonLoading(btn, async () => {
+      await fetch('./api/insights/' + encodeURIComponent(insightId), {method: 'DELETE'});
+      await refreshAll();
+    });
   }
 
-  async function clearAllInsights() {
+  async function clearAllInsights(btn) {
     if (!confirm('Delete all insights permanently?')) return;
-    await fetch('./api/insights', {method: 'DELETE'});
-    await refreshAll();
+    return withButtonLoading(btn || $('clearAllInsightsBtn'), async () => {
+      await fetch('./api/insights', {method: 'DELETE'});
+      await refreshAll();
+    });
   }
 
-  async function unblockRejectedInsight(insightId) {
+  async function unblockRejectedInsight(insightId, btn) {
     if (!confirm('Unblock this recommendation? Agents will be permitted to analyze and suggest it again.')) return;
-    await fetch('./api/insights/rejected/' + encodeURIComponent(insightId), {method: 'DELETE'});
-    await refreshAll();
+    return withButtonLoading(btn, async () => {
+      await fetch('./api/insights/rejected/' + encodeURIComponent(insightId), {method: 'DELETE'});
+      await refreshAll();
+    });
   }
 
-  async function addContextNote() {
+  async function addContextNote(btn) {
     const content = $('contextNoteInput').value.trim();
     if (!content) return;
     const ents = $('contextEntitiesInput').value;
     const related_entities = ents ? ents.split(',').map(s => s.trim()).filter(Boolean) : [];
-    await post('./api/context-notes', {content, scope: 'global', related_entities});
-    $('contextNoteInput').value = ''; $('contextEntitiesInput').value = '';
-    await refreshAll();
+    return withButtonLoading(btn, async () => {
+      await post('./api/context-notes', {content, scope: 'global', related_entities});
+      $('contextNoteInput').value = ''; $('contextEntitiesInput').value = '';
+      await refreshAll();
+    });
   }
 
-  async function deleteContextNote(id) { await fetch('./api/context-notes/' + id, {method: 'DELETE'}); await refreshAll(); }
+  async function deleteContextNote(id, btn) {
+    return withButtonLoading(btn, async () => {
+      await fetch('./api/context-notes/' + id, {method: 'DELETE'});
+      await refreshAll();
+    });
+  }
 
-  async function addIgnoredTarget() {
+  async function addIgnoredTarget(btn) {
     const pattern = $('ignorePatternInput').value.trim();
     if (!pattern) return;
-    await post('./api/ignore-list', {pattern, reason: $('ignoreReasonInput').value.trim()});
-    $('ignorePatternInput').value = ''; $('ignoreReasonInput').value = '';
-    await refreshAll();
+    return withButtonLoading(btn, async () => {
+      await post('./api/ignore-list', {pattern, reason: $('ignoreReasonInput').value.trim()});
+      $('ignorePatternInput').value = ''; $('ignoreReasonInput').value = '';
+      await refreshAll();
+    });
   }
 
-  async function deleteIgnoredTarget(id) { await fetch('./api/ignore-list/' + id, {method: 'DELETE'}); await refreshAll(); }
+  async function deleteIgnoredTarget(id, btn) {
+    return withButtonLoading(btn, async () => {
+      await fetch('./api/ignore-list/' + id, {method: 'DELETE'});
+      await refreshAll();
+    });
+  }
 
-  async function addMinChange() {
+  async function addMinChange(btn) {
     const pattern = $('minChangePatternInput').value.trim();
     const min_change = parseFloat($('minChangeValueInput').value);
     if (!pattern || !(min_change > 0)) return;
-    await post('./api/min-change', {pattern, min_change, reason: $('minChangeReasonInput').value.trim()});
-    $('minChangePatternInput').value = ''; $('minChangeValueInput').value = ''; $('minChangeReasonInput').value = '';
-    await refreshAll();
+    return withButtonLoading(btn, async () => {
+      await post('./api/min-change', {pattern, min_change, reason: $('minChangeReasonInput').value.trim()});
+      $('minChangePatternInput').value = ''; $('minChangeValueInput').value = ''; $('minChangeReasonInput').value = '';
+      await refreshAll();
+    });
   }
 
-  async function deleteMinChange(id) { await fetch('./api/min-change/' + id, {method: 'DELETE'}); await refreshAll(); }
-
-  async function setAgentEnabled(agentId, enabled) {
-    const res = await post('./api/agents/' + encodeURIComponent(agentId) + '/enabled', {enabled});
-    if (!res.ok) {
-      const b = await res.json().catch(() => ({}));
-      alert(typeof b.detail === 'string' ? b.detail : 'Could not update the agent.');
-    }
-    await refreshAll();
+  async function deleteMinChange(id, btn) {
+    return withButtonLoading(btn, async () => {
+      await fetch('./api/min-change/' + id, {method: 'DELETE'});
+      await refreshAll();
+    });
   }
 
-  async function deleteCustomAgent(agentId, name) {
+  async function setAgentEnabled(agentId, enabled, btn) {
+    return withButtonLoading(btn, async () => {
+      const res = await post('./api/agents/' + encodeURIComponent(agentId) + '/enabled', {enabled});
+      if (!res.ok) {
+        const b = await res.json().catch(() => ({}));
+        alert(typeof b.detail === 'string' ? b.detail : 'Could not update the agent.');
+      }
+      await refreshAll();
+    });
+  }
+
+  async function deleteCustomAgent(agentId, name, btn) {
     if (!confirm('Delete custom agent "' + (name || agentId) + '"? This cannot be undone.')) return;
-    const res = await fetch('./api/agents/' + encodeURIComponent(agentId), {method: 'DELETE'});
-    if (!res.ok) {
-      const b = await res.json().catch(() => ({}));
-      alert(typeof b.detail === 'string' ? b.detail : 'Could not delete the agent.');
-    }
-    await refreshAll();
+    return withButtonLoading(btn, async () => {
+      const res = await fetch('./api/agents/' + encodeURIComponent(agentId), {method: 'DELETE'});
+      if (!res.ok) {
+        const b = await res.json().catch(() => ({}));
+        alert(typeof b.detail === 'string' ? b.detail : 'Could not delete the agent.');
+      }
+      await refreshAll();
+    });
   }
 
-  async function loadMoreLogs() {
+  async function loadMoreLogs(btn) {
     if (isLoadingMoreLogs) return;
     isLoadingMoreLogs = true;
-    try {
-      const res = await fetch('./api/logs?offset=' + allLoadedLogs.length + '&limit=10');
-      const json = await res.json();
-      totalServerLogs = json.total;
-      const fresh = (json.logs || []).filter(l => !loadedLogIds.has(l.run_id));
-      fresh.forEach(l => { allLoadedLogs.push(l); loadedLogIds.add(l.run_id); });
-      $('logsList').insertAdjacentHTML('beforeend', fresh.map(renderLog).join(''));
-      $('logsLoadMoreContainer').style.display = allLoadedLogs.length < totalServerLogs ? 'block' : 'none';
-      $('loadMoreLogsBtn').textContent = `Load older activity (${allLoadedLogs.length} of ${totalServerLogs})`;
-    } catch (e) { /* keep button available for retry */ }
-    finally { isLoadingMoreLogs = false; }
+    return withButtonLoading(btn || $('loadMoreLogsBtn'), async () => {
+      try {
+        const res = await fetch('./api/logs?offset=' + allLoadedLogs.length + '&limit=10');
+        const json = await res.json();
+        totalServerLogs = json.total;
+        const fresh = (json.logs || []).filter(l => !loadedLogIds.has(l.run_id));
+        fresh.forEach(l => { allLoadedLogs.push(l); loadedLogIds.add(l.run_id); });
+        $('logsList').insertAdjacentHTML('beforeend', fresh.map(renderLog).join(''));
+        $('logsLoadMoreContainer').style.display = allLoadedLogs.length < totalServerLogs ? 'block' : 'none';
+        $('loadMoreLogsBtn').textContent = `Load older activity (${allLoadedLogs.length} of ${totalServerLogs})`;
+      } catch (e) { /* keep button available for retry */ }
+      finally { isLoadingMoreLogs = false; }
+    });
   }
 
   const logsScroll = $('logsScrollContainer');
@@ -2472,10 +2710,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
   } catch (e) {}
   refreshAll();
-  setInterval(refreshAll, 5000);
-  setInterval(() => { const pane = $('pane-learned'); if (pane && pane.classList.contains('active')) refreshLearned(); }, 15000);
-  setInterval(() => { const pane = $('pane-research'); if (pane && pane.classList.contains('active')) refreshResearch(); }, 10000);
-  setInterval(() => { const pane = $('pane-memory'); if (pane && pane.classList.contains('active')) refreshWatches(); }, 30000);
+  setInterval(() => { if (!activeActionCount) refreshAll(); }, 5000);
+  setInterval(() => { const pane = $('pane-learned'); if (pane && pane.classList.contains('active') && !activeActionCount) refreshLearned(); }, 15000);
+  setInterval(() => { const pane = $('pane-research'); if (pane && pane.classList.contains('active') && !activeActionCount) refreshResearch(); }, 10000);
+  setInterval(() => { const pane = $('pane-memory'); if (pane && pane.classList.contains('active') && !activeActionCount) refreshWatches(); }, 30000);
 </script>
 </body>
 </html>

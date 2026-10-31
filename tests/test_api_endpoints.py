@@ -35,6 +35,15 @@ class TestControlPlaneAPI(unittest.IsolatedAsyncioTestCase):
             res_html = await client.get("/")
             self.assertEqual(res_html.status_code, 200)
             self.assertIn("HA AI Brain", res_html.text)
+            self.assertIn(".btn-spinner", res_html.text)
+            self.assertIn("btn-loading", res_html.text)
+            self.assertIn("withButtonLoading", res_html.text)
+            self.assertIn("resolveButton", res_html.text)
+            self.assertEqual(
+                res_html.text.count("<div"),
+                res_html.text.count("</div>"),
+                "Dashboard HTML must have balanced <div> and </div> tags",
+            )
 
             import re, shutil, subprocess
             script_match = re.search(r"<script>(.*?)</script>", res_html.text, re.DOTALL)
