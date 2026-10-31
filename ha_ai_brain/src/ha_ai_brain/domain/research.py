@@ -82,6 +82,11 @@ class KnowledgeItem(BaseModel):
     decided_at: datetime | None = None
 
 
+def is_rejected_topic(item: KnowledgeItem) -> bool:
+    """True for the stand-in record made when an upcoming topic is rejected before any research (it reuses the topic's id)."""
+    return item.status == "rejected" and bool(item.topic_id) and item.item_id == item.topic_id
+
+
 def _unlist(text: str) -> str:
     """Older findings stored a list answer as its Python repr, e.g. "['Do this', 'Then that']": turn it back into numbered steps."""
     raw = text.strip()

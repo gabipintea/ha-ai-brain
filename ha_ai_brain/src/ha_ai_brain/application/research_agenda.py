@@ -19,6 +19,7 @@ from ha_ai_brain.domain.research import (
     build_research_prompts,
     capability_profile,
     device_seed_topics,
+    is_rejected_topic,
     is_similar_title,
     parse_findings,
     parse_topics,
@@ -251,6 +252,51 @@ class ResearchAgenda:
         )
         await self.store.save_item(item)
         return item
+
+    async def _rejected_topics_like(self, item: KnowledgeItem) -> list[ResearchTopic]:
+        """Rejected topic records that belong to a rejected item: the same topic plus pending twins rejected along with it."""
+        titles = [t for t in (item.title, item.topic_title) if t]
+        return [
+            t
+            for t in await self.store.topics(status="rejected")
+            if t.topic_id == item.topic_id or any(is_similar_title(t.title, title) for title in titles)
+        ]
+
+    async def restore_rejected(self, item_id: str) -> dict[str, Any] | None:
+        """Undo a rejection. A rejected upcoming topic returns to the upcoming list; rejected knowledge returns to the review list."""
+        item = await self.store.get_item(item_id)
+        if item is None or item.status != "rejected":
+            return None
+        if is_rejected_topic(item):
+            topic = await self.store.get_topic(item.topic_id) or ResearchTopic(
+                topic_id=item.topic_id,
+                agent_id=item.agent_id,
+                title=item.title,
+                question=item.summary,
+                origin="ai_planned",
+            )
+            topic.status = "pending"
+            topic.note = ""
+            await self.store.save_topic(topic)
+            await self.store.delete_item(item.item_id)
+            return {"status": "restored", "kind": "topic", "topic_id": topic.topic_id}
+        item.status = "proposed"
+        item.decided_at = None
+        await self.store.save_item(item)
+        return {"status": "restored", "kind": "knowledge", "item_id": item.item_id}
+
+    async def unblock_rejected(self, item_id: str) -> dict[str, Any] | None:
+        """Forget a rejection completely, so the subject may be planned and researched again in the future."""
+        item = await self.store.get_item(item_id)
+        if item is None or item.status != "rejected":
+            return None
+        kind = "topic" if is_rejected_topic(item) else "knowledge"
+        for topic in await self._rejected_topics_like(item):
+            await self.store.delete_topic(topic.topic_id)
+        if kind == "knowledge":
+            await self.store.delete_topic(item.topic_id)  # the researched topic record would still block the subject
+        await self.store.delete_item(item.item_id)
+        return {"status": "unblocked", "kind": kind, "item_id": item.item_id}
 
     async def plan_topics(self, agent: AgentSpec, profile: dict[str, Any], inventory: list[dict[str, Any]]) -> int:
         known = await self.store.known_titles()

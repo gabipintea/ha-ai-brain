@@ -24,6 +24,7 @@ from ha_ai_brain.application.orchestrator import BrainOrchestrator
 from ha_ai_brain.config import AutonomyLevel, BrainSettings, FallbackPolicy, OperatingMode
 from ha_ai_brain.domain.watches import WatchRule
 from ha_ai_brain.domain.models import AgentSpec, FeedbackEpisode, FeedbackPolarity, IgnoredTarget, UserContextNote
+from ha_ai_brain.domain.research import is_rejected_topic
 from ha_ai_brain.ports.llm import LLMProviderPort
 
 
@@ -405,7 +406,7 @@ def create_app(settings: BrainSettings | None = None) -> Any:
             "agent_names": agents,
             "proposed": [i.model_dump(mode="json") for i in proposed],
             "approved": [i.model_dump(mode="json") for i in approved],
-            "rejected": [i.model_dump(mode="json") for i in rejected],
+            "rejected": [{**i.model_dump(mode="json"), "kind": "topic" if is_rejected_topic(i) else "knowledge"} for i in rejected],
             "rejected_count": len(rejected),
         }
 
@@ -433,6 +434,24 @@ def create_app(settings: BrainSettings | None = None) -> Any:
             raise HTTPException(status_code=404, detail="Research topic not found")
         orchestrator.invalidate_context_caches()
         return {"status": "rejected", "topic_id": topic_id, "item": item.model_dump(mode="json")}
+
+    @app.post("/api/research/items/{item_id}/restore")
+    async def restore_rejected_research(item_id: str) -> dict[str, Any]:
+        """Undo a rejection: a rejected upcoming topic goes back to Upcoming topics, rejected knowledge back to review."""
+        result = await orchestrator.research.restore_rejected(item_id)
+        if result is None:
+            raise HTTPException(status_code=404, detail="Rejected research not found")
+        orchestrator.invalidate_context_caches()
+        return result
+
+    @app.post("/api/research/items/{item_id}/unblock")
+    async def unblock_rejected_research(item_id: str) -> dict[str, Any]:
+        """Forget a rejection entirely so agents may plan and research the subject again."""
+        result = await orchestrator.research.unblock_rejected(item_id)
+        if result is None:
+            raise HTTPException(status_code=404, detail="Rejected research not found")
+        orchestrator.invalidate_context_caches()
+        return result
 
     @app.post("/api/research/items/{item_id}/decision")
     async def decide_research_item(item_id: str, req: ResearchDecisionRequest) -> dict[str, Any]:

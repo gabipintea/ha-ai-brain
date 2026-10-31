@@ -2,6 +2,16 @@
 
 All notable changes to **HA AI Brain** are documented in this file.
 
+## 0.2.15 - 2026-10-31
+
+### Added
+- **Restore and Unblock buttons on Rejected research.** Every item in *Research → Rejected research* now has **Restore** (undoes the rejection: a rejected upcoming topic goes back to *Upcoming topics*, a rejected finding goes back to *Waiting for your review* with all its details) and **Unblock** (forgets the rejection completely, so agents may plan and research that subject again in the future; asks for confirmation).
+- **Rejected topic / Rejected knowledge tags.** Items in *Rejected research* are now labelled **Rejected topic** (rejected from *Upcoming topics* before being researched) or **Rejected knowledge** (a researched finding you rejected).
+
+### Changed
+- **Every list on the Research tab now scrolls** like the lists on the other tabs (*Waiting for your review*, *Approved knowledge*, *Upcoming topics*, *Rejected research*), and keeps its scroll position when the page refreshes itself.
+- The **Disabled** tag on agents in *Settings → Active Specialized Domain Agents* is now red instead of blue.
+
 ## 0.2.14 - 2026-10-31
 
 ### Added

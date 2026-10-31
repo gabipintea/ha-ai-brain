@@ -22,6 +22,7 @@ from ha_ai_brain.domain.research import (
     ResearchTopic,
     capability_profile,
     device_seed_topics,
+    is_rejected_topic,
     is_similar_title,
     parse_findings,
     parse_topics,
@@ -380,6 +381,59 @@ class TestResearchAgenda(unittest.IsolatedAsyncioTestCase):
             await self.agenda.run_topic("missing_topic")
 
 
+    async def test_restore_and_unblock_rejected_research(self) -> None:
+        states = await self.orch.smart_home.get_all_states()
+        profile = capability_profile(states, INVENTORY, AGENT)
+        await self.agenda.plan_topics(AGENT, profile, INVENTORY)
+        pending = await self.agenda.store.topics("pending", AGENT.agent_id)
+        seed_topic = next(t for t in pending if t.origin == "device_seed")
+        ai_topic = next(t for t in pending if t.origin == "ai_planned")
+
+        # Rejected topic: Restore puts it back into Upcoming topics and clears the rejection record
+        rejected = await self.agenda.reject_topic(seed_topic.topic_id)
+        assert rejected is not None
+        self.assertTrue(is_rejected_topic(rejected))
+        self.assertNotIn(seed_topic.topic_id, [t.topic_id for t in await self.agenda.store.topics("pending")])
+        self.assertEqual(await self.agenda.restore_rejected(seed_topic.topic_id), {"status": "restored", "kind": "topic", "topic_id": seed_topic.topic_id})
+        self.assertIn(seed_topic.topic_id, [t.topic_id for t in await self.agenda.store.topics("pending")])
+        self.assertEqual(await self.agenda.store.items(status="rejected"), [])
+        self.assertIsNone(await self.agenda.restore_rejected(seed_topic.topic_id))  # nothing rejected any more
+        self.assertIsNone(await self.agenda.restore_rejected("missing"))
+
+        # Rejected topic: Unblock forgets it so planning may propose it again
+        await self.agenda.reject_topic(seed_topic.topic_id)
+        self.assertIn(seed_topic.title, await self.agenda.store.known_titles())
+        self.assertEqual((await self.agenda.unblock_rejected(seed_topic.topic_id) or {}).get("kind"), "topic")
+        self.assertNotIn(seed_topic.title, await self.agenda.store.known_titles())
+        self.assertIsNone(await self.agenda.store.get_topic(seed_topic.topic_id))
+        await self.agenda.plan_topics(AGENT, profile, INVENTORY)
+        self.assertIn(seed_topic.topic_id, [t.topic_id for t in await self.agenda.store.topics("pending")])
+
+        # Rejected knowledge: Restore returns the whole finding to Waiting for your review
+        await self.agenda.run_topic(ai_topic.topic_id)
+        finding = (await self.agenda.store.items(status="proposed"))[0]
+        await self.agenda.decide(finding.item_id, "reject")
+        self.assertFalse(is_rejected_topic((await self.agenda.store.get_item(finding.item_id))))  # type: ignore[arg-type]
+        self.assertEqual((await self.agenda.restore_rejected(finding.item_id) or {}).get("kind"), "knowledge")
+        restored = await self.agenda.store.get_item(finding.item_id)
+        assert restored is not None
+        self.assertEqual((restored.status, restored.decided_at, restored.key_points, restored.how_to_apply), ("proposed", None, finding.key_points, finding.how_to_apply))
+
+        # Rejected knowledge: Unblock removes the finding and the researched topic so the subject is no longer blocked
+        await self.agenda.decide(finding.item_id, "reject")
+        self.assertIn(ai_topic.title, await self.agenda.store.known_titles())
+        self.assertEqual((await self.agenda.unblock_rejected(finding.item_id) or {}).get("kind"), "knowledge")
+        self.assertIsNone(await self.agenda.store.get_item(finding.item_id))
+        self.assertNotIn(ai_topic.title, await self.agenda.store.known_titles())
+        self.assertNotIn(finding.title, await self.agenda.store.known_titles())
+        # Only rejected research can be restored or unblocked
+        await self.agenda.run_topic(seed_topic.topic_id)
+        waiting = (await self.agenda.store.items(status="proposed"))[0]
+        self.assertIsNone(await self.agenda.restore_rejected(waiting.item_id))
+        self.assertIsNone(await self.agenda.unblock_rejected(waiting.item_id))
+        self.assertIsNone(await self.agenda.unblock_rejected("missing"))
+
+
 class TestResearchApi(unittest.IsolatedAsyncioTestCase):
     async def test_endpoints(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -441,6 +495,32 @@ class TestResearchApi(unittest.IsolatedAsyncioTestCase):
                 self.assertNotIn(t_rej, [t["topic_id"] for t in after_rej["backlog"]])
                 self.assertIn(t_rej_title, [i["title"] for i in after_rej["rejected"]])
                 self.assertEqual(after_rej["rejected_count"], len(after_rej["rejected"]))
+                self.assertEqual({i["title"]: i["kind"] for i in after_rej["rejected"]}[t_rej_title], "topic")
+
+                # Restore / Unblock on a rejected upcoming topic
+                self.assertEqual((await client.post(f"/api/research/items/{t_rej}/restore")).json()["kind"], "topic")
+                self.assertIn(t_rej, [t["topic_id"] for t in (await client.get("/api/research")).json()["backlog"]])
+                self.assertEqual((await client.post(f"/api/research/items/{t_rej}/restore")).status_code, 404)
+                await client.post(f"/api/research/topics/{t_rej}/reject")
+                self.assertEqual((await client.post(f"/api/research/items/{t_rej}/unblock")).json()["kind"], "topic")
+                after_unblock = (await client.get("/api/research")).json()
+                self.assertNotIn(t_rej, [t["topic_id"] for t in after_unblock["backlog"]])
+                self.assertNotIn(t_rej_title, [i["title"] for i in after_unblock["rejected"]])
+                self.assertEqual((await client.post(f"/api/research/items/{t_rej}/unblock")).status_code, 404)
+
+                # Restore / Unblock on rejected knowledge (the second finding, so the first stays for the checks below)
+                finding_id = after_rej["proposed"][1]["item_id"]
+                await client.post(f"/api/research/items/{finding_id}/decision", json={"decision": "reject"})
+                rejected_now = (await client.get("/api/research")).json()
+                self.assertEqual({i["item_id"]: i["kind"] for i in rejected_now["rejected"]}[finding_id], "knowledge")
+                self.assertEqual((await client.post(f"/api/research/items/{finding_id}/restore")).json()["kind"], "knowledge")
+                self.assertIn(finding_id, [i["item_id"] for i in (await client.get("/api/research")).json()["proposed"]])
+                await client.post(f"/api/research/items/{finding_id}/decision", json={"decision": "reject"})
+                self.assertEqual((await client.post(f"/api/research/items/{finding_id}/unblock")).json()["kind"], "knowledge")
+                final = (await client.get("/api/research")).json()
+                self.assertNotIn(finding_id, [i["item_id"] for i in final["proposed"] + final["rejected"]])
+                self.assertEqual((await client.post("/api/research/items/missing/restore")).status_code, 404)
+                self.assertEqual((await client.post("/api/research/items/missing/unblock")).status_code, 404)
 
                 item_id = after_rej["proposed"][0]["item_id"]
                 self.assertEqual((await client.post(f"/api/research/items/{item_id}/decision", json={"decision": "bogus"})).status_code, 422)

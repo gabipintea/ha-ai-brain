@@ -592,27 +592,27 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       <div class="card">
         <div class="card-head"><h2>Waiting for your review</h2><span class="pill warn" id="researchProposedCount">0</span></div>
         <div class="hint">Keep what looks useful and reject the rest. Rejected topics are never researched again. Items based on general AI knowledge are not checked against sources; judge them like advice from a knowledgeable friend.</div>
-        <div id="researchProposed" style="margin-top:8px;"></div>
+        <div id="researchProposed" class="scroll" style="margin-top:8px;"></div>
       </div>
     </div>
     <div class="grid" style="margin-top:16px;">
       <div class="card">
         <div class="card-head"><h2>Approved knowledge</h2><span class="pill ok" id="researchApprovedCount">0</span></div>
         <div class="hint">Used by the matching agent in its reasoning.</div>
-        <div id="researchApproved" style="margin-top:8px;"></div>
+        <div id="researchApproved" class="scroll" style="margin-top:8px;"></div>
       </div>
     </div>
     <div class="grid" style="margin-top:16px;">
       <div class="card">
         <div class="card-head"><h2>Upcoming topics</h2></div>
-        <div id="researchBacklog" style="margin-top:8px;"></div>
+        <div id="researchBacklog" class="scroll" style="margin-top:8px;"></div>
       </div>
     </div>
     <div class="grid" style="margin-top:16px;">
       <div class="card">
         <div class="card-head"><h2>Rejected research</h2><span class="pill" id="researchRejectedCount">0</span></div>
-        <div class="hint">Topics and findings you rejected. Agents will not plan or research them again.</div>
-        <div id="researchRejected" style="margin-top:8px;"></div>
+        <div class="hint">Topics and findings you rejected. Agents will not plan or research them again. <b>Restore</b> puts a rejected topic back into Upcoming topics, or a rejected finding back into Waiting for your review. <b>Unblock</b> forgets the rejection completely, so agents may plan and research the subject again in the future.</div>
+        <div id="researchRejected" class="scroll" style="margin-top:8px;"></div>
       </div>
     </div>
   </div>
@@ -1476,7 +1476,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
               <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
                 <strong>${esc(a.name)}</strong>
                 <span class="pill">${a.is_custom ? 'Custom' : 'Built-in'}</span>
-                <span class="pill ${a.enabled ? 'ok' : ''}">${esc(a.enabled ? 'Active' : 'Disabled')}</span>
+                <span class="pill ${a.enabled ? 'ok' : 'danger'}">${esc(a.enabled ? 'Active' : 'Disabled')}</span>
               </div>
               <div class="muted" style="font-size:12px; margin-top:2px;">${esc(a.specialty)}</div>
             </div>
@@ -1848,11 +1848,13 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     const web = $('researchWebCheck'); if (document.activeElement !== web) { web.checked = !!d.web_search_enabled; web.disabled = !d.supports_web_search; }
     const iv = $('researchIntervalInput'); if (document.activeElement !== iv) iv.value = d.interval_days;
 
+    // Keep each list's scroll position when the page refreshes itself.
+    const setList = (id, html) => { const el = $(id); if (!el) return; const top = el.scrollTop; el.innerHTML = html; el.scrollTop = top; };
     $('researchProposedCount').textContent = (d.proposed || []).length;
-    $('researchProposed').innerHTML = (d.proposed || []).length ? d.proposed.map(i => renderResearchItem(i, names, true)).join('') : '<div class="empty">Nothing waiting for review.</div>';
+    setList('researchProposed', (d.proposed || []).length ? d.proposed.map(i => renderResearchItem(i, names, true)).join('') : '<div class="empty">Nothing waiting for review.</div>');
     $('researchApprovedCount').textContent = (d.approved || []).length;
-    $('researchApproved').innerHTML = (d.approved || []).length ? d.approved.map(i => renderResearchItem(i, names, false)).join('') : '<div class="empty">No approved knowledge yet.</div>';
-    $('researchBacklog').innerHTML = (d.backlog || []).length ? d.backlog.map(t => {
+    setList('researchApproved', (d.approved || []).length ? d.approved.map(i => renderResearchItem(i, names, false)).join('') : '<div class="empty">No approved knowledge yet.</div>');
+    setList('researchBacklog', (d.backlog || []).length ? d.backlog.map(t => {
       const busy = researchingTopicIds.has(t.topic_id);
       return `<div class="item" data-topic-id="${esc(t.topic_id)}">
         <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
@@ -1866,18 +1868,24 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           <button class="danger" data-id="${esc(t.topic_id)}" ${busy ? 'disabled' : ''} onclick="rejectResearchTopic(this.dataset.id, this)">Reject</button>
         </div>
       </div>`;
-    }).join('') : '<div class="empty">No topics queued. The agents plan new ones before each run.</div>';
-    if ($('researchRejectedCount')) $('researchRejectedCount').textContent = (d.rejected || []).length;
-    if ($('researchRejected')) {
-      $('researchRejected').innerHTML = (d.rejected || []).length ? d.rejected.map(i => `<div class="item">
+    }).join('') : '<div class="empty">No topics queued. The agents plan new ones before each run.</div>');
+    $('researchRejectedCount').textContent = (d.rejected || []).length;
+    setList('researchRejected', (d.rejected || []).length ? d.rejected.map(i => {
+      const isTopic = i.kind === 'topic';
+      return `<div class="item">
         <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
           <strong>${esc(i.title)}</strong>
           <span class="pill">${esc(names[i.agent_id] || i.agent_id)}</span>
-          ${i.decided_at ? `<span class="muted" style="font-size:0.78rem;">Rejected ${esc(new Date(i.decided_at).toLocaleDateString())}</span>` : ''}
+          <span class="pill ${isTopic ? 'warn' : 'danger'}" title="${isTopic ? 'Rejected before it was researched' : 'Rejected after it was researched'}">${isTopic ? 'Rejected topic' : 'Rejected knowledge'}</span>
+          ${i.decided_at ? `<span class="muted" style="font-size:0.78rem;">${esc(new Date(i.decided_at).toLocaleDateString())}</span>` : ''}
         </div>
         ${i.summary ? `<div class="muted" style="margin-top:4px; font-size:0.84rem;">${esc(i.summary)}</div>` : ''}
-      </div>`).join('') : '<div class="empty">No rejected research.</div>';
-    }
+        <div class="btn-row">
+          <button class="primary" data-id="${esc(i.item_id)}" title="${isTopic ? 'Put it back into Upcoming topics' : 'Put it back into Waiting for your review'}" onclick="restoreRejectedResearch(this.dataset.id, this)">Restore</button>
+          <button class="icon" data-id="${esc(i.item_id)}" title="Forget this rejection so agents may plan and research it again" onclick="unblockRejectedResearch(this.dataset.id, this)">Unblock</button>
+        </div>
+      </div>`;
+    }).join('') : '<div class="empty">No rejected research.</div>');
   }
 
   const researchingTopicIds = new Set();
@@ -1911,6 +1919,24 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     if (!topicId) return;
     if (btn) btn.disabled = true;
     await post('./api/research/topics/' + encodeURIComponent(topicId) + '/reject', {});
+    await refreshResearch();
+    await refreshAll();
+  }
+
+  async function restoreRejectedResearch(itemId, btn) {
+    if (!itemId) return;
+    if (btn) btn.disabled = true;
+    const res = await post('./api/research/items/' + encodeURIComponent(itemId) + '/restore', {});
+    if (!res.ok) alert('Could not restore this research. Refresh and try again.');
+    await refreshResearch();
+    await refreshAll();
+  }
+  async function unblockRejectedResearch(itemId, btn) {
+    if (!itemId) return;
+    if (!confirm('Unblock this research? Agents may plan and research this subject again in the future.')) return;
+    if (btn) btn.disabled = true;
+    const res = await post('./api/research/items/' + encodeURIComponent(itemId) + '/unblock', {});
+    if (!res.ok) alert('Could not unblock this research. Refresh and try again.');
     await refreshResearch();
     await refreshAll();
   }

@@ -220,7 +220,7 @@ Every week (first run one day after start) each agent plays the specialist in it
 * your **real equipment** — manufacturer and model from the device registry ("known issues and recommended settings for …"), and
 * **the agent's own planning**, asking what a specialist would investigate for this home, avoiding anything researched or rejected before.
 
-Findings show the AI's confidence, concrete "apply it" steps in Home Assistant terms, caveats and any standards/documents the model says it relies on (unverified). **Nothing is used until you press Keep** in the *Research* tab; approved findings are given to the matching agent when it reasons. Each upcoming topic also has **Research now** (investigates it immediately and adds the finding to *Waiting for your review*), **Remove** (discards it from the queue without blocking it from being proposed again in the future) and **Reject** (adds it to rejected research so it is never proposed or researched again). Rejected subjects — whether rejected before or after research — are never researched again. It works with **any** AI provider.
+Findings show the AI's confidence, concrete "apply it" steps in Home Assistant terms, caveats and any standards/documents the model says it relies on (unverified). **Nothing is used until you press Keep** in the *Research* tab; approved findings are given to the matching agent when it reasons. Each upcoming topic also has **Research now** (investigates it immediately and adds the finding to *Waiting for your review*), **Remove** (discards it from the queue without blocking it from being proposed again in the future) and **Reject** (adds it to rejected research so it is never proposed or researched again). Rejected subjects — whether rejected before or after research — are never researched again. They are listed under **Rejected research**, each tagged **Rejected topic** (rejected from *Upcoming topics*, before it was researched) or **Rejected knowledge** (a researched finding you rejected, with all its details kept). Every rejected item has two buttons: **Restore** undoes the rejection (a rejected topic goes back to *Upcoming topics*, rejected knowledge goes back to *Waiting for your review*) and **Unblock** forgets the rejection completely, so agents may plan and research that subject again in the future. All lists on the *Research* tab scroll when they get long. It works with **any** AI provider.
 
 *Optional deep research (Google Gemini only, off by default):* adds web search with cited, clickable sources and a "% sourced" figure. More informed, but noticeably more tokens. If the search returns nothing, the normal research answers instead.
 
@@ -285,7 +285,7 @@ Any model supported by LiteLLM: Google Gemini, OpenAI, Anthropic, OpenRouter, lo
 | **Activity & Insights** | Agent run history; active insights and recommendations (dismiss, reject so it is never suggested again, delete); unusual-situation and watch alerts |
 | **Memory & Rules** | Always-allow rules (revoke); rejected actions and insights (unblock); **Create an automation**; **Watches**; context notes; ignore list; minimum-change rules |
 | **Learned** | Learning progress and statistics; recent autonomous actions (Undo); habits found (with *Propose automation*); muted alerts; automations the brain does not track yet (adopt); automation health with Disable / Enable / Delete |
-| **Research** | Research status and controls; findings waiting for your review; approved knowledge; upcoming topics (with *Research now*, *Remove*, and *Reject*); rejected research |
+| **Research** | Research status and controls; findings waiting for your review; approved knowledge; upcoming topics (with *Research now*, *Remove*, and *Reject*); rejected research (tagged *Rejected topic* or *Rejected knowledge*, with *Restore* and *Unblock*); every list scrolls |
 | **Settings** | Operating mode, autonomy, quota fallback, notification target; AI provider and quota; site context; Learning & Safety; list of agents (enable/disable built-in or custom agents, delete custom agents); **Backup & restore** |
 
 ---
@@ -409,7 +409,7 @@ Only `agent_id`, `name`, `specialty` and `description` are required; everything 
 
 **What an agent may do is decided by `controllable_domains`.** It is a hard permission enforced in code: any action in another domain is blocked ("blocked_domain_not_permitted" in the activity log), whatever the AI says. The special domain `automation` is the permission to *propose new native automations*; an agent without it is told so in its prompt and returns ideas as insights instead. The text in `goals` and `custom_domain_rules_prompt` only guides the AI; it never grants or removes permissions. The same goes for notes you write on the *Memory & Rules* tab and the note you type when rejecting a proposal (the latter is kept for the agent that made it).
 
-Save it as `/config/ha_ai_brain/agents/pool_agent.yaml` (that is the `ha_ai_brain/agents` folder inside your Home Assistant configuration folder; the **File editor**, **Samba share** or **SSH & Web Terminal** add-ons can reach it) and restart the add-on. Agents registered through `POST /api/agents/custom` are saved in the same folder. In *Settings → Active Specialized Domain Agents* you can **enable or disable** any built-in or custom agent (including the two bundled examples — a solar/energy agent and a brewery agent — which ship disabled), and **delete** custom agents.
+Save it as `/config/ha_ai_brain/agents/pool_agent.yaml` (that is the `ha_ai_brain/agents` folder inside your Home Assistant configuration folder; the **File editor**, **Samba share** or **SSH & Web Terminal** add-ons can reach it) and restart the add-on. Agents registered through `POST /api/agents/custom` are saved in the same folder. In *Settings → Active Specialized Domain Agents* (a disabled agent carries a red **Disabled** tag, an active one a green **Active** tag) you can **enable or disable** any built-in or custom agent (including the two bundled examples — a solar/energy agent and a brewery agent — which ship disabled), and **delete** custom agents.
 
 **Changing a built-in agent** (for example stopping the Repair & Diagnostics agent from proposing automations, or giving the Security agent permission to). Built-in agents are defined inside the add-on, but a file in `/config/ha_ai_brain/agents/` with the **same `agent_id`** replaces them. Save the complete definition with your change, then restart the add-on:
 
@@ -542,6 +542,9 @@ Yes — *Context for the Brain* ("the second fan is only for noise, never run it
 
 **Does research do anything on its own?**
 No. Research only produces proposals. A finding influences agents only after you press Keep, and you can remove it at any time.
+
+**I rejected a research topic or finding by mistake. Can I undo it?**
+Yes. Open the *Research* tab → *Rejected research*. **Restore** puts a rejected topic back into *Upcoming topics* and rejected knowledge back into *Waiting for your review*. **Unblock** forgets the rejection completely, so agents may plan and research the subject again later.
 
 **Do I need the optional deep research?**
 No. It adds cited web sources for those who want more informed (and costlier) findings. The normal research uses the general knowledge of your AI model.
