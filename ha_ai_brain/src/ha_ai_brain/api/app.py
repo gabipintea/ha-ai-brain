@@ -405,12 +405,34 @@ def create_app(settings: BrainSettings | None = None) -> Any:
             "agent_names": agents,
             "proposed": [i.model_dump(mode="json") for i in proposed],
             "approved": [i.model_dump(mode="json") for i in approved],
+            "rejected": [i.model_dump(mode="json") for i in rejected],
             "rejected_count": len(rejected),
         }
 
     @app.post("/api/research/run")
     async def run_research() -> dict[str, Any]:
         return await orchestrator.start_research_now()
+
+    @app.post("/api/research/topics/{topic_id}/run")
+    async def run_research_topic(topic_id: str) -> dict[str, Any]:
+        try:
+            return await orchestrator.research_topic_now(topic_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Research topic not found") from exc
+
+    @app.delete("/api/research/topics/{topic_id}")
+    async def remove_research_topic(topic_id: str) -> dict[str, Any]:
+        if not await orchestrator.research.remove_topic(topic_id):
+            raise HTTPException(status_code=404, detail="Research topic not found")
+        return {"status": "removed", "topic_id": topic_id}
+
+    @app.post("/api/research/topics/{topic_id}/reject")
+    async def reject_research_topic(topic_id: str) -> dict[str, Any]:
+        item = await orchestrator.research.reject_topic(topic_id)
+        if item is None:
+            raise HTTPException(status_code=404, detail="Research topic not found")
+        orchestrator.invalidate_context_caches()
+        return {"status": "rejected", "topic_id": topic_id, "item": item.model_dump(mode="json")}
 
     @app.post("/api/research/items/{item_id}/decision")
     async def decide_research_item(item_id: str, req: ResearchDecisionRequest) -> dict[str, Any]:

@@ -336,6 +336,49 @@ class TestResearchAgenda(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(await self.orch.research.due(datetime.now(UTC) + timedelta(days=2)))
         self.assertEqual(self.llm.researched, [])
 
+    async def test_upcoming_topic_actions_research_now_remove_and_reject(self) -> None:
+        states = await self.orch.smart_home.get_all_states()
+        profile = capability_profile(states, INVENTORY, AGENT)
+        planned = await self.agenda.plan_topics(AGENT, profile, INVENTORY)
+        self.assertEqual(planned, 2)  # 1 device seed + 1 AI-planned topic
+        pending = await self.agenda.store.topics("pending", AGENT.agent_id)
+        self.assertEqual(len(pending), 2)
+        seed_topic = next(t for t in pending if t.origin == "device_seed")
+        ai_topic = next(t for t in pending if t.origin == "ai_planned")
+
+        # 1. Remove discards the topic from upcoming topics, and allows it to be proposed again in the future
+        self.assertTrue(await self.agenda.remove_topic(seed_topic.topic_id))
+        self.assertFalse(await self.agenda.remove_topic(seed_topic.topic_id))
+        self.assertEqual([t.topic_id for t in await self.agenda.store.topics("pending")], [ai_topic.topic_id])
+        self.assertNotIn(seed_topic.title, await self.agenda.store.known_titles())
+        # Re-planning can propose the removed device seed topic again
+        await self.agenda.plan_topics(AGENT, profile, INVENTORY)
+        pending_after_replan = await self.agenda.store.topics("pending", AGENT.agent_id)
+        self.assertIn(seed_topic.topic_id, [t.topic_id for t in pending_after_replan])
+
+        # 2. Reject on a pending topic moves it to rejected knowledge/research and blocks future deduplication
+        rejected_item = await self.agenda.reject_topic(seed_topic.topic_id)
+        assert rejected_item is not None
+        self.assertEqual(rejected_item.status, "rejected")
+        self.assertEqual(rejected_item.title, seed_topic.title)
+        self.assertIsNone(await self.agenda.reject_topic("nonexistent"))
+        self.assertNotIn(seed_topic.topic_id, [t.topic_id for t in await self.agenda.store.topics("pending")])
+        self.assertIn(seed_topic.title, [i.title for i in await self.agenda.store.items(status="rejected")])
+        self.assertIn(seed_topic.title, await self.agenda.store.known_titles())
+        # Re-planning must NOT re-propose the rejected topic
+        await self.agenda.plan_topics(AGENT, profile, INVENTORY)
+        self.assertNotIn(seed_topic.topic_id, [t.topic_id for t in await self.agenda.store.topics("pending")])
+
+        # 3. Research now on a pending topic researches it immediately and adds findings to "Waiting for your review"
+        res = await self.agenda.run_topic(ai_topic.topic_id)
+        self.assertEqual((res["status"], res["findings"]), ("completed", 1))
+        self.assertNotIn(ai_topic.topic_id, [t.topic_id for t in await self.agenda.store.topics("pending")])
+        proposed = await self.agenda.store.items(status="proposed")
+        self.assertEqual(len(proposed), 1)
+        self.assertEqual(proposed[0].topic_id, ai_topic.topic_id)
+        with self.assertRaises(KeyError):
+            await self.agenda.run_topic("missing_topic")
+
 
 class TestResearchApi(unittest.IsolatedAsyncioTestCase):
     async def test_endpoints(self) -> None:
@@ -345,15 +388,61 @@ class TestResearchApi(unittest.IsolatedAsyncioTestCase):
             llm = ScriptedLLM()
             orch.llm = llm
             orch.research.llm = llm
+
+            async def inventory() -> list[dict[str, Any]]:
+                return INVENTORY
+
+            orch.smart_home.get_device_inventory = inventory
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as client:
                 data = (await client.get("/api/research")).json()
-                for key in ("enabled", "can_research", "supports_web_search", "web_search_enabled", "proposed", "approved", "backlog", "next_run", "agent_names"):
+                for key in ("enabled", "can_research", "supports_web_search", "web_search_enabled", "proposed", "approved", "rejected", "backlog", "next_run", "agent_names"):
                     self.assertIn(key, data)
                 await orch.research.run(["climate_thermal_agent"])
                 data = (await client.get("/api/research")).json()
                 self.assertEqual(len(data["proposed"]), 1)
+                self.assertEqual(len(data["backlog"]), 1)
                 self.assertEqual((await client.get("/api/status")).json()["research_pending_review"], 1)
-                item_id = data["proposed"][0]["item_id"]
+
+                # Plan more topics so we can exercise Research now, Remove, and Reject via the HTTP API
+                states = await orch.smart_home.get_all_states()
+                agent = orch.registry.get_agent("climate_thermal_agent")
+                assert agent is not None
+                await orch.research.plan_topics(agent, capability_profile(states, INVENTORY, agent), INVENTORY)
+                await orch.research.plan_topics(agent, capability_profile(states, INVENTORY, agent), INVENTORY)
+                backlog = (await client.get("/api/research")).json()["backlog"]
+                self.assertGreaterEqual(len(backlog), 3)
+
+                # Button 1: Research now on an upcoming topic -> adds to Waiting for your review
+                t_run = backlog[0]["topic_id"]
+                run_resp = await client.post(f"/api/research/topics/{t_run}/run")
+                self.assertEqual(run_resp.status_code, 200)
+                self.assertEqual(run_resp.json()["status"], "completed")
+                self.assertEqual(run_resp.json()["findings"], 1)
+                self.assertEqual((await client.post("/api/research/topics/missing/run")).status_code, 404)
+                after_run = (await client.get("/api/research")).json()
+                self.assertEqual(len(after_run["proposed"]), 2)
+                self.assertNotIn(t_run, [t["topic_id"] for t in after_run["backlog"]])
+
+                # Button 2: Remove on an upcoming topic -> discards from backlog
+                t_rem = backlog[1]["topic_id"]
+                self.assertEqual((await client.delete(f"/api/research/topics/{t_rem}")).status_code, 200)
+                self.assertEqual((await client.delete(f"/api/research/topics/{t_rem}")).status_code, 404)
+                after_rem = (await client.get("/api/research")).json()
+                self.assertNotIn(t_rem, [t["topic_id"] for t in after_rem["backlog"]])
+
+                # Button 3: Reject on an upcoming topic -> removes from backlog and adds to rejected list
+                t_rej = backlog[2]["topic_id"]
+                t_rej_title = backlog[2]["title"]
+                rej_resp = await client.post(f"/api/research/topics/{t_rej}/reject")
+                self.assertEqual(rej_resp.status_code, 200)
+                self.assertEqual(rej_resp.json()["status"], "rejected")
+                self.assertEqual((await client.post("/api/research/topics/missing/reject")).status_code, 404)
+                after_rej = (await client.get("/api/research")).json()
+                self.assertNotIn(t_rej, [t["topic_id"] for t in after_rej["backlog"]])
+                self.assertIn(t_rej_title, [i["title"] for i in after_rej["rejected"]])
+                self.assertEqual(after_rej["rejected_count"], len(after_rej["rejected"]))
+
+                item_id = after_rej["proposed"][0]["item_id"]
                 self.assertEqual((await client.post(f"/api/research/items/{item_id}/decision", json={"decision": "bogus"})).status_code, 422)
                 self.assertEqual((await client.post(f"/api/research/items/{item_id}/decision", json={"decision": "approve"})).json()["status"], "approved")
                 self.assertEqual(len((await client.get("/api/research")).json()["approved"]), 1)

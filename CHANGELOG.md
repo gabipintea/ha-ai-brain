@@ -2,6 +2,11 @@
 
 All notable changes to **HA AI Brain** are documented in this file.
 
+## 0.2.14 - 2026-10-31
+
+### Added
+- **Research now, Remove, and Reject actions on upcoming research topics.** Each item in *Research → Upcoming topics* now has three buttons available at any time: **Research now** (investigates the topic immediately and adds the resulting findings to *Waiting for your review*), **Remove** (discards the topic from the queue without blocking it from being proposed again in future planning), and **Reject** (moves the topic to rejected research so neither it nor any similar topic is queued or researched again). A **Rejected research** card also lists all rejected topics and findings.
+
 ## 0.2.13 - 2026-10-31
 
 ### Added

@@ -79,14 +79,32 @@ class KnowledgeStore:
                 out.append(topic)
         return sorted(out, key=lambda t: t.created_at)
 
+    async def get_topic(self, topic_id: str) -> ResearchTopic | None:
+        raw = await self.memory.get_kv(TOPIC_PREFIX + topic_id)
+        if not raw:
+            return None
+        try:
+            return ResearchTopic.model_validate_json(raw)
+        except ValueError:
+            return None
+
     async def save_topic(self, topic: ResearchTopic) -> None:
         await self.memory.set_kv(TOPIC_PREFIX + topic.topic_id, topic.model_dump_json())
 
+    async def delete_topic(self, topic_id: str) -> bool:
+        if await self.memory.get_kv(TOPIC_PREFIX + topic_id) is None:
+            return False
+        await self.memory.delete_kv(TOPIC_PREFIX + topic_id)
+        return True
+
     async def known_titles(self) -> list[str]:
-        """Everything ever researched or rejected: new topics must differ from these."""
+        """Everything ever queued, researched or rejected: new topics must differ from these."""
         titles = [t.title for t in await self.topics()]
-        titles += [i.title for i in await self.items()] + [i.topic_title for i in await self.items() if i.topic_title]
-        return titles
+        for item in await self.items():
+            titles.append(item.title)
+            if item.topic_title:
+                titles.append(item.topic_title)
+        return list(dict.fromkeys(t for t in titles if t))
 
 
 async def approved_knowledge_for(memory: MemoryStorePort, agent_id: str, limit: int = 5) -> list[dict[str, Any]]:
@@ -175,7 +193,10 @@ class ResearchAgenda:
                     if not await self.budget_ok():
                         summary["status"] = "stopped_budget"
                         break
-                    found = await self.research_topic(agent, topic, profile)
+                    current = await self.store.get_topic(topic.topic_id)
+                    if current is None or current.status != "pending":
+                        continue
+                    found = await self.research_topic(agent, current, profile)
                     summary["topics_researched"] += 1
                     summary["findings"] += found
                     summary["skipped"] += 1 if found == 0 else 0
@@ -184,6 +205,52 @@ class ResearchAgenda:
         finally:
             self.running = False
         return summary
+
+    async def run_topic(self, topic_id: str) -> dict[str, Any]:
+        topic = await self.store.get_topic(topic_id)
+        if topic is None:
+            raise KeyError(topic_id)
+        if not self.llm.is_available:
+            return {"status": "unavailable", "message": "Research needs an AI provider. Configure one in Settings."}
+        agent = self.registry.get_agent(topic.agent_id) or AgentSpec(
+            agent_id=topic.agent_id,
+            name=topic.agent_id,
+            specialty="Smart home specialist",
+            description="Domain specialist",
+        )
+        states = await self.smart_home.get_all_states()
+        inventory = await self.smart_home.get_device_inventory()
+        profile = capability_profile(states, inventory, agent)
+        found = await self.research_topic(agent, topic, profile)
+        return {"status": "completed", "topic_id": topic.topic_id, "findings": found}
+
+    async def remove_topic(self, topic_id: str) -> bool:
+        return await self.store.delete_topic(topic_id)
+
+    async def reject_topic(self, topic_id: str) -> KnowledgeItem | None:
+        topic = await self.store.get_topic(topic_id)
+        if topic is None:
+            return None
+        topic.status = "rejected"
+        topic.note = "Rejected by homeowner."
+        await self.store.save_topic(topic)
+        for other in await self.store.topics(status="pending"):
+            if other.topic_id != topic.topic_id and is_similar_title(other.title, topic.title):
+                other.status = "rejected"
+                other.note = "Rejected by homeowner."
+                await self.store.save_topic(other)
+        item = KnowledgeItem(
+            item_id=topic.topic_id,
+            agent_id=topic.agent_id,
+            topic_id=topic.topic_id,
+            topic_title=topic.title,
+            title=topic.title,
+            summary=topic.question or topic.rationale or "Topic rejected before research.",
+            status="rejected",
+            decided_at=utc_now(),
+        )
+        await self.store.save_item(item)
+        return item
 
     async def plan_topics(self, agent: AgentSpec, profile: dict[str, Any], inventory: list[dict[str, Any]]) -> int:
         known = await self.store.known_titles()
@@ -206,7 +273,13 @@ class ResearchAgenda:
         return self.settings.research_web_search and self.llm.supports_web_search
 
     async def research_topic(self, agent: AgentSpec, topic: ResearchTopic, profile: dict[str, Any]) -> int:
-        known = [i.title for i in await self.store.items()]
+        existing_items = await self.store.items()
+        rejected_topics = await self.store.topics(status="rejected")
+        known = (
+            [i.title for i in existing_items]
+            + [i.topic_title for i in existing_items if i.topic_title and i.topic_id != topic.topic_id]
+            + [t.title for t in rejected_topics if t.topic_id != topic.topic_id]
+        )
         items: list[KnowledgeItem] = []
         grounded_answer = False
         if self.web_search_active:
@@ -243,6 +316,14 @@ class ResearchAgenda:
         item.status = "approved" if decision == "approve" else "rejected"
         item.decided_at = utc_now()
         await self.store.save_item(item)
+        if decision == "reject":
+            for other in await self.store.topics(status="pending"):
+                if other.topic_id == item.topic_id or is_similar_title(other.title, item.title) or (
+                    item.topic_title and is_similar_title(other.title, item.topic_title)
+                ):
+                    other.status = "rejected"
+                    other.note = "Rejected by homeowner."
+                    await self.store.save_topic(other)
         return item
 
     async def status(self) -> dict[str, Any]:
@@ -268,5 +349,5 @@ class ResearchAgenda:
                 for t in topics
                 if t.status == "pending"
             ][:30],
-            "researched_topics": sum(1 for t in topics if t.status != "pending"),
+            "researched_topics": sum(1 for t in topics if t.status in ("done", "skipped")),
         }

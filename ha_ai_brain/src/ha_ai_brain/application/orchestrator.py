@@ -2702,3 +2702,8 @@ class BrainOrchestrator:
             return {"status": "unavailable", "message": "Research needs an AI provider. Configure one in Settings."}
         self.spawn_background_task(self._run_research(), "ha_research_run")
         return {"status": "started"}
+
+    async def research_topic_now(self, topic_id: str) -> dict[str, Any]:
+        summary = await self.research.run_topic(topic_id)
+        self.learning.stats["research_findings"] += int(summary.get("findings", 0))
+        return summary

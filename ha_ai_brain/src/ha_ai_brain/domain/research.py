@@ -57,7 +57,7 @@ class ResearchTopic(BaseModel):
     queries: list[str] = Field(default_factory=list)
     rationale: str = ""
     origin: str = "ai_planned"  # device_seed | ai_planned
-    status: str = "pending"  # pending | done | skipped
+    status: str = "pending"  # pending | done | skipped | rejected
     note: str = ""
     created_at: datetime = Field(default_factory=utc_now)
 

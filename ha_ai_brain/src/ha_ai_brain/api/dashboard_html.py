@@ -608,6 +608,13 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         <div id="researchBacklog" style="margin-top:8px;"></div>
       </div>
     </div>
+    <div class="grid" style="margin-top:16px;">
+      <div class="card">
+        <div class="card-head"><h2>Rejected research</h2><span class="pill" id="researchRejectedCount">0</span></div>
+        <div class="hint">Topics and findings you rejected. Agents will not plan or research them again.</div>
+        <div id="researchRejected" style="margin-top:8px;"></div>
+      </div>
+    </div>
   </div>
 
   <!-- TAB 4: Settings -->
@@ -1845,7 +1852,67 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     $('researchProposed').innerHTML = (d.proposed || []).length ? d.proposed.map(i => renderResearchItem(i, names, true)).join('') : '<div class="empty">Nothing waiting for review.</div>';
     $('researchApprovedCount').textContent = (d.approved || []).length;
     $('researchApproved').innerHTML = (d.approved || []).length ? d.approved.map(i => renderResearchItem(i, names, false)).join('') : '<div class="empty">No approved knowledge yet.</div>';
-    $('researchBacklog').innerHTML = (d.backlog || []).length ? d.backlog.map(t => `<div class="item"><strong>${esc(t.title)}</strong> <span class="pill">${esc(names[t.agent_id] || t.agent_id)}</span> <span class="muted" style="font-size:0.78rem;">${t.origin === 'device_seed' ? 'from your equipment' : 'planned by the agent'}</span></div>`).join('') : '<div class="empty">No topics queued. The agents plan new ones before each run.</div>';
+    $('researchBacklog').innerHTML = (d.backlog || []).length ? d.backlog.map(t => {
+      const busy = researchingTopicIds.has(t.topic_id);
+      return `<div class="item" data-topic-id="${esc(t.topic_id)}">
+        <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
+          <strong>${esc(t.title)}</strong>
+          <span class="pill">${esc(names[t.agent_id] || t.agent_id)}</span>
+          <span class="muted" style="font-size:0.78rem;">${t.origin === 'device_seed' ? 'from your equipment' : 'planned by the agent'}</span>
+        </div>
+        <div class="btn-row">
+          <button class="primary" data-id="${esc(t.topic_id)}" ${busy ? 'disabled' : ''} onclick="researchTopicNow(this.dataset.id, this)">${busy ? 'Researching...' : 'Research now'}</button>
+          <button class="icon" data-id="${esc(t.topic_id)}" ${busy ? 'disabled' : ''} onclick="removeResearchTopic(this.dataset.id, this)">Remove</button>
+          <button class="danger" data-id="${esc(t.topic_id)}" ${busy ? 'disabled' : ''} onclick="rejectResearchTopic(this.dataset.id, this)">Reject</button>
+        </div>
+      </div>`;
+    }).join('') : '<div class="empty">No topics queued. The agents plan new ones before each run.</div>';
+    if ($('researchRejectedCount')) $('researchRejectedCount').textContent = (d.rejected || []).length;
+    if ($('researchRejected')) {
+      $('researchRejected').innerHTML = (d.rejected || []).length ? d.rejected.map(i => `<div class="item">
+        <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
+          <strong>${esc(i.title)}</strong>
+          <span class="pill">${esc(names[i.agent_id] || i.agent_id)}</span>
+          ${i.decided_at ? `<span class="muted" style="font-size:0.78rem;">Rejected ${esc(new Date(i.decided_at).toLocaleDateString())}</span>` : ''}
+        </div>
+        ${i.summary ? `<div class="muted" style="margin-top:4px; font-size:0.84rem;">${esc(i.summary)}</div>` : ''}
+      </div>`).join('') : '<div class="empty">No rejected research.</div>';
+    }
+  }
+
+  const researchingTopicIds = new Set();
+
+  async function researchTopicNow(topicId, btn) {
+    if (!topicId || researchingTopicIds.has(topicId)) return;
+    researchingTopicIds.add(topicId);
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = 'Researching...';
+    }
+    try {
+      const res = await post('./api/research/topics/' + encodeURIComponent(topicId) + '/run', {});
+      const r = await res.json().catch(() => ({}));
+      if (!res.ok || r.status === 'unavailable') {
+        alert(r.message || r.detail || 'Could not research this topic.');
+      }
+    } finally {
+      researchingTopicIds.delete(topicId);
+      await refreshResearch();
+      await refreshAll();
+    }
+  }
+  async function removeResearchTopic(topicId, btn) {
+    if (!topicId) return;
+    if (btn) btn.disabled = true;
+    await fetch('./api/research/topics/' + encodeURIComponent(topicId), {method: 'DELETE'});
+    await refreshResearch();
+  }
+  async function rejectResearchTopic(topicId, btn) {
+    if (!topicId) return;
+    if (btn) btn.disabled = true;
+    await post('./api/research/topics/' + encodeURIComponent(topicId) + '/reject', {});
+    await refreshResearch();
+    await refreshAll();
   }
 
   async function runResearchNow() {

@@ -40,7 +40,7 @@
 * **Regular analysis of the whole picture**: every few hours each agent studies your entities, trends and existing automations and proposes insights, recommendations and new automation ideas — even when nothing is wrong (for example condensation risk from indoor humidity/temperature and the outdoor temperature). Calculations run in a sandbox.
 * Real-time reactions to unusual events.
 * In real time, only called when local learning says it is worth it — routine events, normal readings and things already automated never reach the AI.
-* Weekly **research homework**: each agent proposes practical knowledge for your equipment and setup, usable only after you approve it. Works with any AI provider; optional cited web research for Google Gemini.
+* Weekly **research homework**: each agent proposes practical knowledge for your equipment and setup, usable only after you approve it (upcoming topics can be researched on demand, removed, or rejected). Works with any AI provider; optional cited web research for Google Gemini.
 
 **You stay in control**
 * Shadow / Co-pilot / Autonomous — globally and per device type (for example lights autonomous, locks co-pilot).

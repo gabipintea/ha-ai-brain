@@ -220,7 +220,7 @@ Every week (first run one day after start) each agent plays the specialist in it
 * your **real equipment** — manufacturer and model from the device registry ("known issues and recommended settings for …"), and
 * **the agent's own planning**, asking what a specialist would investigate for this home, avoiding anything researched or rejected before.
 
-Findings show the AI's confidence, concrete "apply it" steps in Home Assistant terms, caveats and any standards/documents the model says it relies on (unverified). **Nothing is used until you press Keep** in the *Research* tab; approved findings are given to the matching agent when it reasons. Rejected subjects are never researched again. It works with **any** AI provider.
+Findings show the AI's confidence, concrete "apply it" steps in Home Assistant terms, caveats and any standards/documents the model says it relies on (unverified). **Nothing is used until you press Keep** in the *Research* tab; approved findings are given to the matching agent when it reasons. Each upcoming topic also has **Research now** (investigates it immediately and adds the finding to *Waiting for your review*), **Remove** (discards it from the queue without blocking it from being proposed again in the future) and **Reject** (adds it to rejected research so it is never proposed or researched again). Rejected subjects — whether rejected before or after research — are never researched again. It works with **any** AI provider.
 
 *Optional deep research (Google Gemini only, off by default):* adds web search with cited, clickable sources and a "% sourced" figure. More informed, but noticeably more tokens. If the search returns nothing, the normal research answers instead.
 
@@ -285,7 +285,7 @@ Any model supported by LiteLLM: Google Gemini, OpenAI, Anthropic, OpenRouter, lo
 | **Activity & Insights** | Agent run history; active insights and recommendations (dismiss, reject so it is never suggested again, delete); unusual-situation and watch alerts |
 | **Memory & Rules** | Always-allow rules (revoke); rejected actions and insights (unblock); **Create an automation**; **Watches**; context notes; ignore list; minimum-change rules |
 | **Learned** | Learning progress and statistics; recent autonomous actions (Undo); habits found (with *Propose automation*); muted alerts; automations the brain does not track yet (adopt); automation health with Disable / Enable / Delete |
-| **Research** | Research status and controls; findings waiting for your review; approved knowledge; upcoming topics |
+| **Research** | Research status and controls; findings waiting for your review; approved knowledge; upcoming topics (with *Research now*, *Remove*, and *Reject*); rejected research |
 | **Settings** | Operating mode, autonomy, quota fallback, notification target; AI provider and quota; site context; Learning & Safety; list of agents (enable/disable built-in or custom agents, delete custom agents); **Backup & restore** |
 
 ---
