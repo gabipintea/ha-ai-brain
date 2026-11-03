@@ -2,6 +2,14 @@
 
 All notable changes to **HA AI Brain** are documented in this file.
 
+## 0.2.18 - 2026-11-03
+
+### Fixed
+- **Proper deletion lifecycle for rejected habits.** Clicking **Delete** on an item in *Habits you rejected* now permanently deletes the habit from both lists (*Habits you rejected* and *Habits found in your history*), suppressing it from the sliding 30-day historical window so older transitions from earlier versions cannot immediately resurrect it. Clicking **Restore** continues to restore the habit back into *Habits found in your history*.
+
+### Changed
+- **Clearer habit documentation and confirmation dialogs.** Clarified in documentation and dashboard hints how habits are dynamically mined from recorded transitions rather than stored statically, and how **Not a habit**, **Restore**, and **Delete** control habit suppression and reappearance.
+
 ## 0.2.17 - 2026-11-03
 
 ### Added

@@ -333,15 +333,15 @@ def create_app(settings: BrainSettings | None = None) -> Any:
     async def restore_rejected_habit(rejection_id: str) -> dict[str, Any]:
         """Undo a rejection: the habit goes back to the found habits (as long as the history still shows it)."""
         try:
-            return {**await orchestrator.forget_habit_rejection(rejection_id), "status": "restored"}
+            return await orchestrator.restore_habit_rejection(rejection_id)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="Rejected habit not found") from exc
 
     @app.delete("/api/habits/rejected/{rejection_id}")
     async def delete_rejected_habit(rejection_id: str) -> dict[str, Any]:
-        """Forget a rejection: if the habit is found again it may be listed and proposed again."""
+        """Delete a habit completely: removed from rejected habits and will not show in found habits."""
         try:
-            return {**await orchestrator.forget_habit_rejection(rejection_id), "status": "deleted"}
+            return await orchestrator.delete_habit_rejection(rejection_id)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="Rejected habit not found") from exc
 

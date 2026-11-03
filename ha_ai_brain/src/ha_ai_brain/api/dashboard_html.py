@@ -567,7 +567,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     <div class="grid" style="margin-top:16px;">
       <div class="card">
         <div class="card-head"><h2>Habits you rejected</h2><span class="pill" id="rejectedHabitsCount">0</span></div>
-        <div class="hint">Habits you marked as <b>Not a habit</b>. They are hidden from the list above and are never proposed as automations or given to the AI agents. <b>Restore</b> puts a habit back into the list above. <b>Delete</b> forgets your rejection, so the habit can be shown and proposed again if it is found in your history again.</div>
+        <div class="hint">Habits you marked as <b>Not a habit</b>. They are hidden from the list above and are never proposed as automations or given to the AI agents. <b>Restore</b> puts a habit back into the list above. <b>Delete</b> deletes the habit completely so it is removed from both lists. (If your future usage naturally forms this habit again, it can be suggested then.)</div>
         <div id="rejectedHabitsList" class="scroll" style="margin-top:8px;"></div>
       </div>
     </div>
@@ -2409,10 +2409,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   }
 
   async function deleteRejectedHabit(id, btn) {
-    if (!confirm('Delete this rejection? If the habit is found in your history again, it can be shown and proposed again.')) return;
+    if (!confirm('Delete this habit completely? It will be removed and not shown in your habits. (If future usage naturally forms this habit again, it can be suggested then.)')) return;
     return withButtonLoading(btn, async () => {
       const res = await fetch('./api/habits/rejected/' + encodeURIComponent(id), {method: 'DELETE'});
-      if (!res.ok) alert('Could not delete this rejection. Refresh and try again.');
+      if (!res.ok) alert('Could not delete this habit. Refresh and try again.');
       await refreshLearned();
     });
   }

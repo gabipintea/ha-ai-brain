@@ -1796,11 +1796,22 @@ class BrainOrchestrator:
         rejected = await self.learning.reject_habit(pattern_id, now, states)
         return {"status": "rejected", "rejection_id": rejected.rejection_id, "rejected_habits": await self.learning.rejected_habit_cards()}
 
-    async def forget_habit_rejection(self, rejection_id: str) -> dict[str, Any]:
-        """Restore / delete a rejection: the habit can be listed and proposed again whenever the history shows it."""
-        if not await self.learning.forget_rejected_habit(rejection_id):
+    async def restore_habit_rejection(self, rejection_id: str) -> dict[str, Any]:
+        """Restore a rejected habit back to found habits."""
+        if not await self.learning.restore_rejected_habit(rejection_id):
             raise KeyError(rejection_id)
-        return {"status": "forgotten", "rejection_id": rejection_id, "rejected_habits": await self.learning.rejected_habit_cards()}
+        return {"status": "restored", "rejection_id": rejection_id, "rejected_habits": await self.learning.rejected_habit_cards()}
+
+    async def delete_habit_rejection(self, rejection_id: str) -> dict[str, Any]:
+        """Delete a habit completely: removed from rejected habits and suppressed from found habits."""
+        now = datetime.now(timezone.utc)
+        if not await self.learning.delete_rejected_habit(rejection_id, now=now):
+            raise KeyError(rejection_id)
+        return {"status": "deleted", "rejection_id": rejection_id, "rejected_habits": await self.learning.rejected_habit_cards()}
+
+    async def forget_habit_rejection(self, rejection_id: str) -> dict[str, Any]:
+        """Backward-compatible alias for restore_habit_rejection."""
+        return await self.restore_habit_rejection(rejection_id)
 
     async def _dispatch_habit_intents(self, intents: list[ActionIntent], patterns: list[Any], run_id: str) -> list[dict[str, Any]]:
         """Dispatch proposals mined locally. Only here may an automation call `script.turn_on` for a script the household runs by hand

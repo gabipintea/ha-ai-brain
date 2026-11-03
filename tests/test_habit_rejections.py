@@ -98,13 +98,25 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(KeyError):
             await orch.propose_habit("a1")  # a rejected habit cannot be proposed
 
-        eng._rejected_habits = None  # survives a restart (persisted in the key/value store)
-        self.assertEqual([p.pattern_id for p in await eng.get_patterns(NOW)], ["c3"])
-
-        self.assertTrue(await eng.forget_rejected_habit("a1"))
+        # 1. Restore puts the habit back into found habits
+        self.assertTrue(await eng.restore_rejected_habit("a1"))
         self.assertEqual([p.pattern_id for p in await eng.get_patterns(NOW)], ["a1", "c3"])
         self.assertEqual(await eng.rejected_habit_cards(), [])
-        self.assertFalse(await eng.forget_rejected_habit("a1"))
+
+        # 2. Reject it again
+        await eng.reject_habit("a1", NOW)
+        self.assertEqual([p.pattern_id for p in await eng.get_patterns(NOW)], ["c3"])
+
+        # 3. Delete deletes it completely: NOT in rejected_habits AND NOT in found habits
+        self.assertTrue(await eng.delete_rejected_habit("a1", NOW))
+        self.assertEqual(await eng.rejected_habit_cards(), [])
+        self.assertEqual([p.pattern_id for p in await eng.get_patterns(NOW)], ["c3"])
+
+        # Survives a restart / reload from KV store
+        eng._rejected_habits = None
+        self.assertEqual(await eng.rejected_habit_cards(), [])
+        self.assertEqual([p.pattern_id for p in await eng.get_patterns(NOW)], ["c3"])
+
         with self.assertRaises(KeyError):
             await eng.reject_habit("missing", NOW)
 
@@ -149,6 +161,10 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
                 res = await client.delete("/api/habits/rejected/a1")
                 self.assertEqual((res.status_code, res.json()["status"]), (200, "deleted"))
                 self.assertEqual((await client.delete("/api/habits/rejected/a1")).status_code, 404)
+                # Verify that after delete, a1 does not appear in learned snapshot patterns OR rejected_habits
+                learned = (await client.get("/api/learned")).json()
+                self.assertEqual([p["pattern_id"] for p in learned["patterns"]], ["c3"])
+                self.assertEqual(learned["rejected_habits"], [])
 
 
 if __name__ == "__main__":

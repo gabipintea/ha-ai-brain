@@ -31,6 +31,8 @@ class RejectedHabit(BaseModel):
     trigger_state: str | None = Field(default=None, max_length=100)
     description: str = Field(default="", max_length=1000)
     rejected_at: datetime | None = None
+    deleted_at: datetime | None = None
+    status: str = Field(default="rejected", pattern=r"^(rejected|deleted)$")
 
     @classmethod
     def from_pattern(cls, pattern: MinedPattern, now: datetime) -> RejectedHabit:
@@ -91,16 +93,22 @@ def split_rejected(
     rejected: list[RejectedHabit],
     names: dict[str, str] | None = None,
     canonical: Callable[[str], str] | None = None,
+    now: datetime | None = None,
 ) -> tuple[list[MinedPattern], set[str]]:
-    """Patterns the homeowner did not reject, and the ids of the rejections that still match something in the history."""
+    """Patterns the homeowner did not reject or delete, and the ids of the active rejections that still match history."""
     if not rejected:
         return list(patterns), set()
     kept: list[MinedPattern] = []
     seen: set[str] = set()
+    # Filter out expired deletions (older than 30 days)
+    valid_records = [
+        r for r in rejected
+        if r.status != "deleted" or not now or not r.deleted_at or (now - r.deleted_at).total_seconds() < 30 * 86400
+    ]
     for p in patterns:
-        hits = [r.rejection_id for r in rejected if rejection_matches(r, p, names, canonical)]
-        if hits:
-            seen.update(hits)
+        matching = [r for r in valid_records if rejection_matches(r, p, names, canonical)]
+        if matching:
+            seen.update(r.rejection_id for r in matching if r.status == "rejected")
         else:
             kept.append(p)
     return kept, seen
