@@ -566,6 +566,13 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     </div>
     <div class="grid" style="margin-top:16px;">
       <div class="card">
+        <div class="card-head"><h2>Habits you rejected</h2><span class="pill" id="rejectedHabitsCount">0</span></div>
+        <div class="hint">Habits you marked as <b>Not a habit</b>. They are hidden from the list above and are never proposed as automations or given to the AI agents. <b>Restore</b> puts a habit back into the list above. <b>Delete</b> forgets your rejection, so the habit can be shown and proposed again if it is found in your history again.</div>
+        <div id="rejectedHabitsList" class="scroll" style="margin-top:8px;"></div>
+      </div>
+    </div>
+    <div class="grid" style="margin-top:16px;">
+      <div class="card">
         <div class="card-head"><h2>Habits ignored on purpose</h2><span class="pill" id="suppressedCount">0</span></div>
         <div class="hint">Things that looked like a habit ("this follows that") but are probably not: the devices just react to the same trigger, happen at the same time every day, or are one scene. Each entry says why it was left out, so you can check the reasoning.</div>
         <div id="suppressedStats" class="muted" style="font-size:0.8rem; margin-top:6px;"></div>
@@ -2385,6 +2392,31 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     });
   }
 
+  async function rejectHabit(btn) {
+    return withButtonLoading(btn, async () => {
+      const res = await post('./api/habits/reject', {pattern_id: btn.dataset.pid});
+      if (!res.ok) { const b = await res.json().catch(() => ({})); alert(typeof b.detail === 'string' ? b.detail : 'Could not reject this habit.'); }
+      await refreshLearned();
+    });
+  }
+
+  async function restoreRejectedHabit(id, btn) {
+    return withButtonLoading(btn, async () => {
+      const res = await post('./api/habits/rejected/' + encodeURIComponent(id) + '/restore', {});
+      if (!res.ok) alert('Could not restore this habit. Refresh and try again.');
+      await refreshLearned();
+    });
+  }
+
+  async function deleteRejectedHabit(id, btn) {
+    if (!confirm('Delete this rejection? If the habit is found in your history again, it can be shown and proposed again.')) return;
+    return withButtonLoading(btn, async () => {
+      const res = await fetch('./api/habits/rejected/' + encodeURIComponent(id), {method: 'DELETE'});
+      if (!res.ok) alert('Could not delete this rejection. Refresh and try again.');
+      await refreshLearned();
+    });
+  }
+
   async function forgetAutomation(id, block, btn) {
     if (block && !confirm('Remove it from this list and never propose this automation again?')) return;
     return withButtonLoading(btn, async () => {
@@ -2427,9 +2459,26 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           <span class="pill">${Math.round(p.confidence * 100)}% confidence</span>
           ${p.covered_by ? `<span class="pill ok wrap">already automated: ${esc(p.covered_by)}</span>` : '<span class="pill warn">not automated yet</span>'}
         </div>
-        ${p.covered_by ? '' : `<div class="btn-row" style="margin-top:6px;"><button class="icon" data-pid="${esc(p.pattern_id)}" onclick="proposeHabit(this)">Propose automation</button></div>
-        <div class="muted habit-msg" style="font-size:0.8rem; margin-top:4px;"></div>`}</div>`).join('')
+        <div class="btn-row" style="margin-top:6px;">
+          ${p.covered_by ? '' : `<button class="icon" data-pid="${esc(p.pattern_id)}" onclick="proposeHabit(this)">Propose automation</button>`}
+          <button class="danger icon" data-pid="${esc(p.pattern_id)}" title="This is not a real habit: hide it and never propose it" onclick="rejectHabit(this)">Not a habit</button>
+        </div>
+        <div class="muted habit-msg" style="font-size:0.8rem; margin-top:4px;"></div></div>`).join('')
       : '<div class="empty">No recurring habits found yet. They appear after a few days of recorded history.</div>';
+
+    const rejectedHabits = d.rejected_habits || [];
+    $('rejectedHabitsCount').textContent = rejectedHabits.length;
+    $('rejectedHabitsList').innerHTML = rejectedHabits.length ? rejectedHabits.map(r => `<div class="item">
+        <div class="wrap">${esc(r.description || r.entity_id)}</div>
+        <div style="margin-top:4px; display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
+          ${r.still_detected ? '<span class="pill warn">still found in your history</span>' : '<span class="pill">not found in your history right now</span>'}
+          ${r.rejected_at ? `<span class="muted" style="font-size:0.78rem;">rejected ${esc(new Date(r.rejected_at).toLocaleDateString())}</span>` : ''}
+        </div>
+        <div class="btn-row" style="margin-top:6px;">
+          <button class="primary" data-id="${esc(r.rejection_id)}" title="Put it back into Habits found in your history" onclick="restoreRejectedHabit(this.dataset.id, this)">Restore</button>
+          <button class="danger icon" data-id="${esc(r.rejection_id)}" title="Forget this rejection so the habit may be shown and proposed again" onclick="deleteRejectedHabit(this.dataset.id, this)">Delete</button>
+        </div></div>`).join('')
+      : '<div class="empty">No rejected habits. Use <b>Not a habit</b> on a found habit to reject it.</div>';
 
     const sup = d.suppressed_habits || {};
     const supItems = sup.items || [];

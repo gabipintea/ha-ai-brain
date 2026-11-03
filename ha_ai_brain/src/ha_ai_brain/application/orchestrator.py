@@ -1787,6 +1787,21 @@ class BrainOrchestrator:
             return {"status": "created", "message": "Created in Home Assistant."}
         return {"status": status, "message": str(result.get("reason") or "It could not be proposed right now.")}
 
+    async def reject_habit(self, pattern_id: str) -> dict[str, Any]:
+        """Homeowner: 'this is not a real habit'. It leaves the found habits and is never proposed or given to an agent again,
+        until the rejection is restored or deleted. Raises KeyError when the habit is no longer listed."""
+        now = datetime.now(timezone.utc)
+        states = self._cached_states or await self.smart_home.get_all_states()
+        await self.learning.refresh_twins(states)
+        rejected = await self.learning.reject_habit(pattern_id, now, states)
+        return {"status": "rejected", "rejection_id": rejected.rejection_id, "rejected_habits": await self.learning.rejected_habit_cards()}
+
+    async def forget_habit_rejection(self, rejection_id: str) -> dict[str, Any]:
+        """Restore / delete a rejection: the habit can be listed and proposed again whenever the history shows it."""
+        if not await self.learning.forget_rejected_habit(rejection_id):
+            raise KeyError(rejection_id)
+        return {"status": "forgotten", "rejection_id": rejection_id, "rejected_habits": await self.learning.rejected_habit_cards()}
+
     async def _dispatch_habit_intents(self, intents: list[ActionIntent], patterns: list[Any], run_id: str) -> list[dict[str, Any]]:
         """Dispatch proposals mined locally. Only here may an automation call `script.turn_on` for a script the household runs by hand
         (rated high risk, so a human always approves); everywhere else scripts stay forbidden."""
@@ -2293,6 +2308,7 @@ class BrainOrchestrator:
             "store": await self.telemetry.stats(),
             "timezone": self.learning._tz_name or "UTC",
             "patterns": [p.to_dict() for p in patterns[:40]],
+            "rejected_habits": await self.learning.rejected_habit_cards(),
             "suppressed_habits": self.learning.suppressed_habits(),
             "device_twins": self.learning.twin_groups(),
             "device_twin_splits": await self.learning.twin_splits(),
@@ -2493,6 +2509,7 @@ class BrainOrchestrator:
             "deployed_automations": [e.model_dump(mode="json") for e in await self.memory.get_accepted_automations()],
             "knowledge_items": [i.model_dump(mode="json") for i in await knowledge.items() if i.status in ("approved", "rejected")],
             "research_topics": [t.model_dump(mode="json") for t in await knowledge.topics()],
+            "rejected_habits": [r.model_dump(mode="json") for r in await self.learning.list_rejected_habits()],
         }
         return build_bundle(sections, __version__)
 
@@ -2541,6 +2558,8 @@ class BrainOrchestrator:
             await knowledge.save_item(item)
         for topic in sec.get("research_topics", []):
             await knowledge.save_topic(topic)
+        for rejected in sec.get("rejected_habits", []):
+            await self.learning.save_rejected_habit(rejected)
         self.invalidate_context_caches()
         summary["applied"] = True
         return summary

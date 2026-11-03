@@ -51,6 +51,7 @@ from ha_ai_brain.domain.models import (
     StateChangedEvent,
     Transition,
 )
+from ha_ai_brain.domain.habit_rejections import MAX_REJECTED_HABITS, RejectedHabit, rejected_habit_card, split_rejected
 from ha_ai_brain.domain.patterns import MinedPattern, mine_all_report
 from ha_ai_brain.domain.sequence_filters import RULE_TWIN, SuppressedHabit
 from ha_ai_brain.domain.service_semantics import ACTUATOR_DOMAINS, SCRIPT_RUN_STATE
@@ -146,6 +147,7 @@ SNAPSHOT_MINUTES = 30
 FLUSH_INTERVAL_SECONDS = 30.0
 FLUSH_MAX_BUFFERED = 1000
 FEEDBACK_PREFIX = "excfb:"
+REJECTED_HABIT_PREFIX = "habit_rejected:"
 
 
 class LearningEngine:
@@ -176,6 +178,9 @@ class LearningEngine:
         self._rules_at: datetime | None = None
         self._patterns: list[MinedPattern] = []
         self._patterns_at: datetime | None = None
+        self._rejected_habits: dict[str, RejectedHabit] | None = None  # loaded lazily from the kv store
+        self._rejected_seen: set[str] = set()  # rejections that still match a habit in the current history
+        self._habit_names: dict[str, str] = {}  # friendly names at the last mining, to match same-named duplicates
         self._baseline_ready_cache: tuple[datetime, bool] | None = None
         self._numeric_baselines: dict[str, tuple[datetime, NumericBaseline]] = {}
         self._reported: dict[str, datetime] = {}
@@ -338,8 +343,9 @@ class LearningEngine:
         states: dict[str, EntityState] | None = None,
         force: bool = False,
     ) -> list[MinedPattern]:
+        """Mined habits, minus the ones the homeowner rejected (they are never shown, proposed or given to an agent)."""
         if not force and self._patterns_at and (now - self._patterns_at).total_seconds() < PATTERN_CACHE_MINUTES * 60:
-            return self._patterns
+            return await self._without_rejected(self._patterns)
         win = await self.window(now)  # also flushes buffered writes
         if not win:
             return []
@@ -352,6 +358,7 @@ class LearningEngine:
         patterns, report = await asyncio.to_thread(mine_all_report, transitions, start, win[1], self.tz, fires)
         suppressed = list(report.suppressed)
         if states is not None:
+            self._habit_names = {eid: str(st.attributes.get("friendly_name") or "") for eid, st in states.items()}
             patterns = [p for p in patterns if p.entity_id in states]
             twins = [p for p in patterns if self._is_twin_sequence(p, states)]
             patterns = [p for p in patterns if p not in twins]
@@ -371,7 +378,65 @@ class LearningEngine:
         for p in patterns:
             p.covered_by = pattern_covered_by(self.rules, p, twins=twins)
         self._patterns, self._patterns_at = patterns, now
-        return patterns
+        return await self._without_rejected(patterns)
+
+    # ------------------------------------------------------- rejected habits
+    async def _load_rejected_habits(self) -> dict[str, RejectedHabit]:
+        if self._rejected_habits is None:
+            loaded: dict[str, RejectedHabit] = {}
+            if self.memory is not None:
+                for raw in (await self.memory.list_kv(REJECTED_HABIT_PREFIX)).values():
+                    try:
+                        r = RejectedHabit.model_validate_json(raw)
+                    except ValueError:
+                        continue
+                    loaded[r.rejection_id] = r
+            self._rejected_habits = loaded
+        return self._rejected_habits
+
+    async def _without_rejected(self, patterns: list[MinedPattern]) -> list[MinedPattern]:
+        rejected = await self._load_rejected_habits()
+        kept, self._rejected_seen = split_rejected(patterns, list(rejected.values()), self._habit_names, self.twins.canonical)
+        return kept
+
+    async def reject_habit(self, pattern_id: str, now: datetime, states: dict[str, EntityState] | None = None) -> RejectedHabit:
+        """The homeowner says a found habit is not real. Raises KeyError when it is not (or no longer) in the list."""
+        pattern = next((p for p in await self.get_patterns(now, states) if p.pattern_id == pattern_id), None)
+        if pattern is None:
+            raise KeyError(pattern_id)
+        rejected = RejectedHabit.from_pattern(pattern, now)
+        if not await self.save_rejected_habit(rejected):
+            raise ValueError(f"You already rejected {MAX_REJECTED_HABITS} habits. Delete some old rejections first.")
+        self._rejected_seen.add(rejected.rejection_id)
+        return rejected
+
+    async def save_rejected_habit(self, rejected: RejectedHabit) -> bool:
+        """Store a rejection (also used by import). Same id replaces; the list is bounded."""
+        current = await self._load_rejected_habits()
+        if rejected.rejection_id not in current and len(current) >= MAX_REJECTED_HABITS:
+            return False
+        current[rejected.rejection_id] = rejected
+        if self.memory is not None:
+            await self.memory.set_kv(REJECTED_HABIT_PREFIX + rejected.rejection_id, rejected.model_dump_json())
+        return True
+
+    async def forget_rejected_habit(self, rejection_id: str) -> bool:
+        """Drop a rejection: the habit is shown again if the history still shows it, and may be proposed again."""
+        current = await self._load_rejected_habits()
+        if current.pop(rejection_id, None) is None:
+            return False
+        self._rejected_seen.discard(rejection_id)
+        if self.memory is not None:
+            await self.memory.delete_kv(REJECTED_HABIT_PREFIX + rejection_id)
+        return True
+
+    async def list_rejected_habits(self) -> list[RejectedHabit]:
+        current = await self._load_rejected_habits()
+        return sorted(current.values(), key=lambda r: r.rejected_at.isoformat() if r.rejected_at else "", reverse=True)
+
+    async def rejected_habit_cards(self) -> list[dict[str, Any]]:
+        """For the dashboard; `still_detected` reflects the last mining (call after get_patterns)."""
+        return [rejected_habit_card(r, r.rejection_id in self._rejected_seen) for r in await self.list_rejected_habits()]
 
     # ------------------------------------------------------------ twin devices
     TWIN_SPLITS_KEY = "twin_splits"

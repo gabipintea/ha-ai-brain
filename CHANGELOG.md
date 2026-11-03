@@ -2,6 +2,13 @@
 
 All notable changes to **HA AI Brain** are documented in this file.
 
+## 0.2.17 - 2026-11-03
+
+### Added
+- **Reject, restore, and delete habits in Learned history.** You can now click **Not a habit** on any pattern in *Habits found in your history* (especially patterns learned from earlier versions or unusual routines you do not want automated). Rejected habits move to a dedicated **Habits you rejected** card, are hidden from found habits, and are never proposed as automations or sent to AI agents. Rejection matching is semantic and tolerant of small timing drifts (±30 min circular window, overlapping day classes, or twins) so re-mined habits stay rejected.
+- **Restore and Delete actions on rejected habits.** In *Habits you rejected*, clicking **Restore** puts the habit back into *Habits found in your history* if still observed. Clicking **Delete** forgets your rejection completely, allowing the brain to detect and suggest the habit again if observed in future history.
+- **Backup & restore support for rejected habits.** Rejected habits are now exported with your decisions and restored automatically during configuration imports.
+
 ## 0.2.16 - 2026-10-31
 
 ### Added

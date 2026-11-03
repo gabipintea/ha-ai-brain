@@ -319,6 +319,32 @@ def create_app(settings: BrainSettings | None = None) -> Any:
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="That habit is no longer in the list. Refresh and try again.") from exc
 
+    @app.post("/api/habits/reject")
+    async def reject_habit(req: HabitProposeRequest) -> dict[str, Any]:
+        """'Not a real habit': hide it from the found habits and never propose it again (it moves to the rejected habits)."""
+        try:
+            return await orchestrator.reject_habit(req.pattern_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="That habit is no longer in the list. Refresh and try again.") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/habits/rejected/{rejection_id}/restore")
+    async def restore_rejected_habit(rejection_id: str) -> dict[str, Any]:
+        """Undo a rejection: the habit goes back to the found habits (as long as the history still shows it)."""
+        try:
+            return {**await orchestrator.forget_habit_rejection(rejection_id), "status": "restored"}
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Rejected habit not found") from exc
+
+    @app.delete("/api/habits/rejected/{rejection_id}")
+    async def delete_rejected_habit(rejection_id: str) -> dict[str, Any]:
+        """Forget a rejection: if the habit is found again it may be listed and proposed again."""
+        try:
+            return {**await orchestrator.forget_habit_rejection(rejection_id), "status": "deleted"}
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Rejected habit not found") from exc
+
     @app.get("/api/automations/adoptable")
     async def adoptable_automations() -> dict[str, Any]:
         return {"automations": await orchestrator.adoptable_automations()}

@@ -9,6 +9,7 @@ from typing import Any
 
 from pydantic import BaseModel, ValidationError
 
+from ha_ai_brain.domain.habit_rejections import RejectedHabit
 from ha_ai_brain.domain.min_change import MinChangeRule
 from ha_ai_brain.domain.models import AdvisoryInsight, ApprovalRule, FeedbackEpisode, FeedbackPolarity, IgnoredTarget, UserContextNote
 from ha_ai_brain.domain.research import KnowledgeItem, ResearchTopic
@@ -34,6 +35,7 @@ MODELED: dict[str, type[BaseModel]] = {
     "deployed_automations": FeedbackEpisode,
     "knowledge_items": KnowledgeItem,
     "research_topics": ResearchTopic,
+    "rejected_habits": RejectedHabit,
 }
 
 LABELS = {
@@ -49,6 +51,7 @@ LABELS = {
     "deployed_automations": "Tracked automations",
     "knowledge_items": "Approved / rejected research findings",
     "research_topics": "Research topics",
+    "rejected_habits": "Rejected habits",
 }
 
 
