@@ -1,0 +1,8 @@
+# Lines starting with '#' are comments.
+# Each line is a pattern followed by one or more owners.
+# More details: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# Default owner for everything in the repository.
+# When branch protection or a ruleset requires Code Owner review,
+# any pull request must be approved by @gabipintea before it can be merged.
+* @gabipintea

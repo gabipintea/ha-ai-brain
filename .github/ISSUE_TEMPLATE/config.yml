@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 📖 Full User Documentation
+    url: https://github.com/gabipintea/ha-ai-brain/blob/main/ha_ai_brain/DOCS.md
+    about: Read the complete user manual, feature guides, architecture docs, settings reference, and FAQ.
+  - name: 💬 Home Assistant Community Topic
+    url: https://community.home-assistant.io/
+    about: Ask questions, share your habit automations, and discuss with fellow Home Assistant users.
+  - name: 🔒 Report a Security Vulnerability
+    url: https://github.com/gabipintea/ha-ai-brain/security/advisories/new
+    about: Privately disclose a security vulnerability to the maintainer.

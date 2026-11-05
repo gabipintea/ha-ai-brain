@@ -1,6 +1,8 @@
 # 🧠 HA AI Brain (`ha-ai-brain`)
 
 [![Home Assistant Add-on](https://img.shields.io/badge/Home%20Assistant-Add--on-blue.svg?logo=home-assistant)](https://github.com/gabipintea/ha-ai-brain)
+[![CI](https://github.com/gabipintea/ha-ai-brain/actions/workflows/ci.yml/badge.svg)](https://github.com/gabipintea/ha-ai-brain/actions)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/gabipintea/ha-ai-brain/blob/main/LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/)
 [![Multi-Provider AI](https://img.shields.io/badge/AI%20Providers-Gemini%20%7C%20OpenAI%20%7C%20Claude%20%7C%20OpenRouter%20%7C%20Ollama-orange.svg)]()
 
@@ -71,9 +73,15 @@ Read the details in [`DOCS.md`](DOCS.md#3-how-it-works).
 
 ## 📦 Install as a Home Assistant add-on
 
-1. **Settings → Add-ons → Add-on Store → ⋮ → Repositories**, add `https://github.com/gabipintea/ha-ai-brain`.
-2. Install **HA AI Brain**, enable **Show in sidebar**, **Start**.
-3. Open **AI Brain** in the sidebar → *Settings*: choose an AI provider (Gemini, OpenAI, Anthropic, OpenRouter, a local Ollama model, or any other LiteLLM model), paste the key, describe your home, pick your phone as the notification target.
+[![Open your Home Assistant instance and show the add-on repository preview](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fgabipintea%2Fha-ai-brain)
+
+**One-click install:** Click the badge above to add the repository directly to your Home Assistant instance.
+
+**Or manually:**
+1. In Home Assistant, navigate to **Settings → Add-ons → Add-on Store → ⋮ (top right) → Repositories**.
+2. Add: `https://github.com/gabipintea/ha-ai-brain` and click **Add**.
+3. Locate **HA AI Brain** in the store, click **Install**, enable **Show in sidebar**, then click **Start**.
+4. Open **AI Brain** in the sidebar → *Settings*: select your AI provider (Gemini, OpenAI, Anthropic, OpenRouter, local Ollama, etc.), add your key, describe your home, and select your notification target.
 
 Connection to Home Assistant is automatic. Leave autonomy on **Co-pilot** at first and follow the [recommended rollout](DOCS.md#7-recommended-rollout).
 
@@ -113,7 +121,21 @@ Open `http://localhost:8099`. Without a Home Assistant token the brain runs agai
 
 ---
 
-## 📄 Maintainer
+## 🤝 Contributing, Issues & Discussions
 
+Contributions, issue reports, and feedback are warmly welcomed!
+
+- 🐛 **Found a bug?** Open a [Bug Report](https://github.com/gabipintea/ha-ai-brain/issues/new?template=bug_report.yml).
+- 💡 **Have an idea or new agent concept?** Submit a [Feature Request](https://github.com/gabipintea/ha-ai-brain/issues/new?template=feature_request.yml).
+- 🛠️ **Want to submit code?** Check out our [Contributing Guide](https://github.com/gabipintea/ha-ai-brain/blob/main/CONTRIBUTING.md) for architectural guidelines, test commands, and pull request procedures.
+- 🔒 **Security vulnerability?** Please review our [Security Policy](https://github.com/gabipintea/ha-ai-brain/blob/main/SECURITY.md) to report responsibly.
+
+All contributions are submitted via Pull Request and reviewed by [@gabipintea](https://github.com/gabipintea).
+
+---
+
+## 📄 License & Maintainer
+
+* **License**: [MIT](https://github.com/gabipintea/ha-ai-brain/blob/main/LICENSE)
 * **Author**: Gabriel Pintea ([@gabipintea](https://github.com/gabipintea))
 * **Repository**: [https://github.com/gabipintea/ha-ai-brain](https://github.com/gabipintea/ha-ai-brain)

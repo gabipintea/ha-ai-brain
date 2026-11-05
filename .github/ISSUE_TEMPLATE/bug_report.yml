@@ -1,0 +1,141 @@
+name: 🐛 Bug Report
+description: Report an issue, unexpected behavior, or crash in HA AI Brain
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for reporting an issue! Please provide as much context as possible.
+        Before submitting, please make sure you have searched existing [Open Issues](https://github.com/gabipintea/ha-ai-brain/issues) and read the [Documentation](https://github.com/gabipintea/ha-ai-brain/blob/main/ha_ai_brain/DOCS.md).
+
+  - type: input
+    id: version
+    attributes:
+      label: HA AI Brain Version
+      description: The version of HA AI Brain you are running (e.g., `0.2.18`). Find this in Home Assistant → Settings → Add-ons → HA AI Brain.
+      placeholder: "e.g., 0.2.18"
+    validations:
+      required: true
+
+  - type: input
+    id: ha_version
+    attributes:
+      label: Home Assistant Core & OS Version
+      description: Found in Home Assistant → Settings → About (e.g., Core 2026.3.0, OS 12.1).
+      placeholder: "e.g., Home Assistant Core 2026.3.0, OS 12.1"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: installation_type
+    attributes:
+      label: Installation Environment
+      description: How is Home Assistant / the add-on installed?
+      options:
+        - "Home Assistant OS (HAOS)"
+        - "Home Assistant Supervised"
+        - "Home Assistant Container / Standalone Docker"
+        - "Local Development / Simulator"
+        - "Other"
+    validations:
+      required: true
+
+  - type: input
+    id: hardware
+    attributes:
+      label: Hardware Platform
+      description: What hardware is running Home Assistant? (e.g., Raspberry Pi 4 (4GB), Raspberry Pi 5 (8GB), Intel N100 Mini PC, Proxmox VM, Home Assistant Green/Yellow)
+      placeholder: "e.g., Raspberry Pi 5 (8GB)"
+    validations:
+      required: false
+
+  - type: dropdown
+    id: ai_provider
+    attributes:
+      label: AI Provider & Model
+      description: Which AI provider and model are you using?
+      options:
+        - "Google Gemini (gemini-3.8-flash / gemini-3.5-flash / etc.)"
+        - "OpenAI (gpt-4o / gpt-4o-mini / etc.)"
+        - "Anthropic Claude (claude-3-5-sonnet / etc.)"
+        - "OpenRouter"
+        - "Local Ollama"
+        - "No LLM / Local learning only"
+        - "Other (LiteLLM model)"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: autonomy_mode
+    attributes:
+      label: Autonomy Mode
+      description: Configured autonomy level in AI Brain settings.
+      options:
+        - "Co-pilot (Default - asks for approval on actions)"
+        - "Shadow (Observes and logs only, never asks or acts)"
+        - "Autonomous (Executes low/medium risk actions automatically)"
+    validations:
+      required: true
+
+  - type: textarea
+    id: bug_description
+    attributes:
+      label: Describe the Bug
+      description: A clear and concise description of what the problem is.
+      placeholder: "What went wrong?"
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps_to_reproduce
+    attributes:
+      label: Steps to Reproduce
+      description: How can the issue be reproduced?
+      placeholder: |
+        1. Open the AI Brain dashboard...
+        2. Click on 'Learned' tab...
+        3. Observe error...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected_behavior
+    attributes:
+      label: Expected Behavior
+      description: A clear and concise description of what you expected to happen.
+      placeholder: "What did you expect to happen instead?"
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant Logs
+      description: |
+        Please paste the relevant logs from Home Assistant → Settings → Add-ons → HA AI Brain → Log tab.
+        ⚠️ **Privacy Check**: HA AI Brain scrubs personal names and phones when privacy_scrub is enabled, but please verify and redact any private API keys, passwords, or external IPs before posting.
+      render: shell
+      placeholder: "Paste log output here..."
+    validations:
+      required: false
+
+  - type: textarea
+    id: additional_context
+    attributes:
+      label: Additional Context / Screenshots
+      description: Add any other context, screenshots of the dashboard, or relevant entity types. (Remember: use generic names like `light.living_room` if citing entities).
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Pre-submission Checklist
+      options:
+        - label: I have searched existing [Issues](https://github.com/gabipintea/ha-ai-brain/issues) to ensure this is not a duplicate.
+          required: true
+        - label: I have reviewed the logs and verified no sensitive secrets, tokens, or personal identifiers are exposed.
+          required: true
+        - label: I am running a currently supported version of HA AI Brain and Home Assistant.
+          required: true

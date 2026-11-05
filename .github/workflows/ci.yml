@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    name: Test Suite (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e "ha_ai_brain[dev]"
+
+      - name: Run test suite
+        run: |
+          PYTHONPATH=ha_ai_brain/src python -m unittest discover -s tests
+
+  verify-sync-and-syntax:
+    name: Verify Mirrored Files & JS Syntax
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Verify mirrored files are in sync
+        run: |
+          diff -u config.yaml ha_ai_brain/config.yaml
+          diff -u Dockerfile ha_ai_brain/Dockerfile
+          diff -u run.sh ha_ai_brain/run.sh
+          diff -u CHANGELOG.md ha_ai_brain/CHANGELOG.md
+          diff -ru agents ha_ai_brain/agents
+          diff -ru translations ha_ai_brain/translations
+
+      - name: Validate Dashboard JavaScript syntax
+        run: |
+          python3 -c "
+          import re
+          from pathlib import Path
+          content = Path('ha_ai_brain/src/ha_ai_brain/api/dashboard_html.py').read_text()
+          m = re.search(r'<script>(.*?)</script>', content, re.DOTALL)
+          if not m:
+              raise SystemExit('No <script> tag found in dashboard_html.py')
+          Path('dashboard_extracted.js').write_text(m.group(1))
+          "
+          node --check dashboard_extracted.js

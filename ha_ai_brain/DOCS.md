@@ -578,6 +578,9 @@ Upgrades migrate the database in place. Take a backup first. Going back to an ol
 **Where do I see why it did something?**
 *Activity & Insights*: each run lists the research, the calculated signals, the proposed actions, and the outcome of each. Approval cards link to the reasoning, and the add-on log shows details.
 
+**How do I report bugs, request features, or contribute?**
+Open an issue on GitHub ([Bug Report](https://github.com/gabipintea/ha-ai-brain/issues/new?template=bug_report.yml) or [Feature Request](https://github.com/gabipintea/ha-ai-brain/issues/new?template=feature_request.yml)). To contribute code, fork the repository and open a Pull Request; see [`CONTRIBUTING.md`](https://github.com/gabipintea/ha-ai-brain/blob/main/CONTRIBUTING.md) for architectural rules, local testing with the built-in simulator, and guidelines.
+
 ### Performance and storage (Raspberry Pi friendly)
 * **Database size**: telemetry uses a compact layout (about 5× smaller than 0.1.x: a busy home at 90 days is roughly 25 MB instead of 136 MB). Upgrading converts old data automatically on first start (a few seconds, one time) and shrinks the file. Auto-vacuum keeps the file from growing after clean-ups.
 * **Retention**: run logs 30 days / 300 entries; resolved approvals 60 days; dismissed insights 90 days; verified outcome feedback 180 days; caches and counters are cleaned daily. Rules, rejected suggestions, notes and settings are never deleted.

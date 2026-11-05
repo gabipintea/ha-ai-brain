@@ -1,0 +1,71 @@
+name: 💡 Feature Request / Idea
+description: Propose a new feature, new specialized agent, or improvement for HA AI Brain
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for suggesting an improvement or new feature!
+        HA AI Brain is designed with a **"Local first, AI last"** philosophy: habit detection, statistics, backtesting, and routine alerts cost zero tokens; LLM agents are reserved for synthesis, cross-domain reasoning, and complex decisions.
+
+  - type: dropdown
+    id: category
+    attributes:
+      label: Feature Category
+      description: What part of HA AI Brain does this feature relate to?
+      options:
+        - "Local Learning & Habit Mining"
+        - "Watches (Natural Language Alerts)"
+        - "Specialized Agent (Climate, Lighting, Security, Solar/Energy, Shading, Repair)"
+        - "New Specialized Agent Idea"
+        - "Dashboard UI & Ingress Experience"
+        - "Guardrails, Safety & Autonomy"
+        - "LLM Provider / Integration"
+        - "Other / General"
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem_statement
+    attributes:
+      label: Problem or Use Case
+      description: What problem are you trying to solve, or what gap does this address?
+      placeholder: "I'm always frustrated when... / In my home setup, I want to be able to..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposed_solution
+    attributes:
+      label: Proposed Solution / Behavior
+      description: Describe your proposed solution and how it should work from a user's perspective.
+      placeholder: "When X happens, the brain should..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: local_vs_ai
+    attributes:
+      label: Local First vs. AI Consideration
+      description: Can this be achieved using local logic/statistics (zero tokens), or does it require an LLM call? Why?
+      placeholder: "e.g., This could be computed with an exponential moving average locally, or only needs the LLM once during setup..."
+    validations:
+      required: false
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+      description: Any alternative solutions or workarounds you have considered or tried in Home Assistant.
+      placeholder: "I considered using a native Home Assistant template sensor, but..."
+    validations:
+      required: false
+
+  - type: textarea
+    id: additional_context
+    attributes:
+      label: Additional Context
+      description: Add any other context, UI sketches, mockups, or relevant examples.
+    validations:
+      required: false
