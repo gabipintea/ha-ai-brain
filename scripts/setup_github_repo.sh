@@ -97,6 +97,17 @@ PAYLOAD='{
         "require_last_push_approval": true,
         "required_review_thread_resolution": true
       }
+    },
+    {
+      "type": "required_status_checks",
+      "parameters": {
+        "strict_required_status_checks_policy": true,
+        "required_status_checks": [
+          { "context": "Test Suite (Python 3.11)" },
+          { "context": "Test Suite (Python 3.12)" },
+          { "context": "Verify Mirrored Files & JS Syntax" }
+        ]
+      }
     }
   ]
 }'
