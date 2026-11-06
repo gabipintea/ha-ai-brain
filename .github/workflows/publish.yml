@@ -84,6 +84,7 @@ jobs:
           context: ./ha_ai_brain
           platforms: ${{ matrix.platform }}
           push: true
+          provenance: false
           tags: |
             ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.version }}
             ${{ steps.meta.outputs.image }}:latest
@@ -105,6 +106,7 @@ jobs:
           context: ./ha_ai_brain
           platforms: ${{ matrix.platform }}
           push: true
+          provenance: false
           tags: |
             ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.prestage }}
           labels: |

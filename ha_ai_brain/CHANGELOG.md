@@ -2,6 +2,11 @@
 
 All notable changes to **HA AI Brain** are documented in this file.
 
+## 0.2.19 - 2026-11-06
+
+### Changed
+- **Prebuilt multi-architecture container images on GitHub Container Registry (`ghcr.io`).** Installations and updates on `aarch64` and `amd64` hosts now pull prebuilt images directly from `ghcr.io` instead of compiling dependencies locally on your Home Assistant device, reducing install and update times from several minutes to seconds.
+
 ## 0.2.18 - 2026-11-03
 
 ### Fixed

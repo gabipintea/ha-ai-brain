@@ -1,8 +1,9 @@
 name: "HA AI Brain"
-version: "0.2.18"
+version: "0.2.19"
 slug: "ha_ai_brain"
 description: "Autonomous Multi-Agent AI Brain for Home Assistant (Climate, Lighting, Security, Repair, and Custom Domain Agents)"
 url: "https://github.com/gabipintea/ha-ai-brain"
+image: "ghcr.io/gabipintea/ha-ai-brain-{arch}"
 arch:
   - aarch64
   - amd64
