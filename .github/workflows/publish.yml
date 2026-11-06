@@ -1,0 +1,119 @@
+name: Publish Add-on Images
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ "v*" ]
+    paths:
+      - "ha_ai_brain/**"
+      - "Dockerfile"
+      - "config.yaml"
+      - "run.sh"
+      - ".github/workflows/publish.yml"
+  workflow_dispatch:
+    inputs:
+      prestage_version:
+        description: "Optional upcoming version tag to pre-stage on GHCR (e.g. 0.2.19)"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    name: Build & Push (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-latest
+          - arch: aarch64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Read version from config.yaml
+        id: meta
+        run: |
+          VERSION=$(python3 -c 'import re, pathlib; m = re.search(r"^version:\s*\"([^\"]+)\"", pathlib.Path("ha_ai_brain/config.yaml").read_text(), re.M); print(m.group(1))')
+          IMAGE="ghcr.io/$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')/ha-ai-brain-${{ matrix.arch }}"
+          PRESTAGE="${{ inputs.prestage_version }}"
+          if [ -z "${PRESTAGE}" ] && [ "${VERSION}" = "0.2.18" ]; then
+            PRESTAGE="0.2.19"
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
+          echo "prestage=${PRESTAGE}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build image for smoke test
+        uses: docker/build-push-action@v6
+        with:
+          context: ./ha_ai_brain
+          platforms: ${{ matrix.platform }}
+          load: true
+          tags: ha-ai-brain-smoke:${{ matrix.arch }}
+          cache-from: type=gha,scope=${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
+
+      - name: Smoke test container image
+        run: |
+          docker run --rm ha-ai-brain-smoke:${{ matrix.arch }} \
+            python3 -c "import ha_ai_brain; from ha_ai_brain.api.app import create_app; app = create_app(); assert app is not None; print('Smoke test OK:', ha_ai_brain.__version__)"
+
+      - name: Push version and latest tags to GHCR
+        uses: docker/build-push-action@v6
+        with:
+          context: ./ha_ai_brain
+          platforms: ${{ matrix.platform }}
+          push: true
+          tags: |
+            ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.version }}
+            ${{ steps.meta.outputs.image }}:latest
+          labels: |
+            io.hass.name=HA AI Brain
+            io.hass.description=Autonomous Multi-Agent AI Brain for Home Assistant (Climate, Lighting, Security, Repair, and Custom Domain Agents)
+            io.hass.type=addon
+            io.hass.version=${{ steps.meta.outputs.version }}
+            io.hass.arch=${{ matrix.arch }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.description=Autonomous Multi-Agent AI Brain for Home Assistant (Climate, Lighting, Security, Repair, and Custom Domain Agents)
+            org.opencontainers.image.licenses=MIT
+          cache-from: type=gha,scope=${{ matrix.arch }}
+
+      - name: Pre-stage upcoming version tag on GHCR
+        if: ${{ steps.meta.outputs.prestage != '' }}
+        uses: docker/build-push-action@v6
+        with:
+          context: ./ha_ai_brain
+          platforms: ${{ matrix.platform }}
+          push: true
+          tags: |
+            ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.prestage }}
+          labels: |
+            io.hass.name=HA AI Brain
+            io.hass.description=Autonomous Multi-Agent AI Brain for Home Assistant (Climate, Lighting, Security, Repair, and Custom Domain Agents)
+            io.hass.type=addon
+            io.hass.version=${{ steps.meta.outputs.prestage }}
+            io.hass.arch=${{ matrix.arch }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.description=Autonomous Multi-Agent AI Brain for Home Assistant (Climate, Lighting, Security, Repair, and Custom Domain Agents)
+            org.opencontainers.image.licenses=MIT
+          cache-from: type=gha,scope=${{ matrix.arch }}
