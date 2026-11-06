@@ -124,7 +124,7 @@ body:
     id: additional_context
     attributes:
       label: Additional Context / Screenshots
-      description: Add any other context, screenshots of the dashboard, or relevant entity types. (Remember: use generic names like `light.living_room` if citing entities).
+      description: "Add any other context, screenshots of the dashboard, or relevant entity types (remember: use generic names like `light.living_room` if citing entities)."
     validations:
       required: false
 
