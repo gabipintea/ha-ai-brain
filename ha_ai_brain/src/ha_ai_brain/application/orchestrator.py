@@ -32,7 +32,15 @@ from ha_ai_brain.domain.automation_draft import (
     proposal_to_yaml,
     validate_draft,
 )
-from ha_ai_brain.domain.automation_rules import AutomationRule, RuleAction, _collect_actions, find_equivalent_rule, parse_automation_config
+from ha_ai_brain.domain.automation_rules import (
+    AutomationRule,
+    RuleAction,
+    _collect_actions,
+    find_equivalent_rule,
+    parse_automation_config,
+    resolve_rule_targets,
+    strip_brain_prefix,
+)
 from ha_ai_brain.domain.expectations import ExceptionFinding, exception_action, exception_title, is_safety_entity
 from ha_ai_brain.domain.min_change import MinChangeRule, find_rule, is_below_min_change
 from ha_ai_brain.domain.lifecycle import AutomationReview, review_deployed_automation, review_sort_key
@@ -2039,6 +2047,9 @@ class BrainOrchestrator:
             return []
         now = datetime.now(timezone.utc)
         states = await self.smart_home.get_all_states()
+        await self.learning.refresh_rules(states, force=True)
+        accepted = await self.memory.get_accepted_automations()
+        live_rules = {r.automation_id: r for r in self.learning.rules if r.automation_id}
         by_id = {str(s.attributes.get("id")): s for s in states.values() if s.domain == "automation" and s.attributes.get("id")}
         reviews: list[AutomationReview] = []
         for ep in accepted:
@@ -2056,22 +2067,33 @@ class BrainOrchestrator:
 
                     await self.telemetry.record_transitions([Transition(state.entity_id, last, "", AUTOMATION_FIRE_STATE, "ha_automation")])
                 fires = await self.telemetry.get_fires(state.entity_id, since=ep.created_at)
-            # Show the name it has in Home Assistant today (the homeowner may have renamed it), without the brain's own prefix.
-            shown = str((state.attributes.get("friendly_name") if state is not None else "") or data.get("alias") or automation_id)
-            shown = re.sub(r"^(\s*\[ai brain\]\s*)+", "", shown, flags=re.IGNORECASE).strip() or automation_id
-            rule = AutomationRule(automation_id=automation_id, alias=shown)
-            _collect_actions(data.get("action") or [], rule)
-            targets = sorted({a.entity_id for a in rule.actions})
+            # Show the name and actions it has in Home Assistant today (the homeowner may have edited it in HA), without the brain's own prefix.
+            live_rule = live_rules.get(automation_id)
+            shown = str(
+                (state.attributes.get("friendly_name") if state is not None else "")
+                or (live_rule.alias if live_rule is not None else "")
+                or data.get("alias")
+                or automation_id
+            )
+            shown = strip_brain_prefix(shown) or automation_id
+            if live_rule is not None and live_rule.actions:
+                actions = live_rule.actions
+            else:
+                rule = AutomationRule(automation_id=automation_id, alias=shown)
+                _collect_actions(data.get("action") or [], rule)
+                resolve_rule_targets([rule], states=states)
+                actions = rule.actions
+            targets = sorted({a.entity_id for a in actions if a.entity_id})
             tl = await self.learning.timeline_for(targets, now, days=30) if targets else await self.learning.timeline_for([], now, days=0)
             reviews.append(
                 review_deployed_automation(
                     automation_id=automation_id,
-                    alias=rule.alias,
+                    alias=shown,
                     deployed_at=ep.created_at,
                     now=now,
                     state=state,
                     fires=fires,
-                    actions=rule.actions,
+                    actions=actions,
                     tl=tl,
                 )
             )
@@ -2491,6 +2513,26 @@ class BrainOrchestrator:
                     }
                 )
             )
+            current_sig = ActionIntent(
+                agent_id=episode.agent_id,
+                domain="automation",
+                service="upsert_native_automation",
+                target_entity_ids=episode.target_entity_ids,
+                service_data=episode.service_data or {},
+                cause_category=episode.cause_category,
+                rationale="",
+            ).repeatable_signature()
+            if current_sig != episode.action_signature:
+                await self.memory.save_feedback(
+                    episode.model_copy(
+                        update={
+                            "episode_id": str(uuid.uuid4()),
+                            "action_signature": current_sig,
+                            "polarity": FeedbackPolarity.REJECTED_EXPLICIT,
+                            "human_note": "The homeowner removed this automation and does not want it proposed again.",
+                        }
+                    )
+                )
         await self.memory.delete_accepted_automation(episode.action_signature)
         try:
             kept = [r for r in json.loads(await self.memory.get_kv("lifecycle:last") or "[]") if r.get("automation_id") != automation_id]
@@ -2594,6 +2636,8 @@ class BrainOrchestrator:
         wanted = {i for i in automation_ids if i.startswith(BRAIN_ID_PREFIX)}
         candidates = {c["automation_id"] for c in await self.adoptable_automations()}
         wanted &= candidates
+        states = self._cached_states or await self.smart_home.get_all_states()
+        rules_by_id = {r.automation_id: r for r in await self.learning.refresh_rules(states, force=True) if r.automation_id}
         adopted: list[str] = []
         for cfg in await self.smart_home.get_automation_configs():
             aid = str(cfg.get("id") or "")
@@ -2604,11 +2648,13 @@ class BrainOrchestrator:
             except ValueError as exc:
                 logger.warning("Cannot adopt %s: %s", aid, exc)
                 continue
+            rule = rules_by_id.get(aid)
+            targets = (rule.targets() if rule is not None else []) or proposal.extract_target_entities()
             intent = ActionIntent(
                 agent_id="homeowner",
                 domain="automation",
                 service="upsert_native_automation",
-                target_entity_ids=[f"automation.{aid}"] + proposal.extract_target_entities(),
+                target_entity_ids=[f"automation.{aid}"] + [t for t in targets if t != f"automation.{aid}"],
                 service_data=proposal.model_dump(),
                 cause_category="adopted",
                 rationale="Re-adopted after the add-on lost its records.",

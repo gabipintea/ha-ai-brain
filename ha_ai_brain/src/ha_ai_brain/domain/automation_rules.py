@@ -27,6 +27,11 @@ def clean_alias(alias: str) -> str:
     return name
 
 
+def strip_brain_prefix(alias: str) -> str:
+    """Remove leading '[AI Brain]' prefixes for display and canonical alias comparison."""
+    return re.sub(r"^(\s*\[ai brain\]\s*)+", "", alias or "", flags=re.IGNORECASE).strip()
+
+
 def _listify(value: Any) -> list[Any]:
     if value is None:
         return []

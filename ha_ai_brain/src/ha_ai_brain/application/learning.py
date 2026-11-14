@@ -14,12 +14,15 @@ from typing import Any
 from ha_ai_brain.config import BrainSettings
 from ha_ai_brain.domain.automation_rules import (
     AutomationRule,
+    _listify,
+    clean_alias,
     find_equivalent_rule,
     parse_automation_config,
     pattern_covered_by,
     resolve_rule_targets,
     rule_expectations,
     rule_produces_state,
+    strip_brain_prefix,
 )
 from ha_ai_brain.domain.backtest import Timeline, backtest_automation
 from ha_ai_brain.domain.baselines import NumericBaseline
@@ -328,7 +331,63 @@ class LearningEngine:
                     r.enabled = st.state != "off"
         self.rules = rules
         self._rules_at = now
+        await self._sync_tracked_automations(configs, rules)
         return rules
+
+    async def _sync_tracked_automations(self, configs: list[dict[str, Any]], rules: list[AutomationRule]) -> None:
+        """Keep tracked brain-created automation records aligned with manual edits made in Home Assistant."""
+        if self.memory is None:
+            return
+        try:
+            accepted = await self.memory.get_accepted_automations()
+        except Exception as exc:
+            logger.debug("Could not read accepted automations for live sync: %s", exc)
+            return
+        if not accepted:
+            return
+        cfg_by_id = {str(c.get("id") or ""): c for c in configs if isinstance(c, dict) and c.get("id")}
+        rule_by_id = {r.automation_id: r for r in rules if r.automation_id}
+        for ep in accepted:
+            data = dict(ep.service_data or {})
+            aid = str(data.get("automation_id") or "")
+            cfg = cfg_by_id.get(aid)
+            if not aid or cfg is None:
+                continue
+            rule = rule_by_id.get(aid)
+            raw_alias = str(cfg.get("alias") or data.get("alias") or aid).strip()
+            stripped = strip_brain_prefix(raw_alias) or raw_alias
+            old_alias = str(data.get("alias") or "")
+            alias = clean_alias(raw_alias) if old_alias.lower().startswith("[ai brain]") and raw_alias.lower().startswith("[ai brain]") else stripped
+            trigger = _listify(cfg.get("trigger") if "trigger" in cfg else cfg.get("triggers"))
+            condition = _listify(cfg.get("condition") if "condition" in cfg else cfg.get("conditions"))
+            action = _listify(cfg.get("action") if "action" in cfg else cfg.get("actions"))
+            new_data = {
+                **data,
+                "alias": alias,
+                "trigger": trigger,
+                "condition": condition,
+                "action": action,
+            }
+            if cfg.get("description") is not None:
+                new_data["description"] = str(cfg["description"])
+            if cfg.get("mode"):
+                new_data["mode"] = str(cfg["mode"])
+            resolved_targets = rule.targets() if rule is not None else []
+            if not resolved_targets:
+                try:
+                    resolved_targets = NativeAutomationProposal.model_validate(new_data).extract_target_entities()
+                except Exception:
+                    resolved_targets = [t for t in ep.target_entity_ids if t != f"automation.{aid}"]
+            auto_eid = f"automation.{aid}"
+            existing_non_auto = [t for t in ep.target_entity_ids if t != auto_eid]
+            if set(resolved_targets) == set(existing_non_auto):
+                new_targets = list(ep.target_entity_ids)
+            else:
+                new_targets = ([auto_eid] if auto_eid in ep.target_entity_ids else []) + [t for t in resolved_targets if t != auto_eid]
+            if new_data != data or new_targets != ep.target_entity_ids:
+                await self.memory.save_feedback(
+                    ep.model_copy(update={"service_data": new_data, "target_entity_ids": new_targets})
+                )
 
     def equivalent_rule(self, proposal: NativeAutomationProposal) -> str | None:
         return find_equivalent_rule(

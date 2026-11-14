@@ -173,6 +173,71 @@ class OrchestratorTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(res["draft"])
         self.assertTrue(res["errors"])
 
+    async def test_manual_ha_ui_edits_sync_into_tracked_automation_and_health_review(self) -> None:
+        from datetime import datetime, timedelta, timezone
+        from ha_ai_brain.domain.models import NativeAutomationProposal, Transition
+        from ha_ai_brain.ports.telemetry import AUTOMATION_FIRE_STATE
+
+        states = await self.o.smart_home.get_all_states()
+        lights = sorted(e for e in states if e.startswith("light."))
+        first_light = lights[0]
+        second_light = lights[1] if len(lights) > 1 else next(e for e in states if e != first_light and e.split(".", 1)[0] in ("switch", "fan", "cover"))
+        second_dom = second_light.split(".", 1)[0]
+        second_on_svc = f"{second_dom}.open_cover" if second_dom == "cover" else f"{second_dom}.turn_on"
+        second_off_state = "closed" if second_dom == "cover" else "off"
+
+        created = await self.o.create_automation_from_yaml(
+            YAML.replace("light.living", first_light),
+            "ai_brain_edit1234",
+            "Turn the first light on",
+        )
+        aid = created["automation_id"]
+        ep_before = (await self.o.memory.get_accepted_automations())[0]
+        orig_sig = ep_before.action_signature
+        deployed_at = datetime.now(timezone.utc) - timedelta(days=5)
+        await self.o.memory.save_feedback(ep_before.model_copy(update={"created_at": deployed_at}))
+
+        # Simulate the homeowner editing the automation in Home Assistant UI (renamed, new trigger time, new condition, new target entity)
+        await self.o.smart_home.upsert_automation(
+            NativeAutomationProposal(
+                automation_id=aid,
+                alias="Custom edited routine",
+                description="Edited in HA UI",
+                trigger=[{"platform": "time", "at": "22:00:00"}],
+                condition=[{"condition": "time", "weekday": ["mon", "tue", "wed", "thu", "fri"]}],
+                action=[{"service": second_on_svc, "target": {"entity_id": second_light}}],
+            )
+        )
+
+        # Record 4 runs where the homeowner reverted `second_light` within 5 minutes (fighting the edited action)
+        auto_eid = f"automation.{aid}"
+        transitions: list[Transition] = []
+        for day_offset in range(4, 0, -1):
+            fire_ts = datetime.now(timezone.utc) - timedelta(days=day_offset, hours=1)
+            transitions.append(Transition(auto_eid, fire_ts, "", AUTOMATION_FIRE_STATE, "ha_automation"))
+            transitions.append(Transition(second_light, fire_ts + timedelta(minutes=3), "on", second_off_state, "human_or_physical"))
+        await self.o.telemetry.record_transitions(transitions)
+
+        reviews = await self.o.review_deployed_automations()
+        self.assertEqual(len(reviews), 1)
+        self.assertEqual(reviews[0].alias, "Custom edited routine")
+        self.assertEqual(reviews[0].verdict, "overridden")
+        self.assertEqual(reviews[0].overrides, 4)
+
+        # The stored FeedbackEpisode is synced in place (preserving created_at and episode_id) without needing re-adoption
+        ep_after = (await self.o.memory.get_accepted_automations())[0]
+        self.assertEqual(ep_after.episode_id, ep_before.episode_id)
+        self.assertEqual(ep_after.created_at, deployed_at)
+        self.assertEqual(ep_after.service_data["alias"], "Custom edited routine")
+        self.assertEqual(ep_after.service_data["trigger"][0]["at"], "22:00:00")
+        self.assertEqual(ep_after.target_entity_ids, [auto_eid, second_light])
+
+        # Clicking "Never propose again" blocks both the original proposal signature and the edited signature
+        await self.o.forget_deployed_automation(aid, block=True)
+        rejected_sigs = await self.o.memory.get_rejected_signatures()
+        self.assertIn(orig_sig, rejected_sigs)
+        self.assertGreaterEqual(len(rejected_sigs), 2)
+
 
 class AgentPromptPermissionTests(unittest.IsolatedAsyncioTestCase):
     async def test_prompt_forbids_automations_only_for_agents_without_the_domain(self) -> None:

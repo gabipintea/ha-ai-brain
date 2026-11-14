@@ -604,7 +604,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     <div class="grid" style="margin-top:16px;">
       <div class="card">
         <div class="card-head"><h2>Deployed automation health</h2></div>
-        <div class="hint">Checked daily. This lists only automations created through the brain (approved proposals and ones you wrote above), not all your Home Assistant automations. Renaming one in Home Assistant is fine. If you deleted one, "Stop tracking" lets the brain propose it again later, "Never propose again" does not.</div>
+        <div class="hint">Checked daily. This lists only automations created through the brain (approved proposals and ones you wrote above), not all your Home Assistant automations. Renaming or editing one in Home Assistant is fine. If you deleted one, "Stop tracking" lets the brain propose it again later, "Never propose again" does not.</div>
         <div id="reviewsList" class="scroll" style="margin-top:8px;"></div>
       </div>
     </div>

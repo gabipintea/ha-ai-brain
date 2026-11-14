@@ -515,12 +515,17 @@ class SpecializedAgentGraph:
         }
         may_automate = "automation" in agent_spec.controllable_domains
         histories = state.get("history_summaries", {})
+
+        def _deployed_entry(ep: FeedbackEpisode) -> dict[str, Any]:
+            data = ep.service_data or {}
+            aid = str(data.get("automation_id") or "")
+            rule = rules_by_id.get(aid)
+            alias = (rule.alias if rule is not None and rule.alias else None) or data.get("alias") or ep.cause_category
+            targets = ([f"automation.{aid}"] + rule.targets() if rule is not None and rule.targets() else None) or ep.target_entity_ids
+            return {"alias": alias, "targets": targets, "status": "deployed"}
+
         deployed_or_pending = [
-            {
-                "alias": (ep.service_data or {}).get("alias") or ep.cause_category,
-                "targets": ep.target_entity_ids,
-                "status": "deployed",
-            }
+            _deployed_entry(ep)
             for ep in accepted_automations
         ] + [
             {
@@ -621,21 +626,7 @@ class SpecializedAgentGraph:
                 "agent_id": agent_spec.agent_id,
                 "corroborated": {eid: s.model_dump(mode="json") for eid, s in corroborated.items()},
                 "existing_automations": existing_automations,
-                "deployed_or_pending_automations": [
-                    {
-                        "alias": (ep.service_data or {}).get("alias") or ep.cause_category,
-                        "targets": ep.target_entity_ids,
-                        "status": "deployed",
-                    }
-                    for ep in accepted_automations
-                ] + [
-                    {
-                        "alias": (p.intent.native_automation.alias if p.intent.native_automation else (p.intent.service_data or {}).get("alias") or p.intent.cause_category),
-                        "targets": p.intent.target_entity_ids,
-                        "status": "pending_approval",
-                    }
-                    for p in pending_automations
-                ],
+                "deployed_or_pending_automations": deployed_or_pending,
                 "derived_signals": [d.model_dump(exclude={"python_code_executed"}) for d in derived_signals],
                 "research_findings": [f.model_dump() for f in research_findings],
                 "rejected_insights": [r.model_dump(mode="json") for r in rejected_insights],
@@ -721,12 +712,12 @@ class SpecializedAgentGraph:
 
             # 2. Deployed / accepted automations
             for ep in accepted_automations:
-                data = ep.service_data or {}
-                a_alias = data.get("alias") or ep.cause_category
+                entry = _deployed_entry(ep)
+                a_alias = str(entry["alias"] or "")
                 a_words = _normalize_words(a_alias)
                 if a_words and len(a_words & c_words) >= max(2, min(len(a_words), len(c_words)) // 2 + 1):
                     return True
-                ep_targets = set(ep.target_entity_ids or [])
+                ep_targets = set(entry["targets"] or [])
                 if c_targets_set and ep_targets.intersection(c_targets_set):
                     if a_words and len(a_words & c_words) >= 1:
                         return True

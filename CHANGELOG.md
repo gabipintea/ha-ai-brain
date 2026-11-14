@@ -2,6 +2,11 @@
 
 All notable changes to **HA AI Brain** are documented in this file.
 
+## 0.2.20 - 2026-11-14
+
+### Changed
+- **Seamless live sync when editing brain-created automations in Home Assistant.** If you manually edit a tracked automation in the Home Assistant UI (changing its triggers, conditions, actions, target devices, or name), the brain now automatically syncs your updated configuration into its tracked records and daily health review (`review_deployed_automations`) without needing to stop tracking and re-adopt it. Override detection evaluates against your edited actions and targets, and **Never propose again** blocks both the original proposal and the edited version.
+
 ## 0.2.19 - 2026-11-06
 
 ### Changed
