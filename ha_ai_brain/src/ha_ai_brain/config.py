@@ -160,6 +160,10 @@ class BrainSettings(BaseModel):
         default=90, description="Events in the same area wake an agent at most once per this many seconds (0 = off)"
     )
     max_agent_wakeups_per_hour: int = Field(default=6, description="Max real-time AI wake-ups per agent per hour (0 = unlimited)")
+    onboarding_warmup_hours: int = Field(
+        default=48,
+        description="Hours after initial installation during which non-critical push notifications stay in the dashboard (0 = off)",
+    )
     max_actions_per_hour: int = Field(default=30)
     max_actions_per_entity_per_hour: int = Field(default=3)
     quiet_hours_start: str = Field(default="", description="HH:MM local time; low-severity pushes are held during quiet hours")
@@ -260,6 +264,7 @@ class BrainSettings(BaseModel):
             daily_token_budget=_env_int("BRAIN_DAILY_TOKEN_BUDGET", 0, minimum=0),
             realtime_coalesce_seconds=_env_int("BRAIN_REALTIME_COALESCE_SECONDS", 90, minimum=0, maximum=3600),
             max_agent_wakeups_per_hour=_env_int("BRAIN_MAX_AGENT_WAKEUPS_PER_HOUR", 6, minimum=0, maximum=1000),
+            onboarding_warmup_hours=_env_int("BRAIN_ONBOARDING_WARMUP_HOURS", 48, minimum=0, maximum=720),
             max_actions_per_hour=_env_int("BRAIN_MAX_ACTIONS_PER_HOUR", 30, minimum=1, maximum=1000),
             max_actions_per_entity_per_hour=_env_int("BRAIN_MAX_ACTIONS_PER_ENTITY_PER_HOUR", 3, minimum=1, maximum=100),
             quiet_hours_start=os.getenv("BRAIN_QUIET_HOURS_START", "").strip(),

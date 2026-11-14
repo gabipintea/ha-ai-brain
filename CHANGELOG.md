@@ -2,6 +2,16 @@
 
 All notable changes to **HA AI Brain** are documented in this file.
 
+## 0.2.21 - 2026-11-14
+
+### Added
+- **Automatic 48-hour onboarding warm-up period (`onboarding_warmup_hours`).** During the first 48 hours after initial installation (configurable under *Settings → Learning & Safety*, `0` = off), non-critical automation proposals and advisory insights are saved in the dashboard (*Approvals* and *Activity & Insights*) without sending phone push notifications, while critical safety and security alerts still push immediately.
+- **Single summary push notification per batch scan.** When a scheduled or manual batch analysis (or the end of quiet hours) produces multiple new automation proposals and/or insights at once, they are now consolidated into a single compact summary push notification (`🧠 AI Brain · X approvals · Y insights`) instead of sending a burst of separate pushes.
+
+### Changed
+- **Quiet-by-default real-time gating during baseline learning.** While routines and normal sensor ranges are still being learned (`< 3` days of history, or a numeric sensor that has no hourly baseline yet), ordinary real-time state changes no longer wake AI agents on every event; safety and security entities (`lock`, `alarm_control_panel`, `valve`, and door/window/smoke/leak/gas sensors) always wake immediately. Numeric baselines now also fall back across all days of the week when a weekday/weekend hour bucket has fewer than 3 samples, so the initial 4-day (96-hour) history import immediately provides hourly z-scores on day 1.
+- **Single merged push on actionable unusual-situation alerts.** When an `Unusual:` exception wakes an agent that proposes an approval action (such as locking an unlocked door) or executes an announced autonomous action, only that single actionable push is sent (with time-sensitive delivery for critical alerts) instead of sending two back-to-back pushes, while the exception card remains recorded in the dashboard.
+
 ## 0.2.20 - 2026-11-14
 
 ### Changed

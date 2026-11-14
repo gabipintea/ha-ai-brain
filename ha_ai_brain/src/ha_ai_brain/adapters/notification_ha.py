@@ -134,7 +134,7 @@ class HomeAssistantNotificationAdapter(NotificationPort):
             msg = msg[:max_chars].rsplit(" ", 1)[0].rstrip(" ,.-;:") + "…"
         return msg
 
-    async def send_approval_request(self, pending: PendingApproval) -> None:
+    async def send_approval_request(self, pending: PendingApproval, urgent: bool = False) -> None:
         domain, service = await self._resolve_service_name()
         intent = pending.intent
         aid = pending.approval_id
@@ -185,6 +185,10 @@ class HomeAssistantNotificationAdapter(NotificationPort):
                 ],
             },
         }
+        if urgent:
+            payload["data"]["push"] = {"interruption-level": "time-sensitive"}
+            payload["data"]["priority"] = "high"
+            payload["data"]["ttl"] = 0
         self.sent_notifications.append({"type": "approval_request", "approval_id": aid, "payload": payload})
         try:
             await self.smart_home.call_service(
@@ -245,6 +249,56 @@ class HomeAssistantNotificationAdapter(NotificationPort):
             payload["data"]["actions"] = [{"action": f"BRAIN_UNDO:{undo_id}", "title": "Undo"}]
         self.sent_notifications.append({"type": "action_taken", "undo_id": undo_id, "payload": payload})
         await self._send(domain, service, payload, "action notice")
+
+    async def send_batch_summary(
+        self, approvals: list[PendingApproval], insights: list[AdvisoryInsight]
+    ) -> None:
+        if not approvals and not insights:
+            return
+        domain, service = await self._resolve_service_name()
+        panel_path = await self._panel_path()
+
+        parts: list[str] = []
+        if approvals:
+            parts.append(f"{len(approvals)} approval{'s' if len(approvals) != 1 else ''}")
+        if insights:
+            parts.append(f"{len(insights)} insight{'s' if len(insights) != 1 else ''}")
+        title = self._compact_title(" · ".join(parts), prefix="🧠 AI Brain")
+
+        examples: list[str] = []
+        for p in approvals[:2]:
+            if p.intent.domain == "automation" and p.intent.native_automation:
+                examples.append(f"⚡ {p.intent.native_automation.alias}")
+            else:
+                examples.append(f"⚡ {p.intent.domain}.{p.intent.service}")
+        for ins in insights[: max(0, 3 - len(examples))]:
+            examples.append(f"💡 {ins.title}")
+        preview = " · ".join(examples)
+        message = f"{preview}\nOpen the AI Brain dashboard to review." if preview else "Open the AI Brain dashboard to review."
+        if len(message) > 180:
+            message = message[:180].rsplit(" ", 1)[0].rstrip(" ,.-;:") + "…"
+
+        target_url = f"{panel_path}#approvals" if approvals else f"{panel_path}#activity"
+        payload = {
+            "title": title,
+            "message": message,
+            "data": {
+                "tag": "ha_ai_brain_batch_summary",
+                "group": "ha_ai_brain_insights",
+                "subtitle": "Batch Analysis Summary",
+                "url": target_url,
+                "clickAction": target_url,
+            },
+        }
+        self.sent_notifications.append(
+            {
+                "type": "batch_summary",
+                "approvals_count": len(approvals),
+                "insights_count": len(insights),
+                "payload": payload,
+            }
+        )
+        await self._send(domain, service, payload, "batch summary")
 
     async def _panel_path(self) -> str:
         if hasattr(self.smart_home, "get_addon_panel_path"):

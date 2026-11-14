@@ -307,7 +307,7 @@ class TestLiveHomeAssistantReadiness(unittest.IsolatedAsyncioTestCase):
 
         composed = ClimateAgentGraph._compose_effective_site_context(
             {
-                "site_context": "2-storey house in Tunari",
+                "site_context": "2-storey residential house",
                 "user_context_notes": saved_notes,
             }
         )

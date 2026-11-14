@@ -638,16 +638,24 @@ class LearningEngine:
             return True, ""
         if frame.significance_reason.startswith("Exception:") or frame.target_agent_id == "repair_diagnostics_agent":
             return True, ""
-        if not frame.trigger_events or not await self.baseline_ready(now):
+        if not frame.trigger_events:
             return True, ""
         ev = frame.trigger_events[0]
         st = ev.new_state
         if is_safety_entity(st) or (st.device_class or "") in SECURITY_DEVICE_CLASSES:
             return True, ""
+        if not await self.baseline_ready(now):
+            if not self.settings.use_simulator or await self.telemetry.get_meta("observed_since") is not None:
+                return False, f"Learning baseline not ready yet (< {self.settings.baseline_min_days}d of history)"
+            return True, ""
 
         if st.domain == "sensor" and st.numeric_value is not None:
             z = (await self.numeric_baseline(st.entity_id, now)).zscore(st.numeric_value, ev.timestamp)
-            if z is not None and abs(z) < 2.5:
+            if z is None:
+                if not self.settings.use_simulator or await self.telemetry.get_meta("observed_since") is not None:
+                    return False, f"{st.entity_id} has no hourly baseline yet (learning normal range)"
+                return True, ""
+            if abs(z) < 2.5:
                 return False, f"{st.entity_id} is typical for this time of day (z={z:+.1f})"
             return True, ""
 

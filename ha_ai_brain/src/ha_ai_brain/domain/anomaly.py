@@ -359,15 +359,15 @@ def find_numeric_anomalies(
         base = baselines.get(eid)
         if value is None or base is None:
             continue
-        z_now = base.zscore(value, now)
+        z_now = base.zscore(value, now, min_samples=6)
         previous = [(parse_iso(h), mean) for h, _, mean in rows]
         previous = [(t, m) for t, m in previous if t is not None and t < current_hour]
         if z_now is None or not previous:
             continue
-        z_prev = base.zscore(previous[-1][1], previous[-1][0])
+        z_prev = base.zscore(previous[-1][1], previous[-1][0], min_samples=6)
         if z_prev is None or abs(z_now) < 3.5 or abs(z_prev) < 3.0 or (z_now > 0) != (z_prev > 0):
             continue
-        stat = base.stats.get((_day_class(local_now), local_now.hour))
+        stat = base.stats.get((_day_class(local_now), local_now.hour)) or base.hourly_stats.get(local_now.hour)
         usual = stat[1] if stat else value
         unit = st.unit_of_measurement or ""
         out.append(

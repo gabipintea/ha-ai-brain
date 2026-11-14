@@ -598,8 +598,11 @@ class TestOrchestratorIntegration(unittest.IsolatedAsyncioTestCase):
         pending = await self.orch.memory.get_pending_approvals()
         self.assertEqual([(p.intent.domain, p.intent.service, p.intent.target_entity_ids) for p in pending], [("lock", "lock", ["lock.front_door"])])
         kinds = [n["type"] for n in self.orch.notification.sent_notifications]
-        self.assertEqual(kinds.count("advisory_insight"), 1)  # the alert
+        self.assertEqual(kinds.count("advisory_insight"), 0)  # merged: no duplicate alert push when an approval push is sent
         self.assertEqual(kinds.count("approval_request"), 1)  # the "lock it now?" push is not held back by quiet hours
+        appr_push = [n for n in self.orch.notification.sent_notifications if n["type"] == "approval_request"][-1]
+        self.assertEqual(appr_push["payload"]["data"]["push"]["interruption-level"], "time-sensitive")
+        self.assertEqual(len([i for i in await self.orch.memory.get_advisory_insights(status="active") if i.category == "exception"]), 1)
         self.assertEqual(self.orch._deferred_approval_pushes, set())
 
         # an ordinary, non-urgent proposal at the same time IS held back
@@ -742,6 +745,145 @@ class TestOrchestratorIntegration(unittest.IsolatedAsyncioTestCase):
         wake, reason = await self.orch.learning.should_wake_agent(frame, now)
         self.assertFalse(wake)
         self.assertIn("Study dehumidify", reason)
+
+    async def test_quiet_by_default_realtime_gating_during_learning_and_numeric_hourly_fallback(self) -> None:
+        from ha_ai_brain.domain.models import SemanticEventFrame, StateChangedEvent
+
+        # 1. During initial learning (< baseline_min_days), ordinary events are gated while safety/security wakes immediately
+        await self.orch.telemetry.set_meta("observed_since", (self.now - timedelta(hours=12)).isoformat())
+        await self.orch.telemetry.record_transitions([Transition("light.kitchen", self.now - timedelta(hours=12), "off", "on", "human_or_physical")])
+        light_st = EntityState(entity_id="light.kitchen", domain="light", state="on", last_changed=self.now, last_updated=self.now)
+        light_frame = SemanticEventFrame(
+            target_agent_id="lighting_pattern_agent",
+            trigger_events=[StateChangedEvent(entity_id="light.kitchen", new_state=light_st, timestamp=self.now)],
+        )
+        wake, reason = await self.orch.learning.should_wake_agent(light_frame, self.now)
+        self.assertFalse(wake)
+        self.assertIn("baseline not ready", reason.lower())
+
+        lock_st = EntityState(entity_id="lock.front_door", domain="lock", state="unlocked", last_changed=self.now, last_updated=self.now)
+        lock_frame = SemanticEventFrame(
+            target_agent_id="security_safety_agent",
+            trigger_events=[StateChangedEvent(entity_id="lock.front_door", new_state=lock_st, timestamp=self.now)],
+        )
+        wake_lock, _ = await self.orch.learning.should_wake_agent(lock_frame, self.now)
+        self.assertTrue(wake_lock)
+
+        # 2. Once baseline is ready, a sensor with no hourly samples yet is gated, while 4 days of backfill (2 weekday + 2 weekend) works via hourly fallback
+        await self.orch.telemetry.set_meta("observed_since", (self.now - timedelta(days=5)).isoformat())
+        await self.orch.telemetry.record_transitions([Transition("light.kitchen", self.now - timedelta(days=5), "off", "on", "human_or_physical")])
+        self.orch.learning._baseline_ready_cache = None
+        new_sensor = EntityState(
+            entity_id="sensor.attic_temp",
+            domain="sensor",
+            state="22.5",
+            numeric_value=22.5,
+            device_class="temperature",
+            last_changed=self.now,
+            last_updated=self.now,
+        )
+        sensor_frame = SemanticEventFrame(
+            target_agent_id="climate_thermal_agent",
+            trigger_events=[StateChangedEvent(entity_id="sensor.attic_temp", new_state=new_sensor, timestamp=self.now)],
+        )
+        wake_sensor, reason_sensor = await self.orch.learning.should_wake_agent(sensor_frame, self.now)
+        self.assertFalse(wake_sensor)
+        self.assertIn("no hourly baseline", reason_sensor.lower())
+
+        # Record 4 days of backfill at the same local hour (e.g. Fri, Sat, Sun, Mon -> 2 weekday + 2 weekend < 3 per day_class, but 4 combined)
+        await self.orch.telemetry.record_numeric([
+            ("sensor.attic_temp", self.now - timedelta(days=d), 22.0 + (0.1 * d))
+            for d in range(1, 5)
+        ])
+        self.orch.learning._numeric_baselines.clear()
+        wake_typical, reason_typical = await self.orch.learning.should_wake_agent(sensor_frame, self.now)
+        self.assertFalse(wake_typical)
+        self.assertIn("typical", reason_typical.lower())
+
+    async def test_onboarding_warmup_holds_non_critical_pushes_and_allows_critical(self) -> None:
+        from ha_ai_brain.domain.models import ActionRiskLevel, AdvisoryInsight
+
+        await self.orch.memory.set_kv("onboarding:installed_at", (self.now - timedelta(hours=2)).isoformat())
+        self.orch.settings.onboarding_warmup_hours = 48
+
+        # Ordinary insight and approval stay in the dashboard without sending a push
+        ins = AdvisoryInsight(
+            agent_id="energy_optimization_agent",
+            category="efficiency",
+            title="Idle plug draw",
+            finding_details="Standby load is 12 W.",
+            recommended_human_action="Unplug unused charger.",
+            estimated_impact="100 kWh/yr",
+        )
+        await self.orch.memory.save_advisory_insight(ins)
+        await self.orch._notify_insight(ins)
+        routine = ActionIntent(
+            agent_id="lighting_pattern_agent",
+            domain="light",
+            service="turn_off",
+            target_entity_ids=["light.kitchen_ceiling"],
+            cause_category="idle_room",
+            rationale="Room is empty.",
+            risk_level=ActionRiskLevel.LOW,
+        )
+        await self.orch._evaluate_and_dispatch_intents([routine])
+        self.assertEqual(len(self.orch.notification.sent_notifications), 0)
+        self.assertEqual(self.orch.learning.stats["pushes_suppressed_warmup"], 2)
+        self.assertEqual(len(await self.orch.memory.get_pending_approvals()), 1)
+
+        # Critical alerts still break through onboarding warm-up immediately
+        urgent_ins = AdvisoryInsight(
+            agent_id="security_safety_agent",
+            category="exception",
+            title="Unusual: Water leak detected",
+            finding_details="Moisture sensor is wet.",
+            recommended_human_action="Check pipe immediately.",
+            estimated_impact="Safety / security",
+        )
+        await self.orch._notify_insight(urgent_ins, urgent=True)
+        self.assertEqual(len(self.orch.notification.sent_notifications), 1)
+        self.assertEqual(self.orch.notification.sent_notifications[0]["type"], "advisory_insight")
+
+    async def test_batch_scan_consolidates_multiple_pushes_into_single_summary(self) -> None:
+        from ha_ai_brain.domain.models import AdvisoryInsight, PendingApproval
+
+        p1 = PendingApproval(
+            intent=ActionIntent(
+                agent_id="lighting_pattern_agent",
+                domain="automation",
+                service="upsert_native_automation",
+                target_entity_ids=["automation.ai_brain_porch_off"],
+                cause_category="learned_habit",
+                rationale="Porch light turns off at 23:00.",
+            ),
+            signature="sig1",
+        )
+        p2 = PendingApproval(
+            intent=ActionIntent(
+                agent_id="climate_thermal_agent",
+                domain="automation",
+                service="upsert_native_automation",
+                target_entity_ids=["automation.ai_brain_night_setback"],
+                cause_category="learned_habit",
+                rationale="Thermostat drops to 19°C at 22:30.",
+            ),
+            signature="sig2",
+        )
+        ins = AdvisoryInsight(
+            agent_id="energy_optimization_agent",
+            category="efficiency",
+            title="High overnight baseload",
+            finding_details="Baseload averaged 420 W between 01:00 and 05:00.",
+            recommended_human_action="Check always-on appliances.",
+            estimated_impact="Comfort / energy",
+        )
+        await self.orch._flush_batch_pushes([p1, p2], [ins])
+        self.assertEqual(len(self.orch.notification.sent_notifications), 1)
+        summary = self.orch.notification.sent_notifications[0]
+        self.assertEqual(summary["type"], "batch_summary")
+        self.assertIn("2 approvals", summary["payload"]["title"])
+        self.assertIn("1 insight", summary["payload"]["title"])
+        self.assertEqual(self.orch.learning.stats["batch_pushes_consolidated"], 2)
 
 
 class TestLearningApi(unittest.IsolatedAsyncioTestCase):

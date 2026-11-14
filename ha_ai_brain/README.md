@@ -47,7 +47,7 @@
 **You stay in control**
 * Shadow / Co-pilot / Autonomous — globally and per device type (for example lights autonomous, locks co-pilot).
 * Hard guardrails the AI cannot override: temperature limits, blocked code-execution domains, approval always required for unlocking, disarming, garage doors, valves and restarts — also when they are hidden inside an automation an agent proposes.
-* Approve from your phone: *Approve once*, *Always allow*, *Dismiss*, *Reject*. **Undo** button on everything it does by itself.
+* Approve from your phone: *Approve once*, *Always allow*, *Dismiss*, *Reject*. **Undo** button on everything it does by itself. Batch scans consolidate multiple findings into a single summary push, and a 48-hour onboarding warm-up keeps non-critical findings in the dashboard right after installation.
 * Action rate limits, quiet hours, a daily token budget, a kill switch, and a privacy filter that hides people, phones and network identifiers from cloud AI.
 
 **Light on tokens and hardware (Raspberry Pi friendly)**

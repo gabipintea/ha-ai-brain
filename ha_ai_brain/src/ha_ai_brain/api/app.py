@@ -50,6 +50,7 @@ class SettingsUpdateRequest(BaseModel):
     max_actions_per_entity_per_hour: int | None = Field(default=None, ge=1, le=100)
     realtime_coalesce_seconds: int | None = Field(default=None, ge=0, le=3600)
     max_agent_wakeups_per_hour: int | None = Field(default=None, ge=0, le=1000)
+    onboarding_warmup_hours: int | None = Field(default=None, ge=0, le=720)
     quiet_hours_start: str | None = Field(default=None, max_length=5)
     quiet_hours_end: str | None = Field(default=None, max_length=5)
     domain_autonomy: dict[str, AutonomyLevel] | None = None
@@ -64,7 +65,7 @@ class SettingsUpdateRequest(BaseModel):
         "privacy_scrub", "daily_token_budget", "max_actions_per_hour", "max_actions_per_entity_per_hour",
         "quiet_hours_start", "quiet_hours_end", "domain_autonomy", "critical_openings",
         "research_enabled", "research_web_search", "research_interval_days", "research_topics_per_agent",
-        "realtime_coalesce_seconds", "max_agent_wakeups_per_hour",
+        "realtime_coalesce_seconds", "max_agent_wakeups_per_hour", "onboarding_warmup_hours",
     )
 
 

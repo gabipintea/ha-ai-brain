@@ -776,6 +776,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
               <input type="number" min="0" max="1000" id="wakeCapInput" onchange="setRuntime('max_agent_wakeups_per_hour', parseInt(this.value || '0', 10))" />
             </label>
           </div>
+          <label class="field">Onboarding warm-up period after install (hours, 0 = off — non-critical pushes stay in the dashboard)
+            <input type="number" min="0" max="720" id="warmupHoursInput" onchange="setRuntime('onboarding_warmup_hours', parseInt(this.value || '0', 10))" />
+          </label>
           <div class="grid two" style="gap:12px; margin:0;">
             <label class="field">Quiet hours start (low-priority pushes are held)
               <input type="time" id="quietStartInput" onchange="saveQuietHours()" />
@@ -1865,6 +1868,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     setVal('maxActionsInput', st.max_actions_per_hour);
     setVal('coalesceInput', st.realtime_coalesce_seconds);
     setVal('wakeCapInput', st.max_agent_wakeups_per_hour);
+    setVal('warmupHoursInput', st.onboarding_warmup_hours);
     setVal('quietStartInput', st.quiet_hours_start);
     setVal('quietEndInput', st.quiet_hours_end);
     setVal('criticalInput', st.critical_openings);
@@ -1892,6 +1896,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     events_coalesced: 'Events merged into one AI run',
     wakeups_skipped_no_actuator: 'AI wake-ups skipped (nothing to operate)',
     wakeups_capped: 'AI wake-ups held back by the hourly cap',
+    pushes_suppressed_warmup: 'Non-critical pushes held during onboarding warm-up',
+    batch_pushes_consolidated: 'Individual batch pushes merged into summary',
   };
   const VERDICT_PILL = {healthy: 'ok', too_new: '', never_fired: 'warn', overridden: 'warn', disabled: 'warn', missing: 'danger'};
 
@@ -2442,7 +2448,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       ['State changes stored', store.transitions || 0],
       ['Devices tracked', (store.entities_with_transitions || 0) + ' switchable, ' + (store.entities_with_numeric || 0) + ' sensors'],
       ['Existing HA automations known', d.existing_automations],
-      ['Smart AI wake-ups', d.gating_active ? 'Only for unusual events' : 'Every significant event (still learning)'],
+      ['Smart AI wake-ups', d.gating_active ? 'Only for unusual events' : 'Safety & security only (learning routines)'],
+      ['Onboarding warm-up', d.onboarding_warmup_active ? ('Active (' + (d.onboarding_warmup_hours || 48) + 'h quiet onboarding)') : 'Completed'],
       ['AI tokens today', d.tokens_today + (d.daily_token_budget ? ' / ' + d.daily_token_budget : ' (no budget)')],
       ['Timezone', d.timezone],
     ].map(([k, v]) => `<span>${esc(k)}</span><span>${esc(v)}</span>`).join('');

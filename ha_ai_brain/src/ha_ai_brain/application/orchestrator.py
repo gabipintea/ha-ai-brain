@@ -88,6 +88,11 @@ logger = logging.getLogger(__name__)
 # True while handling a critical unusual situation: its approval requests must reach you even during quiet hours.
 _URGENT_DISPATCH: ContextVar[bool] = ContextVar("urgent_dispatch", default=False)
 
+# Collects non-urgent approvals and insights during a batch scan so they are sent as one summary push.
+_BATCH_PUSH_BUFFER: ContextVar[tuple[list[PendingApproval], list[AdvisoryInsight]] | None] = ContextVar(
+    "batch_push_buffer", default=None
+)
+
 # Unanswered approval requests expire after this long (an hours-old proposal no longer reflects the home state).
 PENDING_APPROVAL_TTL_HOURS = 24
 
@@ -345,7 +350,7 @@ class BrainOrchestrator:
     _INT_PREFS = (
         "daily_token_budget", "max_actions_per_hour", "max_actions_per_entity_per_hour",
         "research_interval_days", "research_topics_per_agent",
-        "realtime_coalesce_seconds", "max_agent_wakeups_per_hour",
+        "realtime_coalesce_seconds", "max_agent_wakeups_per_hour", "onboarding_warmup_hours",
     )
 
     def _entity_label(self, entity_id: str) -> tuple[str, str]:
@@ -578,24 +583,30 @@ class BrainOrchestrator:
                         )
                         continue
                     self._last_batch_run_at = datetime.now(timezone.utc)
+                    batch_buf: tuple[list[PendingApproval], list[AdvisoryInsight]] = ([], [])
+                    token = _BATCH_PUSH_BUFFER.set(batch_buf)
                     try:
-                        await self.run_pattern_cycle()
-                    except Exception as habit_exc:
-                        logger.error("Error during learned-habit scan: %s", habit_exc)
-                    active_agents = self.registry.get_active_agents()
-                    logger.info("Executing Periodic Batch Analysis across %d active specialized agents...", len(active_agents))
-                    for agent in active_agents:
-                        if not self._running:
-                            break
                         try:
-                            logger.info("Running Batch Analysis for agent: %s (%s)...", agent.name, agent.agent_id)
-                            await self.run_periodic_batch_analysis(
-                                agent_id=agent.agent_id,
-                                lookback_hours=self.settings.batch_lookback_hours,
-                                force=False,
-                            )
-                        except Exception as agent_exc:
-                            logger.error("Error in periodic batch analysis for agent %s: %s", agent.agent_id, agent_exc)
+                            await self.run_pattern_cycle()
+                        except Exception as habit_exc:
+                            logger.error("Error during learned-habit scan: %s", habit_exc)
+                        active_agents = self.registry.get_active_agents()
+                        logger.info("Executing Periodic Batch Analysis across %d active specialized agents...", len(active_agents))
+                        for agent in active_agents:
+                            if not self._running:
+                                break
+                            try:
+                                logger.info("Running Batch Analysis for agent: %s (%s)...", agent.name, agent.agent_id)
+                                await self.run_periodic_batch_analysis(
+                                    agent_id=agent.agent_id,
+                                    lookback_hours=self.settings.batch_lookback_hours,
+                                    force=False,
+                                )
+                            except Exception as agent_exc:
+                                logger.error("Error in periodic batch analysis for agent %s: %s", agent.agent_id, agent_exc)
+                    finally:
+                        _BATCH_PUSH_BUFFER.reset(token)
+                        await self._flush_batch_pushes(*batch_buf)
             except asyncio.CancelledError:
                 break
             except Exception as exc:
@@ -990,20 +1001,30 @@ class BrainOrchestrator:
         insights = final_state.get("advisory_insights", [])
         run_id = f"run_{uuid.uuid4().hex[:8]}"
 
-        open_insights = await self.memory.get_advisory_insights(limit=200, status="active") if insights else []
-        for insight in insights:
-            if is_same_open_insight(insight.title, insight.agent_id, open_insights):
-                continue  # already in the homeowner's list: it acts as a to-do item, do not add or announce it again
-            insight.run_id = run_id
-            await self.memory.save_advisory_insight(insight)
-            open_insights.append(insight)
-            await self._notify_insight(insight)
+        local_buf: tuple[list[PendingApproval], list[AdvisoryInsight]] | None = None
+        buf_token = None
+        if _BATCH_PUSH_BUFFER.get() is None:
+            local_buf = ([], [])
+            buf_token = _BATCH_PUSH_BUFFER.set(local_buf)
+        try:
+            open_insights = await self.memory.get_advisory_insights(limit=200, status="active") if insights else []
+            for insight in insights:
+                if is_same_open_insight(insight.title, insight.agent_id, open_insights):
+                    continue  # already in the homeowner's list: it acts as a to-do item, do not add or announce it again
+                insight.run_id = run_id
+                await self.memory.save_advisory_insight(insight)
+                open_insights.append(insight)
+                await self._notify_insight(insight)
 
-        for intent in intents:
-            intent.run_id = run_id
+            for intent in intents:
+                intent.run_id = run_id
 
-        await self._attach_backtests(intents, now)
-        exec_results = await self._evaluate_and_dispatch_intents(intents, run_id=run_id)
+            await self._attach_backtests(intents, now)
+            exec_results = await self._evaluate_and_dispatch_intents(intents, run_id=run_id)
+        finally:
+            if buf_token is not None and local_buf is not None:
+                _BATCH_PUSH_BUFFER.reset(buf_token)
+                await self._flush_batch_pushes(*local_buf)
 
         run_log = AgentRunLog(
             run_id=run_id,
@@ -1039,22 +1060,32 @@ class BrainOrchestrator:
         if self.settings.operating_mode != OperatingMode.REALTIME_STREAM:
             # Fixed once per run (not per agent) so the displayed "Next batch" time stays put while the agents work.
             self._next_batch_run_at = datetime.now(timezone.utc) + timedelta(minutes=self.settings.batch_interval_minutes)
+        local_buf: tuple[list[PendingApproval], list[AdvisoryInsight]] | None = None
+        buf_token = None
+        if _BATCH_PUSH_BUFFER.get() is None:
+            local_buf = ([], [])
+            buf_token = _BATCH_PUSH_BUFFER.set(local_buf)
         try:
-            habit_log = await self.run_pattern_cycle()
-            if habit_log is not None:
-                logs.append(habit_log)
-        except Exception as exc:
-            logger.error("Error during learned-habit scan: %s", exc)
-        for agent in self.registry.get_active_agents():
             try:
-                log = await self.run_periodic_batch_analysis(
-                    agent_id=agent.agent_id,
-                    area_id=area_id,
-                    lookback_hours=lookback_hours,
-                )
-                logs.append(log)
+                habit_log = await self.run_pattern_cycle()
+                if habit_log is not None:
+                    logs.append(habit_log)
             except Exception as exc:
-                logger.error("Error during batch analysis for agent '%s': %s", agent.agent_id, exc)
+                logger.error("Error during learned-habit scan: %s", exc)
+            for agent in self.registry.get_active_agents():
+                try:
+                    log = await self.run_periodic_batch_analysis(
+                        agent_id=agent.agent_id,
+                        area_id=area_id,
+                        lookback_hours=lookback_hours,
+                    )
+                    logs.append(log)
+                except Exception as exc:
+                    logger.error("Error during batch analysis for agent '%s': %s", agent.agent_id, exc)
+        finally:
+            if buf_token is not None and local_buf is not None:
+                _BATCH_PUSH_BUFFER.reset(buf_token)
+                await self._flush_batch_pushes(*local_buf)
         return logs
 
     def _is_intent_redundant(self, intent: ActionIntent) -> tuple[bool, str]:
@@ -1285,14 +1316,20 @@ class BrainOrchestrator:
                 # Later intents in this same batch must see it, or identical/opposing proposals would pile up.
                 active_pending.append(pending)
                 if self.settings.notifications_enabled:
-                    if (
+                    is_urgent = _URGENT_DISPATCH.get() or eval_res.effective_risk == ActionRiskLevel.CRITICAL
+                    batch_buf = _BATCH_PUSH_BUFFER.get()
+                    if not is_urgent and await self._in_onboarding_warmup():
+                        self.learning.stats["pushes_suppressed_warmup"] += 1
+                    elif (
                         self._in_quiet_hours()
-                        and not _URGENT_DISPATCH.get()
+                        and not is_urgent
                         and eval_res.effective_risk not in (ActionRiskLevel.HIGH, ActionRiskLevel.CRITICAL)
                     ):
                         self._deferred_approval_pushes.add(pending.approval_id)
+                    elif not is_urgent and batch_buf is not None:
+                        batch_buf[0].append(pending)
                     else:
-                        await self.notification.send_approval_request(pending)
+                        await self._send_approval_push(pending, urgent=is_urgent)
                 results.append(
                     {
                         "intent_id": intent.intent_id,
@@ -1569,14 +1606,52 @@ class BrainOrchestrator:
         local = self.learning.local_now(now or datetime.now(timezone.utc))
         return is_quiet_hours(local, self.settings.quiet_hours_start, self.settings.quiet_hours_end)
 
+    async def _in_onboarding_warmup(self, now: datetime | None = None) -> bool:
+        """True during the initial post-install warm-up window when non-critical pushes stay in the dashboard."""
+        hours = self.settings.onboarding_warmup_hours
+        if hours <= 0:
+            return False
+        now = now or datetime.now(timezone.utc)
+        raw = await self.memory.get_kv("onboarding:installed_at")
+        if not raw:
+            if self.settings.use_simulator:
+                return False
+            await self.memory.set_kv("onboarding:installed_at", now.isoformat())
+            return True
+        try:
+            installed_at = datetime.fromisoformat(raw)
+            if installed_at.tzinfo is None:
+                installed_at = installed_at.replace(tzinfo=timezone.utc)
+        except ValueError:
+            return False
+        return (now - installed_at) < timedelta(hours=hours)
+
+    async def _send_approval_push(self, pending: PendingApproval, *, urgent: bool = False) -> None:
+        try:
+            if urgent:
+                await self.notification.send_approval_request(pending, urgent=True)
+            else:
+                await self.notification.send_approval_request(pending)
+        except TypeError:
+            await self.notification.send_approval_request(pending)
+        except Exception as exc:
+            logger.warning("Could not dispatch approval notification: %s", exc)
+
     async def _notify_insight(self, insight: AdvisoryInsight, *, urgent: bool = False, even_in_shadow: bool = False) -> None:
-        """Push an insight honoring notification preferences, shadow mode and quiet hours."""
+        """Push an insight honoring notification preferences, shadow mode, onboarding warm-up, batching and quiet hours."""
         if not self.settings.notifications_enabled:
             return
         if self.settings.default_autonomy == AutonomyLevel.SHADOW and not even_in_shadow:
             return
+        if not urgent and await self._in_onboarding_warmup():
+            self.learning.stats["pushes_suppressed_warmup"] += 1
+            return
         if not urgent and self._in_quiet_hours():
             self._deferred_insights = (self._deferred_insights + [insight])[-20:]
+            return
+        batch_buf = _BATCH_PUSH_BUFFER.get()
+        if not urgent and batch_buf is not None:
+            batch_buf[1].append(insight)
             return
         try:
             if urgent:
@@ -1586,18 +1661,44 @@ class BrainOrchestrator:
         except Exception as exc:
             logger.warning("Could not dispatch advisory notification: %s", exc)
 
+    async def _flush_batch_pushes(
+        self, approvals: list[PendingApproval], insights: list[AdvisoryInsight]
+    ) -> None:
+        """Deliver buffered batch findings as a single push notification (or one direct card if only one item)."""
+        if not self.settings.notifications_enabled:
+            return
+        total = len(approvals) + len(insights)
+        if total == 0:
+            return
+        if len(approvals) == 1 and not insights:
+            await self._send_approval_push(approvals[0])
+            return
+        if len(insights) == 1 and not approvals:
+            try:
+                await self.notification.send_advisory_alert(insights[0])
+            except Exception as exc:
+                logger.warning("Could not dispatch advisory notification: %s", exc)
+            return
+        try:
+            await self.notification.send_batch_summary(approvals, insights)
+            self.learning.stats["batch_pushes_consolidated"] += total - 1
+        except Exception as exc:
+            logger.warning("Could not dispatch batch summary notification: %s", exc)
+
     async def _flush_deferred(self) -> None:
-        """Deliver pushes that were held back during quiet hours."""
+        """Deliver pushes that were held back during quiet hours (consolidated when multiple items queued up)."""
         if self._in_quiet_hours() or not (self._deferred_approval_pushes or self._deferred_insights):
             return
+        approvals: list[PendingApproval] = []
         if self._deferred_approval_pushes:
             ids, self._deferred_approval_pushes = self._deferred_approval_pushes, set()
             for pending in await self.memory.get_pending_approvals():
                 if pending.approval_id in ids and self.settings.notifications_enabled:
-                    await self.notification.send_approval_request(pending)
+                    approvals.append(pending)
         insights, self._deferred_insights = self._deferred_insights, []
-        for insight in insights:
-            await self._notify_insight(insight)
+        if self.settings.default_autonomy == AutonomyLevel.SHADOW:
+            insights = [i for i in insights if i.category == "exception"]
+        await self._flush_batch_pushes(approvals, insights)
 
     async def _tokens_used_today(self) -> int:
         day = datetime.now(timezone.utc).date().isoformat()
@@ -1657,7 +1758,12 @@ class BrainOrchestrator:
                 "calls": calls,
             }
             await self.memory.set_kv(f"undo:{undo_id}", json.dumps(record))
-        if self.settings.notifications_enabled and not self._in_quiet_hours():
+        urgent = _URGENT_DISPATCH.get()
+        if (
+            self.settings.notifications_enabled
+            and (urgent or not self._in_quiet_hours())
+            and (urgent or not await self._in_onboarding_warmup())
+        ):
             try:
                 await self.notification.send_action_taken(intent, undo_id)
             except Exception as exc:
@@ -1888,7 +1994,17 @@ class BrainOrchestrator:
         for intent in intents:
             intent.run_id = run_id
         await self._attach_backtests(intents, now)
-        exec_results = await self._dispatch_habit_intents(intents, proposed_patterns, run_id)
+        local_buf: tuple[list[PendingApproval], list[AdvisoryInsight]] | None = None
+        buf_token = None
+        if _BATCH_PUSH_BUFFER.get() is None:
+            local_buf = ([], [])
+            buf_token = _BATCH_PUSH_BUFFER.set(local_buf)
+        try:
+            exec_results = await self._dispatch_habit_intents(intents, proposed_patterns, run_id)
+        finally:
+            if buf_token is not None and local_buf is not None:
+                _BATCH_PUSH_BUFFER.reset(buf_token)
+                await self._flush_batch_pushes(*local_buf)
         proposed = sum(1 for r in exec_results if r.get("status") in ("awaiting_user_approval", "executed"))
         self.learning.stats["habit_automations_proposed"] += proposed
         run_log = AgentRunLog(
@@ -1991,21 +2107,29 @@ class BrainOrchestrator:
         )
         await self.memory.save_advisory_insight(insight)
         self.learning.stats["exceptions_detected"] += 1
-        await self._notify_insight(insight, urgent=finding.severity == "critical", even_in_shadow=True)
 
-        if agent is None or self.settings.paused or self.settings.operating_mode == OperatingMode.PERIODIC_BATCH:
-            return
-        frame = SemanticEventFrame(
-            target_agent_id=agent.agent_id,
-            area_id=st.area_id,
-            corroborated_states=self.triage.build_context(st, states, agent, ignored),
-            significance_reason=finding.summary,
-        )
-        token = _URGENT_DISPATCH.set(finding.severity == "critical")
-        try:
-            await self._run_agent_for_frame(frame)
-        finally:
-            _URGENT_DISPATCH.reset(token)
+        agent_handled = False
+        if agent is not None and not self.settings.paused and self.settings.operating_mode != OperatingMode.PERIODIC_BATCH:
+            frame = SemanticEventFrame(
+                target_agent_id=agent.agent_id,
+                area_id=st.area_id,
+                corroborated_states=self.triage.build_context(st, states, agent, ignored),
+                significance_reason=finding.summary,
+            )
+            token = _URGENT_DISPATCH.set(finding.severity == "critical")
+            try:
+                run_log = await self._run_agent_for_frame(frame)
+            finally:
+                _URGENT_DISPATCH.reset(token)
+            if run_log is not None:
+                agent_handled = any(
+                    r.get("status") == "awaiting_user_approval"
+                    or (r.get("status") == "executed" and self.settings.notify_autonomous_actions)
+                    for r in run_log.execution_results
+                )
+
+        if not agent_handled:
+            await self._notify_insight(insight, urgent=finding.severity == "critical", even_in_shadow=True)
 
     # ==================================================================================================
     # Closed loops: outcome verification, automation lifecycle, trust, digest
@@ -2268,6 +2392,8 @@ class BrainOrchestrator:
     # Background housekeeping
     # ==================================================================================================
     async def _bootstrap_learning(self) -> None:
+        if not self.settings.use_simulator and await self.memory.get_kv("onboarding:installed_at") is None:
+            await self.memory.set_kv("onboarding:installed_at", datetime.now(timezone.utc).isoformat())
         await self.learning.init_timezone()
         states = await self.smart_home.get_all_states()
         if not self._cached_states:
@@ -2338,6 +2464,8 @@ class BrainOrchestrator:
             "days_of_data": round(days, 1),
             "baseline_ready": days >= self.settings.baseline_min_days,
             "baseline_min_days": self.settings.baseline_min_days,
+            "onboarding_warmup_active": await self._in_onboarding_warmup(now),
+            "onboarding_warmup_hours": self.settings.onboarding_warmup_hours,
             "store": await self.telemetry.stats(),
             "timezone": self.learning._tz_name or "UTC",
             "patterns": [p.to_dict() for p in patterns[:40]],
