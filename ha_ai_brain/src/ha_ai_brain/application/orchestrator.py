@@ -142,6 +142,7 @@ class BrainOrchestrator:
             telemetry = SQLiteTelemetryStore(":memory:")
         self.telemetry = telemetry
         self.learning = LearningEngine(settings, smart_home, telemetry, memory)
+        self.triage.controller_lookup = self.learning.is_controller_automation
         self.watches = WatchService(memory, llm)
         self.research = ResearchAgenda(settings, llm, memory, smart_home, self.registry, self._budget_ok)
         self._watch_tracker = WatchTracker()
@@ -409,6 +410,11 @@ class BrainOrchestrator:
                             self.registry.set_agent_enabled(str(aid), en, persist_to_disk=False)
             except (ValueError, TypeError):
                 pass
+        if "controller_automations" in prefs:
+            from ha_ai_brain.domain.automation_rules import load_controller_overrides
+
+            self.learning._controller_overrides = load_controller_overrides(prefs.get("controller_automations"))
+            self.learning._apply_controller_flags(self._cached_states or None)
         if hasattr(self.llm, "privacy_scrub"):
             self.llm.privacy_scrub = self.settings.privacy_scrub
 
@@ -2448,6 +2454,8 @@ class BrainOrchestrator:
         days = (win[1] - win[0]).total_seconds() / 86400.0 if win else 0.0
         if self._cached_states:
             await self.learning.refresh_twins(self._cached_states)
+        if not self.learning._rules_at:
+            await self.learning.refresh_rules(self._cached_states or None)
         patterns = await self.learning.get_patterns(now, self._cached_states or None)
         names = {eid: str(st.attributes.get("friendly_name") or "") for eid, st in (self._cached_states or {}).items()}
         distinct: list[Any] = []
@@ -2473,6 +2481,7 @@ class BrainOrchestrator:
             "suppressed_habits": self.learning.suppressed_habits(),
             "device_twins": self.learning.twin_groups(),
             "device_twin_splits": await self.learning.twin_splits(),
+            "controller_automations": self.learning.controller_automations(self._cached_states or None),
             "existing_automations": len(self.learning.rules),
             "automation_reviews": sorted(lifecycle, key=review_sort_key),
             "stats_7d": {k: v for k, v in stats.items() if not k.startswith("avoided:")},

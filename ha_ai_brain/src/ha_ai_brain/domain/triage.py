@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from collections import OrderedDict
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from ha_ai_brain.domain.automation_rules import is_controller_automation_id
 from ha_ai_brain.domain.models import (
     AgentSpec,
     EntityState,
@@ -16,6 +18,7 @@ from ha_ai_brain.domain.models import (
     SemanticEventFrame,
     StateChangedEvent,
 )
+from ha_ai_brain.domain.service_semantics import format_preset_token, format_temp_token
 
 
 def matches_device_class_or_heuristics(state: EntityState, monitored_classes: list[str]) -> bool:
@@ -99,6 +102,19 @@ class EdgeSignalTriage:
         self._last_triggered_at: dict[str, datetime] = {}
         # entity_id -> cooldown expiration timestamp after human manual override
         self._manual_override_until: dict[str, datetime] = {}
+        # Optional live lookup set by the orchestrator: automation_entity_id -> True when it is a human controller / panel bridge
+        self.controller_lookup: Callable[[str], bool] | None = None
+
+    def is_passthrough_automation(self, automation_entity_id: str | None) -> bool:
+        """True when `automation_entity_id` is a wall-panel / remote / button controller bridge rather than an autonomous rule."""
+        if not automation_entity_id or not automation_entity_id.startswith("automation."):
+            return False
+        if self.controller_lookup is not None:
+            try:
+                return bool(self.controller_lookup(automation_entity_id))
+            except Exception:
+                pass
+        return is_controller_automation_id(automation_entity_id)
 
     def register_ai_action(
         self,
@@ -146,14 +162,24 @@ class EdgeSignalTriage:
 
         auto_id = (
             event.triggered_by_automation_id
-            or (self._automation_context_map.get(event.context_id) if event.context_id else None)
+            or (self._automation_context_map.get(event.context_id) if event.context_id and not event.entity_id.startswith("script.") else None)
             or (self._automation_context_map.get(event.context_parent_id) if event.context_parent_id else None)
         )
+        if auto_id and self.is_passthrough_automation(auto_id):
+            event.triggered_by_automation_id = auto_id
+            if event.context_id and not event.entity_id.startswith("script."):
+                self._automation_context_map[event.context_id] = auto_id
+            if event.new_state.domain in ("sensor", "weather", "sun"):
+                event.origin = EventOrigin.SENSOR_TELEMETRY
+                return EventOrigin.SENSOR_TELEMETRY
+            event.origin = EventOrigin.HUMAN_OR_PHYSICAL
+            return EventOrigin.HUMAN_OR_PHYSICAL
+
         if auto_id or event.origin == EventOrigin.HA_AUTOMATION:
             event.origin = EventOrigin.HA_AUTOMATION
             event.triggered_by_automation_id = auto_id or event.triggered_by_automation_id or "automation.unknown"
             # Also chain the child context_id so cascading state changes from the same automation are tracked
-            if event.context_id and auto_id:
+            if event.context_id and auto_id and not event.entity_id.startswith("script."):
                 self._automation_context_map[event.context_id] = auto_id
             return EventOrigin.HA_AUTOMATION
 
@@ -167,6 +193,26 @@ class EdgeSignalTriage:
     def mark_manual_override(self, entity_id: str) -> None:
         """Start the manual-override cooldown for an entity (used when the human undoes an AI action)."""
         self._manual_override_until[entity_id] = datetime.now(timezone.utc) + timedelta(seconds=self.manual_override_cooldown_seconds)
+
+    @staticmethod
+    def _manual_change_pair(old_state: EntityState | None, new_state: EntityState) -> tuple[str, str] | None:
+        """Return `(old_desc, new_desc)` when a human changed an entity's primary state, target temperature, or preset mode."""
+        if old_state is None:
+            return None
+        if old_state.state != new_state.state:
+            return old_state.state, new_state.state
+        if new_state.domain in ("climate", "water_heater") and new_state.state != "off":
+            old_tok = format_temp_token(old_state.attributes.get("temperature"))
+            new_tok = format_temp_token(new_state.attributes.get("temperature"))
+            if old_tok and new_tok and old_tok != new_tok:
+                return old_tok, new_tok
+        if new_state.domain in ("climate", "fan", "humidifier"):
+            attr = "mode" if new_state.domain == "humidifier" else "preset_mode"
+            old_tok = format_preset_token(old_state.attributes.get(attr))
+            new_tok = format_preset_token(new_state.attributes.get(attr))
+            if new_tok and old_tok != new_tok and not ((old_tok or "preset:none").lower() == "preset:none" and new_tok.lower() == "preset:none"):
+                return old_tok or "preset:none", new_tok
+        return None
 
     def build_context(
         self,
@@ -224,7 +270,9 @@ class EdgeSignalTriage:
             # If changed within the override window by a human (or external physical switch, NOT an HA automation)
             if 2.0 < elapsed <= self.manual_override_cooldown_seconds:
                 is_human = bool(event.context_user_id) or (event.context_id != recent["context_id"])
-                if is_human and event.old_state and event.old_state.state != event.new_state.state:
+                change_pair = self._manual_change_pair(event.old_state, event.new_state) if is_human else None
+                if change_pair is not None:
+                    old_desc, new_desc = change_pair
                     self._manual_override_until[event.entity_id] = now + timedelta(
                         seconds=self.manual_override_cooldown_seconds
                     )
@@ -238,13 +286,13 @@ class EdgeSignalTriage:
                         service_data=recent["service_data"],
                         polarity=FeedbackPolarity.OVERRIDDEN_IMPLICIT,
                         human_note=(
-                            f"Human manually changed {event.entity_id} from '{event.old_state.state}' "
-                            f"to '{event.new_state.state}' {int(elapsed)}s after AI action. "
+                            f"Human manually changed {event.entity_id} from '{old_desc}' "
+                            f"to '{new_desc}' {int(elapsed)}s after AI action. "
                             f"Entering {self.manual_override_cooldown_seconds}s cooldown."
                         ),
                         context_snapshot={
-                            "old_state": event.old_state.state,
-                            "new_state": event.new_state.state,
+                            "old_state": old_desc,
+                            "new_state": new_desc,
                             "elapsed_seconds": elapsed,
                         },
                     )

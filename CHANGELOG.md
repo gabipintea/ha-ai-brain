@@ -2,6 +2,16 @@
 
 All notable changes to **HA AI Brain** are documented in this file.
 
+## 0.2.22 - 2026-11-16
+
+### Added
+- **Wall-panel and remote-controller pass-through automations.** Automations that connect physical touchscreens, wall switches, or wireless remotes to your devices (such as Sonoff NSPanel blueprints like `NSPanel-Easy`, openHASP, or Zigbee2MQTT/ZHA button blueprints) are now recognised automatically and listed under *Learned → Wall panels & remote controllers*, where you can also exclude one or add any other automation. Actions you perform through them (turning devices on/off, opening/closing covers, starting scripts, adjusting thermostats) are counted as manual actions by you rather than background automations, and their screen-sync runs no longer suppress sequence habits.
+- **Thermostat target temperature and preset-mode habit learning.** In addition to primary on/off and HVAC mode transitions, the brain now records, mines, backtests, and checks manual overrides for thermostat target temperatures (`climate`, `water_heater`) and preset modes (`eco`, `comfort`, `away`, `sleep`, etc. on `climate`, `fan`, and `humidifier` entities). Rapid `+` / `-` temperature taps within 15 seconds are automatically coalesced into a single transition to the final target temperature.
+
+### Fixed
+- **Reactive automations no longer suppress `A → B` sequence habits.** Automations and scripts that trigger *after* a device changes state (for example to update a status LED or wall screen in reaction to the device) are no longer mistaken for a shared prior cause that triggered the device.
+- **Manual override detection for thermostat setpoints and preset modes.** Adjusting a thermostat's target temperature or preset mode by hand (or from a wall panel) shortly after an AI action now properly registers as a manual human override and starts the 15-minute cooldown, even when the thermostat's main state remains `heat` or `cool`.
+
 ## 0.2.21 - 2026-11-14
 
 ### Added

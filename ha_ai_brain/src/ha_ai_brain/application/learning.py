@@ -16,7 +16,10 @@ from ha_ai_brain.domain.automation_rules import (
     AutomationRule,
     _listify,
     clean_alias,
+    dump_controller_overrides,
     find_equivalent_rule,
+    is_controller_automation_id,
+    load_controller_overrides,
     parse_automation_config,
     pattern_covered_by,
     resolve_rule_targets,
@@ -57,7 +60,14 @@ from ha_ai_brain.domain.models import (
 from ha_ai_brain.domain.habit_rejections import MAX_REJECTED_HABITS, RejectedHabit, rejected_habit_card, split_rejected
 from ha_ai_brain.domain.patterns import MinedPattern, mine_all_report
 from ha_ai_brain.domain.sequence_filters import RULE_TWIN, SuppressedHabit
-from ha_ai_brain.domain.service_semantics import ACTUATOR_DOMAINS, SCRIPT_RUN_STATE
+from ha_ai_brain.domain.service_semantics import (
+    ACTUATOR_DOMAINS,
+    SCRIPT_RUN_STATE,
+    format_preset_token,
+    format_temp_token,
+    is_attribute_state,
+    state_channel,
+)
 from ha_ai_brain.domain.timeutil import ensure_utc, parse_iso, resolve_tz, to_local
 from ha_ai_brain.ports.memory import MemoryStorePort
 from ha_ai_brain.ports.smart_home import SmartHomePort
@@ -149,8 +159,10 @@ class LearnedSnapshot:
 SNAPSHOT_MINUTES = 30
 FLUSH_INTERVAL_SECONDS = 30.0
 FLUSH_MAX_BUFFERED = 1000
+ATTR_SETTLE_SECONDS = 15.0  # coalesce rapid + / - thermostat taps into a single target transition
 FEEDBACK_PREFIX = "excfb:"
 REJECTED_HABIT_PREFIX = "habit_rejected:"
+CONTROLLER_OVERRIDES_KEY = "controller_automations"
 
 
 class LearningEngine:
@@ -179,6 +191,9 @@ class LearningEngine:
         self.telemetry = telemetry
         self.rules: list[AutomationRule] = []
         self._rules_at: datetime | None = None
+        self._controller_overrides: dict[str, bool] = {}  # automation.* -> True (controller) | False (not a controller)
+        self._auto_controllers: dict[str, dict[str, str]] = {}  # automation.* -> {alias, reason}
+        self._all_automations: dict[str, str] = {}  # automation.* -> alias
         self._patterns: list[MinedPattern] = []
         self._patterns_at: datetime | None = None
         self._rejected_habits: dict[str, RejectedHabit] | None = None  # loaded lazily from the kv store
@@ -211,18 +226,49 @@ class LearningEngine:
         return to_local(now, self.tz)
 
     # ----------------------------------------------------------- recording
+    def _append_or_coalesce_attr_transition(
+        self,
+        entity_id: str,
+        ts: datetime,
+        old_tok: str,
+        new_tok: str,
+        origin: str,
+        user_id: str | None,
+    ) -> None:
+        """Buffer an attribute transition (`temp:...`, `preset:...`), coalescing multi-tap steps within `ATTR_SETTLE_SECONDS`."""
+        ch = state_channel(new_tok)
+        for idx in range(len(self._tr_buffer) - 1, -1, -1):
+            prev = self._tr_buffer[idx]
+            if prev.entity_id != entity_id or state_channel(prev.new_state) != ch:
+                continue
+            elapsed = (ts - prev.ts).total_seconds()
+            if 0.0 <= elapsed <= ATTR_SETTLE_SECONDS and prev.origin == origin:
+                if prev.old_state == new_tok:
+                    del self._tr_buffer[idx]
+                else:
+                    self._tr_buffer[idx] = Transition(
+                        entity_id, ts, prev.old_state, new_tok, origin, user_id or prev.user_id
+                    )
+                return
+            break
+        self._tr_buffer.append(Transition(entity_id, ts, old_tok, new_tok, origin, user_id))
+
     async def record_event(self, event: StateChangedEvent) -> None:
         """Queue the part of a live event that matters for learning (cheap, local); written in batches."""
         new = event.new_state
         old = event.old_state
         ts = ensure_utc(event.timestamp)
+        eff_origin = event.origin.value
+        if eff_origin == "ha_automation" and event.triggered_by_automation_id and self.is_controller_automation(event.triggered_by_automation_id):
+            eff_origin = "human_or_physical"
         if new.domain in ("automation", "script"):
             last = parse_iso(new.attributes.get("last_triggered"))
             prev_last = parse_iso(old.attributes.get("last_triggered")) if old else None
             if last is not None and last != prev_last:
-                self._tr_buffer.append(Transition(new.entity_id, last, "", AUTOMATION_FIRE_STATE, "ha_automation"))
-                if new.domain == "script" and event.origin.value == "human_or_physical":
-                    # Started by hand (not by an automation or the brain): a habit candidate, like flipping a switch.
+                if not (new.domain == "automation" and self.is_controller_automation(new.entity_id)):
+                    self._tr_buffer.append(Transition(new.entity_id, last, "", AUTOMATION_FIRE_STATE, "ha_automation"))
+                if new.domain == "script" and eff_origin == "human_or_physical":
+                    # Started by hand (not by an autonomous automation or the brain): a habit candidate, like flipping a switch.
                     self._tr_buffer.append(Transition(new.entity_id, last, "off", SCRIPT_RUN_STATE, "human_or_physical", event.context_user_id))
         elif new.domain == "sensor":
             value = new.numeric_value
@@ -230,9 +276,23 @@ class LearningEngine:
                 agg = self._num_buffer.setdefault((new.entity_id, ts.replace(minute=0, second=0, microsecond=0)), [0, 0.0])
                 agg[0] += 1
                 agg[1] += value
-        elif new.domain in RECORDED_DISCRETE_DOMAINS and old is not None and old.state != new.state:
+        elif new.domain in RECORDED_DISCRETE_DOMAINS and old is not None:
             if new.state not in NON_STATES and old.state not in NON_STATES:
-                self._tr_buffer.append(Transition(new.entity_id, ts, old.state, new.state, event.origin.value, event.context_user_id))
+                if old.state != new.state:
+                    self._tr_buffer.append(Transition(new.entity_id, ts, old.state, new.state, eff_origin, event.context_user_id))
+                if new.domain in ("climate", "water_heater") and new.state != "off" and old.state != "off":
+                    old_temp = format_temp_token(old.attributes.get("temperature"))
+                    new_temp = format_temp_token(new.attributes.get("temperature"))
+                    if old_temp is not None and new_temp is not None and old_temp != new_temp:
+                        self._append_or_coalesce_attr_transition(new.entity_id, ts, old_temp, new_temp, eff_origin, event.context_user_id)
+                if new.domain in ("climate", "fan", "humidifier"):
+                    attr_key = "mode" if new.domain == "humidifier" else "preset_mode"
+                    old_preset = format_preset_token(old.attributes.get(attr_key))
+                    new_preset = format_preset_token(new.attributes.get(attr_key))
+                    if new_preset is not None and old_preset != new_preset:
+                        old_tok = old_preset or "preset:none"
+                        if not (old_tok.lower() == "preset:none" and new_preset.lower() == "preset:none"):
+                            self._append_or_coalesce_attr_transition(new.entity_id, ts, old_tok, new_preset, eff_origin, event.context_user_id)
         if len(self._tr_buffer) + len(self._num_buffer) >= FLUSH_MAX_BUFFERED or time.monotonic() - self._last_flush >= FLUSH_INTERVAL_SECONDS:
             await self.flush()
 
@@ -303,10 +363,123 @@ class LearningEngine:
         return ready
 
     # ------------------------------------------------------------ automations
+    async def load_controller_overrides(self) -> dict[str, bool]:
+        if self.memory is None:
+            return self._controller_overrides
+        prefs = await self.memory.get_ui_preferences()
+        self._controller_overrides = load_controller_overrides(prefs.get(CONTROLLER_OVERRIDES_KEY))
+        self._apply_controller_flags()
+        return self._controller_overrides
+
+    def is_controller_automation(self, automation_entity_id: str | None) -> bool:
+        """True when `automation_entity_id` is a wall-panel / remote / button controller bridge rather than an autonomous rule."""
+        if not automation_entity_id or not automation_entity_id.startswith("automation."):
+            return False
+        if automation_entity_id in self._controller_overrides:
+            return self._controller_overrides[automation_entity_id]
+        if automation_entity_id in self._auto_controllers:
+            return True
+        return is_controller_automation_id(automation_entity_id)
+
+    def _apply_controller_flags(self, states: dict[str, EntityState] | None = None) -> None:
+        auto_controllers: dict[str, dict[str, str]] = {}
+        all_automations: dict[str, str] = {}
+        for r in self.rules:
+            eid = r.entity_state_id or (r.automation_id if r.automation_id.startswith("automation.") else f"automation.{r.automation_id}" if r.automation_id else "")
+            if not eid:
+                continue
+            all_automations[eid] = r.alias or eid
+            if r.auto_controller:
+                auto_controllers[eid] = {
+                    "entity_id": eid,
+                    "alias": r.alias or eid,
+                    "reason": r.controller_reason or "Wall panel or physical controller automation",
+                }
+            if eid in self._controller_overrides:
+                r.is_controller = self._controller_overrides[eid]
+            else:
+                r.is_controller = r.auto_controller
+
+        if states:
+            for eid, st in states.items():
+                if st.domain != "automation":
+                    continue
+                fname = str(st.attributes.get("friendly_name") or eid)
+                all_automations.setdefault(eid, fname)
+                if eid not in auto_controllers and is_controller_automation_id(f"{eid} {fname}"):
+                    auto_controllers[eid] = {
+                        "entity_id": eid,
+                        "alias": fname,
+                        "reason": "Wall panel or physical controller automation",
+                    }
+        self._auto_controllers = auto_controllers
+        self._all_automations = all_automations
+
+    async def set_controller_automation(self, entity_id: str, is_controller: bool | None) -> None:
+        """Mark or unmark an `automation.*` entity as a human-interface controller (pass-through), or reset to auto-detected."""
+        eid = (entity_id or "").strip()
+        if not eid.startswith("automation."):
+            raise ValueError("Entity must be an automation.* entity.")
+        await self.load_controller_overrides()
+        is_auto = eid in self._auto_controllers or is_controller_automation_id(eid)
+        if is_controller is None or (is_controller is False and not is_auto) or (is_controller is True and is_auto):
+            self._controller_overrides.pop(eid, None)
+        else:
+            self._controller_overrides[eid] = bool(is_controller)
+        if self.memory is not None:
+            await self.memory.save_ui_preference(CONTROLLER_OVERRIDES_KEY, dump_controller_overrides(self._controller_overrides))
+        self._apply_controller_flags()
+        self._patterns_at = None
+        self._snapshot = None
+
+    async def reset_controller_overrides(self) -> None:
+        self._controller_overrides = {}
+        if self.memory is not None:
+            await self.memory.save_ui_preference(CONTROLLER_OVERRIDES_KEY, "{}")
+        self._apply_controller_flags()
+        self._patterns_at = None
+        self._snapshot = None
+
+    def controller_automations(self, states: dict[str, EntityState] | None = None) -> dict[str, Any]:
+        """Controller / wall-panel automations (active, excluded by homeowner, and candidates to add) for the dashboard."""
+        if states:
+            self._apply_controller_flags(states)
+        active: list[dict[str, Any]] = []
+        excluded: list[dict[str, Any]] = []
+        candidates: list[dict[str, Any]] = []
+        known_ids = sorted(set(self._all_automations) | set(self._auto_controllers) | set(self._controller_overrides))
+        for eid in known_ids:
+            alias = self._all_automations.get(eid) or (self._auto_controllers.get(eid) or {}).get("alias") or eid
+            auto_info = self._auto_controllers.get(eid)
+            override = self._controller_overrides.get(eid)
+            if self.is_controller_automation(eid):
+                reason = (auto_info or {}).get("reason") or (
+                    "Marked as a wall panel / controller by you" if override is True else "Wall panel or physical controller automation"
+                )
+                active.append({
+                    "entity_id": eid,
+                    "alias": alias,
+                    "reason": reason,
+                    "auto_detected": bool(auto_info),
+                })
+            elif override is False and auto_info:
+                excluded.append({"entity_id": eid, "alias": alias})
+            elif not eid.startswith("automation.ai_brain_"):
+                candidates.append({"entity_id": eid, "alias": alias})
+        return {"active": active, "excluded": excluded, "candidates": candidates}
+
     async def refresh_rules(self, states: dict[str, EntityState] | None = None, force: bool = False) -> list[AutomationRule]:
         now = datetime.now(timezone.utc)
         if not force and self._rules_at and (now - self._rules_at).total_seconds() < 1800:
+            if states:
+                self._apply_controller_flags(states)
             return self.rules
+        if self.memory is not None and not self._controller_overrides:
+            try:
+                prefs = await self.memory.get_ui_preferences()
+                self._controller_overrides = load_controller_overrides(prefs.get(CONTROLLER_OVERRIDES_KEY))
+            except Exception:
+                pass
         try:
             configs = await self.smart_home.get_automation_configs()
         except Exception as exc:
@@ -325,11 +498,21 @@ class LearningEngine:
         if states:
             by_id = {str(s.attributes.get("id")): s for s in states.values() if s.domain == "automation" and s.attributes.get("id")}
             for r in rules:
-                st = by_id.get(r.automation_id)
+                st = by_id.get(r.automation_id) or states.get(f"automation.{r.automation_id}") or states.get(r.automation_id)
                 if st is not None:
                     r.entity_state_id = st.entity_id
                     r.enabled = st.state != "off"
+                    if not r.auto_controller and is_controller_automation_id(f"{st.entity_id} {st.attributes.get('friendly_name') or ''}"):
+                        r.auto_controller = True
+                        r.controller_reason = r.controller_reason or "Wall panel or physical controller automation"
+                elif r.automation_id:
+                    r.entity_state_id = r.automation_id if r.automation_id.startswith("automation.") else f"automation.{r.automation_id}"
+        else:
+            for r in rules:
+                if r.automation_id and not r.entity_state_id:
+                    r.entity_state_id = r.automation_id if r.automation_id.startswith("automation.") else f"automation.{r.automation_id}"
         self.rules = rules
+        self._apply_controller_flags(states)
         self._rules_at = now
         await self._sync_tracked_automations(configs, rules)
         return rules
@@ -410,7 +593,9 @@ class LearningEngine:
             return []
         start = max(win[0], now - timedelta(days=MINING_WINDOW_DAYS))
         transitions = await self.telemetry.get_transitions(since=start)
-        fires = await self.telemetry.get_all_fires(since=start)  # automation / script runs: hidden causes, never habits themselves
+        fires = [
+            f for f in await self.telemetry.get_all_fires(since=start) if not self.is_controller_automation(f.entity_id)
+        ]  # autonomous automation / script runs: hidden causes, never habits themselves (wall-panel/controller sync runs excluded)
         twins = self.twins
         if twins:  # one physical device exposed twice: merge its history so it is mined as one device
             transitions = await asyncio.to_thread(canonicalize_transitions, transitions, twins)
@@ -686,8 +871,12 @@ class LearningEngine:
         since = now - timedelta(days=45)
         win = await self.window(now)
         start = max(win[0], since) if win else since
-        # A script run is a momentary event, not a state the script stays in: keep it out of dwell / routine statistics.
-        transitions = [t for t in await self.telemetry.get_transitions(since=since) if t.new_state != SCRIPT_RUN_STATE]
+        # A script run is a momentary event and attribute tokens (`temp:...`, `preset:...`) are sub-channels:
+        # keep them out of primary `.state` dwell / routine statistics.
+        transitions = [
+            t for t in await self.telemetry.get_transitions(since=since)
+            if t.new_state != SCRIPT_RUN_STATE and not is_attribute_state(t.new_state)
+        ]
         if self.twins:
             transitions = canonicalize_transitions(transitions, self.twins)
         rows = await self.telemetry.get_all_numeric_hours(since=since)
@@ -755,7 +944,10 @@ class LearningEngine:
         if await self.baseline_ready(now):
             win = await self.window(now)
             snap = await self._learned_snapshot(now)
-            recent = [t for t in await self.telemetry.get_transitions(since=now - timedelta(hours=1)) if t.new_state != SCRIPT_RUN_STATE]
+            recent = [
+                t for t in await self.telemetry.get_transitions(since=now - timedelta(hours=1))
+                if t.new_state != SCRIPT_RUN_STATE and not is_attribute_state(t.new_state)
+            ]
             if self.twins:
                 recent = canonicalize_transitions(recent, self.twins)
             snap.timeline.extend(recent)

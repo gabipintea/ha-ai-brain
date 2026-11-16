@@ -588,6 +588,17 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     </div>
     <div class="grid" style="margin-top:16px;">
       <div class="card">
+        <div class="card-head"><h2>Wall panels &amp; remote controllers</h2><span class="pill" id="controllersCount">0</span></div>
+        <div class="hint">Automations that connect physical screens, wall switches or remotes (for example NSPanel or button blueprints) to your devices. Actions coming through them are counted as manual actions by you, not background automations.</div>
+        <div id="controllersList" class="scroll" style="margin-top:8px;"></div>
+        <div id="controllersAddRow" class="btn-row" style="margin-top:8px; display:none; align-items:center; gap:8px; flex-wrap:wrap;">
+          <select id="controllerSelect" style="flex:1; min-width:200px;"></select>
+          <button class="icon" onclick="addControllerAutomation(this)">Count as manual controller</button>
+        </div>
+      </div>
+    </div>
+    <div class="grid" style="margin-top:16px;">
+      <div class="card">
         <div class="card-head"><h2>Muted alerts</h2></div>
         <div class="hint">Unusual-situation alerts you rejected. Dismissing an alert makes the brain wait longer before repeating it; rejecting mutes it until you unmute it here.</div>
         <div id="mutedList" style="margin-top:8px;"></div>
@@ -2248,6 +2259,24 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     });
   }
 
+  async function setControllerAutomation(entityId, isController, btn) {
+    return withButtonLoading(btn, async () => {
+      await post('./api/automations/controller', {entity_id: entityId, is_controller: isController});
+      await refreshLearned();
+    });
+  }
+  async function addControllerAutomation(btn) {
+    const sel = $('controllerSelect');
+    if (!sel || !sel.value) return;
+    return setControllerAutomation(sel.value, true, btn);
+  }
+  async function resetControllerOverrides(btn) {
+    return withButtonLoading(btn, async () => {
+      await post('./api/automations/controller', {reset_all: true});
+      await refreshLearned();
+    });
+  }
+
   async function unmuteException(key, btn) {
     return withButtonLoading(btn, async () => {
       await post('./api/exceptions/unmute', {key});
@@ -2515,6 +2544,30 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         <div class="btn-row" style="margin-top:6px;"><button class="icon" data-gid="${esc(g.group_id)}" onclick="splitTwin(this.dataset.gid, true, this)">Not the same device</button></div></div>`).join('')
       : '<div class="empty">No device is exposed twice' + (splitCount ? ' (' + splitCount + ' pair(s) split by you)' : '') + '.</div>';
     if (splitCount) $('twinsList').insertAdjacentHTML('beforeend', '<div class="muted" style="font-size:0.8rem; margin-top:6px;">' + splitCount + ' pair(s) split by you. <a href="#" onclick="restoreTwins(this); return false;">Undo all</a></div>');
+
+    const ctrl = d.controller_automations || {};
+    const ctrlActive = ctrl.active || [];
+    const ctrlExcluded = ctrl.excluded || [];
+    const ctrlCandidates = ctrl.candidates || [];
+    $('controllersCount').textContent = ctrlActive.length;
+    $('controllersList').innerHTML = ctrlActive.length ? ctrlActive.map(c => `<div class="item">
+        <div class="wrap"><b>${esc(c.alias)}</b> <code style="font-size:0.78rem;">${esc(c.entity_id)}</code></div>
+        <div class="muted wrap" style="font-size:0.85rem; margin-top:4px;">${esc(c.reason)}</div>
+        <div class="btn-row" style="margin-top:6px;"><button class="icon" data-eid="${esc(c.entity_id)}" onclick="setControllerAutomation(this.dataset.eid, false, this)">Not a controller</button></div></div>`).join('')
+      : '<div class="empty">No wall-panel or remote-controller automations detected' + (ctrlExcluded.length ? ' (' + ctrlExcluded.length + ' excluded by you)' : '') + '.</div>';
+    if (ctrlExcluded.length) {
+      $('controllersList').insertAdjacentHTML('beforeend', '<div class="muted" style="font-size:0.8rem; margin-top:6px;">' + ctrlExcluded.length + ' controller automation(s) excluded by you. <a href="#" onclick="resetControllerOverrides(this); return false;">Undo all</a></div>');
+    }
+    const addRow = $('controllersAddRow');
+    const sel = $('controllerSelect');
+    if (addRow && sel) {
+      if (ctrlCandidates.length) {
+        sel.innerHTML = ctrlCandidates.map(c => `<option value="${esc(c.entity_id)}">${esc(c.alias)} (${esc(c.entity_id)})</option>`).join('');
+        addRow.style.display = 'flex';
+      } else {
+        addRow.style.display = 'none';
+      }
+    }
 
     const muted = d.muted_exceptions || [];
     $('mutedList').innerHTML = muted.length ? muted.map(k => `<div class="item" style="display:flex; justify-content:space-between; align-items:center; gap:8px;">

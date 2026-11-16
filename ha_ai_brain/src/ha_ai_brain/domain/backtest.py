@@ -10,7 +10,7 @@ from typing import Any
 from ha_ai_brain.domain.automation_rules import AutomationRule, RuleAction, _collect_actions, _entity_ids, _listify
 from ha_ai_brain.domain.models import BacktestResult, NativeAutomationProposal, Transition
 from ha_ai_brain.domain.patterns import AUTOMATED_ORIGINS
-from ha_ai_brain.domain.service_semantics import SCRIPT_RUN_STATE
+from ha_ai_brain.domain.service_semantics import SCRIPT_RUN_STATE, state_channel
 from ha_ai_brain.domain.timeutil import WEEKDAY_NAMES, iter_days, local_at, minute_of_day, parse_hhmm, to_local
 
 MIN_DAYS = 3.0
@@ -35,44 +35,63 @@ def _duration_seconds(value: Any) -> float:
 
 
 class _Timeline:
-    """Per-entity sorted transitions with point-in-time state lookups."""
+    """Per-entity sorted transitions with point-in-time state lookups (separated by primary vs attribute state channels)."""
 
     def __init__(self, transitions: list[Transition]) -> None:
         self.by_entity: dict[str, list[Transition]] = defaultdict(list)
+        self.by_channel: dict[tuple[str, str], list[Transition]] = defaultdict(list)
         for t in sorted(transitions, key=lambda t: t.ts):
-            self.by_entity[t.entity_id].append(t)
+            ch = state_channel(t.new_state)
+            if not ch:
+                self.by_entity[t.entity_id].append(t)
+            else:
+                self.by_channel[(t.entity_id, ch)].append(t)
         self._times = {eid: [t.ts for t in ts] for eid, ts in self.by_entity.items()}
+        self._channel_times = {k: [t.ts for t in ts] for k, ts in self.by_channel.items()}
 
     def has(self, entity_id: str) -> bool:
         return entity_id in self.by_entity
 
-    def state_at(self, entity_id: str, ts: datetime) -> str | None:
-        rows = self.by_entity.get(entity_id)
+    def rows_for(self, entity_id: str, channel: str = "") -> list[Transition]:
+        return self.by_entity.get(entity_id, []) if not channel else self.by_channel.get((entity_id, channel), [])
+
+    def state_at(self, entity_id: str, ts: datetime, channel: str = "") -> str | None:
+        rows = self.by_entity.get(entity_id) if not channel else self.by_channel.get((entity_id, channel))
         if not rows:
             return None
-        idx = bisect_right(self._times[entity_id], ts)
+        times = self._times[entity_id] if not channel else self._channel_times[(entity_id, channel)]
+        idx = bisect_right(times, ts)
         if idx == 0:
             return rows[0].old_state or None
         return rows[idx - 1].new_state
 
-    def last_transition_at(self, entity_id: str, ts: datetime) -> Transition | None:
-        rows = self.by_entity.get(entity_id)
+    def last_transition_at(self, entity_id: str, ts: datetime, channel: str = "") -> Transition | None:
+        rows = self.by_entity.get(entity_id) if not channel else self.by_channel.get((entity_id, channel))
         if not rows:
             return None
-        idx = bisect_right(self._times[entity_id], ts)
+        times = self._times[entity_id] if not channel else self._channel_times[(entity_id, channel)]
+        idx = bisect_right(times, ts)
         return rows[idx - 1] if idx > 0 else None
 
     def extend(self, transitions: list[Transition]) -> None:
         """Append newer transitions that occurred after this timeline was built."""
         for t in sorted(transitions, key=lambda t: t.ts):
-            rows = self.by_entity[t.entity_id]
-            if not rows or t.ts > rows[-1].ts:
-                rows.append(t)
-                self._times.setdefault(t.entity_id, []).append(t.ts)
+            ch = state_channel(t.new_state)
+            if not ch:
+                rows = self.by_entity[t.entity_id]
+                if not rows or t.ts > rows[-1].ts:
+                    rows.append(t)
+                    self._times.setdefault(t.entity_id, []).append(t.ts)
+            else:
+                key = (t.entity_id, ch)
+                rows = self.by_channel[key]
+                if not rows or t.ts > rows[-1].ts:
+                    rows.append(t)
+                    self._channel_times.setdefault(key, []).append(t.ts)
 
-    def between(self, entity_id: str, start: datetime, end: datetime) -> list[Transition]:
-        rows = self.by_entity.get(entity_id, [])
-        times = self._times.get(entity_id, [])
+    def between(self, entity_id: str, start: datetime, end: datetime, channel: str = "") -> list[Transition]:
+        rows = self.by_entity.get(entity_id, []) if not channel else self.by_channel.get((entity_id, channel), [])
+        times = self._times.get(entity_id, []) if not channel else self._channel_times.get((entity_id, channel), [])
         lo = bisect_right(times, start - timedelta(microseconds=1))
         hi = bisect_right(times, end)
         return rows[lo:hi]
@@ -216,15 +235,16 @@ def backtest_automation(
             all_redundant = True
             for act in targets:
                 desired = act.result_state or ""
+                ch = state_channel(desired)
                 # strictly before the fire instant: a manual action at the same second still counts as aligned, not redundant
                 # a script run is momentary: it is never "already in the desired state"
-                if desired != SCRIPT_RUN_STATE and tl.state_at(act.entity_id, fire - timedelta(seconds=1)) == desired:
+                if desired != SCRIPT_RUN_STATE and tl.state_at(act.entity_id, fire - timedelta(seconds=1), channel=ch) == desired:
                     continue
                 all_redundant = False
-                near = [t for t in tl.between(act.entity_id, fire - window, fire + window) if t.new_state == desired and t.origin not in AUTOMATED_ORIGINS]
+                near = [t for t in tl.between(act.entity_id, fire - window, fire + window, channel=ch) if t.new_state == desired and t.origin not in AUTOMATED_ORIGINS]
                 if near:
                     fire_aligned = True
-                after = [t for t in tl.between(act.entity_id, fire, fire + OPPOSITE_WINDOW) if t.new_state != desired and t.origin not in AUTOMATED_ORIGINS]
+                after = [t for t in tl.between(act.entity_id, fire, fire + OPPOSITE_WINDOW, channel=ch) if t.new_state != desired and t.origin not in AUTOMATED_ORIGINS]
                 if after and not near:
                     fire_contra = True
             if all_redundant:
@@ -237,7 +257,8 @@ def backtest_automation(
         fire_times = fires
         for act in targets:
             desired = act.result_state or ""
-            for t in tl.by_entity.get(act.entity_id, []):
+            ch = state_channel(desired)
+            for t in tl.rows_for(act.entity_id, channel=ch):
                 if t.new_state != desired or t.origin in AUTOMATED_ORIGINS or not (data_start <= t.ts <= end):
                     continue
                 observed_manual += 1

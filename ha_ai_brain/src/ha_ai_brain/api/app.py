@@ -158,6 +158,12 @@ class TwinSplitRequest(BaseModel):
     split: bool = True
 
 
+class ControllerAutomationRequest(BaseModel):
+    entity_id: str = Field(default="", max_length=200)
+    is_controller: bool | None = None
+    reset_all: bool = False
+
+
 class UnmuteRequest(BaseModel):
     key: str = Field(max_length=300)
 
@@ -526,6 +532,21 @@ def create_app(settings: BrainSettings | None = None) -> Any:
         if orchestrator._cached_states:
             await orchestrator.learning.refresh_twins(orchestrator._cached_states, force=True)
         return {"status": "split" if req.split else "restored", "splits": await orchestrator.learning.twin_splits()}
+
+    @app.post("/api/automations/controller")
+    async def set_controller_automation(req: ControllerAutomationRequest) -> dict[str, Any]:
+        """Mark or unmark an automation as a wall-panel / remote controller (actions counted as manual), or reset overrides."""
+        try:
+            if req.reset_all:
+                await orchestrator.learning.reset_controller_overrides()
+            else:
+                await orchestrator.learning.set_controller_automation(req.entity_id, req.is_controller)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {
+            "status": "ok",
+            "controller_automations": orchestrator.learning.controller_automations(orchestrator._cached_states or None),
+        }
 
     @app.get("/api/status")
     async def get_status() -> dict[str, Any]:

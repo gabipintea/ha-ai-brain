@@ -912,6 +912,221 @@ class TestLearningApi(unittest.IsolatedAsyncioTestCase):
             app2.state.orchestrator.memory._conn.close()
             app2.state.orchestrator.telemetry.close()
 
+    async def test_nspanel_controller_blueprint_passthrough_and_thermostat_presets_temperatures(self) -> None:
+        from ha_ai_brain.domain.models import EventOrigin, FeedbackPolarity, StateChangedEvent
+        from ha_ai_brain.ports.telemetry import AUTOMATION_FIRE_STATE
+
+        with tempfile.TemporaryDirectory() as tmp:
+            app = create_app(BrainSettings(use_simulator=True, db_path=str(Path(tmp) / "t.db"), custom_agents_dir=tmp, timezone="UTC"))
+            orch = app.state.orchestrator
+
+            async def _fake_configs():
+                return [
+                    {
+                        "id": "nspanel_living_room_cfg",
+                        "alias": "Living Room NSPanel",
+                        "use_blueprint": {
+                            "path": "edwardtfn/nspanel_easy_blueprint.yaml",
+                            "input": {"nspanel_name": "living_room_panel"},
+                        },
+                    },
+                    {
+                        "id": "wall_remote_cfg",
+                        "alias": "Hallway Wall Switch",
+                        "triggers": [{"platform": "event", "event_type": "zha_event"}],
+                        "actions": [{"service": "light.toggle", "target": {"entity_id": "light.hallway"}}],
+                    },
+                ]
+
+            orch.smart_home.get_automation_configs = _fake_configs  # type: ignore[method-assign]
+            states = await orch.smart_home.get_all_states()
+            states["automation.nspanel_living_room"] = EntityState(
+                entity_id="automation.nspanel_living_room",
+                state="on",
+                attributes={"id": "nspanel_living_room_cfg", "friendly_name": "Living Room NSPanel"},
+            )
+            states["automation.hallway_wall_switch"] = EntityState(
+                entity_id="automation.hallway_wall_switch",
+                state="on",
+                attributes={"id": "wall_remote_cfg", "friendly_name": "Hallway Wall Switch"},
+            )
+            states["automation.regular_schedule"] = EntityState(
+                entity_id="automation.regular_schedule",
+                state="on",
+                attributes={"id": "regular_schedule_cfg", "friendly_name": "Regular Schedule"},
+            )
+            states["climate.living_room_ufh"] = EntityState(
+                entity_id="climate.living_room_ufh",
+                state="heat",
+                attributes={"friendly_name": "Living Room Thermostat", "temperature": 21.0, "preset_mode": "comfort"},
+            )
+            states["cover.living_room_blinds"] = EntityState(
+                entity_id="cover.living_room_blinds",
+                state="open",
+                attributes={"friendly_name": "Living Room Blinds"},
+            )
+            orch._cached_states = states
+            await orch.learning.refresh_rules(states, force=True)
+
+            # 1. Both NSPanel blueprint and ZHA button automation are auto-detected as controller bridges
+            self.assertTrue(orch.learning.is_controller_automation("automation.nspanel_living_room"))
+            self.assertTrue(orch.learning.is_controller_automation("automation.hallway_wall_switch"))
+            self.assertFalse(orch.learning.is_controller_automation("automation.regular_schedule"))
+
+            # 2. Actions routed through the NSPanel blueprint context are classified as HUMAN_OR_PHYSICAL
+            orch.triage.register_ha_automation_trigger("ctx_nspanel_1", "automation.nspanel_living_room")
+            cover_ev = StateChangedEvent(
+                entity_id="cover.living_room_blinds",
+                old_state=EntityState(entity_id="cover.living_room_blinds", state="open"),
+                new_state=EntityState(entity_id="cover.living_room_blinds", state="closed"),
+                context_id="ctx_child_1",
+                context_parent_id="ctx_nspanel_1",
+                origin=EventOrigin.HA_AUTOMATION,
+                triggered_by_automation_id="automation.nspanel_living_room",
+            )
+            self.assertEqual(orch.triage.classify_event_origin(cover_ev), EventOrigin.HUMAN_OR_PHYSICAL)
+
+            # 3. Implicit human override works when reverting an AI thermostat change via NSPanel (even when .state stays 'heat')
+            orch.triage.register_ai_action(
+                context_id="ctx_ai_temp",
+                entity_ids=["climate.living_room_ufh"],
+                agent_id="climate_thermal_agent",
+                cause_category="eco_setback",
+                action_signature="sig:climate_thermal_agent:climate.set_temperature:climate.living_room_ufh",
+                service_called="climate.set_temperature",
+                service_data={"temperature": 18.5},
+            )
+            orch.triage._recent_ai_actions["climate.living_room_ufh"]["timestamp"] = datetime.now(timezone.utc) - timedelta(seconds=15)
+            panel_revert_ev = StateChangedEvent(
+                entity_id="climate.living_room_ufh",
+                old_state=EntityState(entity_id="climate.living_room_ufh", state="heat", attributes={"temperature": 18.5, "preset_mode": "eco"}),
+                new_state=EntityState(entity_id="climate.living_room_ufh", state="heat", attributes={"temperature": 21.0, "preset_mode": "comfort"}),
+                context_id="ctx_nspanel_temp",
+                origin=EventOrigin.HA_AUTOMATION,
+                triggered_by_automation_id="automation.nspanel_living_room",
+            )
+            _, fb = orch.triage.evaluate_event(panel_revert_ev, states, [])
+            self.assertIsNotNone(fb)
+            self.assertEqual(fb.polarity, FeedbackPolarity.OVERRIDDEN_IMPLICIT)
+            self.assertTrue(orch.triage.is_entity_in_manual_override("climate.living_room_ufh"))
+
+            # 4. Simulate 6 days of NSPanel usage:
+            #    - At 07:00, tapping '+' four times on NSPanel (19 -> 19.5 -> 20 -> 20.5 -> 21.0) + setting preset 'comfort'
+            #    - At 22:00, closing cover.living_room_blinds via NSPanel, followed 1 min later by setting preset 'eco' via NSPanel
+            #    - NSPanel automation also firing 50ms after every state change to sync its TFT display
+            for day_offset in range(6, 0, -1):
+                base_day = (NOW - timedelta(days=day_offset)).replace(hour=7, minute=0, second=0, microsecond=0)
+                temps = [19.0, 19.5, 20.0, 20.5, 21.0]
+                for step_i in range(len(temps) - 1):
+                    t_step = base_day + timedelta(seconds=step_i * 2)
+                    await orch.learning.record_event(
+                        StateChangedEvent(
+                            entity_id="climate.living_room_ufh",
+                            old_state=EntityState(
+                                entity_id="climate.living_room_ufh",
+                                state="heat",
+                                attributes={"temperature": temps[step_i], "preset_mode": "eco" if step_i == 0 else "comfort"},
+                            ),
+                            new_state=EntityState(
+                                entity_id="climate.living_room_ufh",
+                                state="heat",
+                                attributes={"temperature": temps[step_i + 1], "preset_mode": "comfort"},
+                            ),
+                            timestamp=t_step,
+                            origin=EventOrigin.HA_AUTOMATION,
+                            triggered_by_automation_id="automation.nspanel_living_room",
+                        )
+                    )
+                # Evening sequence at erratic evening hours (so it is a sequence, not a fixed clock anchor):
+                # closing cover on NSPanel -> setting preset 'eco' 60s later, with NSPanel display-sync firing 50ms after
+                eve = (NOW - timedelta(days=day_offset)).replace(hour=19 + (day_offset % 4), minute=(day_offset * 13) % 60, second=0, microsecond=0)
+                await orch.learning.record_event(
+                    StateChangedEvent(
+                        entity_id="cover.living_room_blinds",
+                        old_state=EntityState(entity_id="cover.living_room_blinds", state="open"),
+                        new_state=EntityState(entity_id="cover.living_room_blinds", state="closed"),
+                        timestamp=eve,
+                        origin=EventOrigin.HA_AUTOMATION,
+                        triggered_by_automation_id="automation.nspanel_living_room",
+                    )
+                )
+                # Display sync run of NSPanel automation AND a non-controller display automation 50ms after cover closes
+                await orch.learning.record_event(
+                    StateChangedEvent(
+                        entity_id="automation.nspanel_living_room",
+                        old_state=EntityState(entity_id="automation.nspanel_living_room", state="on", attributes={"last_triggered": (eve - timedelta(minutes=5)).isoformat()}),
+                        new_state=EntityState(entity_id="automation.nspanel_living_room", state="on", attributes={"last_triggered": (eve + timedelta(milliseconds=50)).isoformat()}),
+                        timestamp=eve + timedelta(milliseconds=50),
+                        origin=EventOrigin.HA_AUTOMATION,
+                    )
+                )
+                await orch.telemetry.record_transitions(
+                    [Transition("automation.reactive_status_led", eve + timedelta(seconds=1), "", AUTOMATION_FIRE_STATE, "ha_automation")]
+                )
+                await orch.learning.record_event(
+                    StateChangedEvent(
+                        entity_id="climate.living_room_ufh",
+                        old_state=EntityState(entity_id="climate.living_room_ufh", state="heat", attributes={"temperature": 21.0, "preset_mode": "comfort"}),
+                        new_state=EntityState(entity_id="climate.living_room_ufh", state="heat", attributes={"temperature": 21.0, "preset_mode": "eco"}),
+                        timestamp=eve + timedelta(seconds=60),
+                        origin=EventOrigin.HA_AUTOMATION,
+                        triggered_by_automation_id="automation.nspanel_living_room",
+                    )
+                )
+
+            patterns = await orch.learning.get_patterns(NOW, states=states, force=True)
+            by_target = {(p.kind, p.entity_id, p.to_state): p for p in patterns}
+
+            # Multi-tap temperature steps coalesced into a single temp:21 habit (no intermediate temp:19.5 / temp:20.0 habits)
+            self.assertIn(("time_habit", "climate.living_room_ufh", "temp:21"), by_target)
+            self.assertNotIn(("time_habit", "climate.living_room_ufh", "temp:19.5"), by_target)
+            self.assertIn(("time_habit", "climate.living_room_ufh", "preset:comfort"), by_target)
+            # Sequence habit (closing blinds -> preset:eco) is mined and NOT suppressed by reactive/NSPanel automation fires
+            self.assertIn(("sequence", "climate.living_room_ufh", "preset:eco"), by_target)
+
+            # Proposals generated from temp:21 and preset:eco habits use the right HA services and pass backtesting
+            temp_pat = by_target[("time_habit", "climate.living_room_ufh", "temp:21")]
+            temp_prop = automation_from_pattern(temp_pat, {"climate.living_room_ufh": "Living Room Thermostat"})
+            self.assertIsNotNone(temp_prop)
+            self.assertEqual(temp_prop.action[0]["service"], "climate.set_temperature")
+            self.assertEqual(temp_prop.action[0]["data"], {"temperature": 21})
+            bt = await orch.learning.backtest(temp_prop, NOW)
+            self.assertEqual(bt.verdict, "supported")
+
+            preset_pat = by_target[("sequence", "climate.living_room_ufh", "preset:eco")]
+            preset_prop = automation_from_pattern(preset_pat, {"climate.living_room_ufh": "Living Room Thermostat"})
+            self.assertIsNotNone(preset_prop)
+            self.assertEqual(preset_prop.action[0]["service"], "climate.set_preset_mode")
+            self.assertEqual(preset_prop.action[0]["data"], {"preset_mode": "eco"})
+
+            # Attribute tokens never pollute primary .state routine deviation detection
+            findings = await orch.learning.detect_exceptions(states, NOW)
+            self.assertFalse(any(f.entity_id == "climate.living_room_ufh" and f.kind == "routine_deviation" for f in findings))
+
+            # 5. Dashboard API endpoint for controller automations (/api/automations/controller & /api/learned)
+            transport = httpx.ASGITransport(app=app)
+            async with httpx.AsyncClient(transport=transport, base_url="http://t") as client:
+                learned = (await client.get("/api/learned")).json()
+                active_ids = [c["entity_id"] for c in learned["controller_automations"]["active"]]
+                self.assertIn("automation.nspanel_living_room", active_ids)
+
+                # Exclude an auto-detected controller
+                r1 = (await client.post("/api/automations/controller", json={"entity_id": "automation.nspanel_living_room", "is_controller": False})).json()
+                self.assertNotIn("automation.nspanel_living_room", [c["entity_id"] for c in r1["controller_automations"]["active"]])
+                self.assertIn("automation.nspanel_living_room", [c["entity_id"] for c in r1["controller_automations"]["excluded"]])
+
+                # Mark a custom automation as a controller
+                r2 = (await client.post("/api/automations/controller", json={"entity_id": "automation.regular_schedule", "is_controller": True})).json()
+                self.assertIn("automation.regular_schedule", [c["entity_id"] for c in r2["controller_automations"]["active"]])
+
+                # Reset overrides
+                r3 = (await client.post("/api/automations/controller", json={"reset_all": True})).json()
+                self.assertIn("automation.nspanel_living_room", [c["entity_id"] for c in r3["controller_automations"]["active"]])
+                self.assertNotIn("automation.regular_schedule", [c["entity_id"] for c in r3["controller_automations"]["active"]])
+
+            orch.memory._conn.close()
+            orch.telemetry.close()
+
 
 if __name__ == "__main__":
     unittest.main()

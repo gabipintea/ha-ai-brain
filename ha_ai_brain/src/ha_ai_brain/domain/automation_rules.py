@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, tzinfo
 from typing import Any
 
 from ha_ai_brain.domain.patterns import MinedPattern, same_device
-from ha_ai_brain.domain.service_semantics import ACTUATOR_DOMAINS, state_after_service
+from ha_ai_brain.domain.service_semantics import ACTUATOR_DOMAINS, is_attribute_state, state_after_service
 from ha_ai_brain.domain.timeutil import WEEKDAY_NAMES, circular_distance, minute_of_day, parse_hhmm, to_local
 
 _SIMPLE_CONDITIONS = frozenset({"time"})
@@ -16,6 +17,125 @@ _SIMPLE_CONDITIONS = frozenset({"time"})
 # (for example an overheat cut-off) does not make a "usually off around 07:30" habit automated.
 _NON_ROUTINE_TRIGGERS = frozenset({"numeric_state", "template"})
 _CLIMATE_ACTIVE_STATES = frozenset({"heat", "cool", "auto", "heat_cool", "dry", "fan_only"})
+
+# Blueprint path and entity-id markers for physical wall panels, touchscreens, buttons, switches and remote controllers.
+_PANEL_HINTS = ("nspanel", "openhasp", "wallpanel", "nextion")
+_CONTROLLER_BLUEPRINT_HINTS = (
+    *_PANEL_HINTS,
+    "hasp",
+    "remote",
+    "button",
+    "controller",
+    "dimmer",
+    "knob",
+    "dial",
+    "keyfob",
+    "scene_switch",
+    "wall_switch",
+    "wireless_switch",
+    "smart_switch",
+    "tap_dial",
+    "styrbar",
+    "rodret",
+    "tradfri",
+    "symfonisk",
+    "hue_dimmer",
+)
+_AUTONOMOUS_BLUEPRINT_EXCLUSIONS = (
+    "motion",
+    "occupancy",
+    "presence",
+    "schedule",
+    "wake_up",
+    "alarm",
+    "notification",
+    "notify",
+    "backup",
+    "sensor-light",
+    "sensor_light",
+)
+_CONTROLLER_EVENT_TYPES = frozenset(
+    {
+        "zha_event",
+        "deconz_event",
+        "hue_event",
+        "lutron_event",
+        "lutron_caseta_button_event",
+        "shelly.click",
+        "bthome_ble_event",
+        "matter_event",
+    }
+)
+_CONTROLLER_DEVICE_DOMAINS = frozenset(
+    {"zha", "deconz", "mqtt", "hue", "shelly", "lutron_caseta", "bthome", "matter", "esphome"}
+)
+_CONTROLLER_ACTION_TOKENS = (
+    "button",
+    "press",
+    "release",
+    "single",
+    "double",
+    "triple",
+    "quadruple",
+    "hold",
+    "click",
+    "rotate",
+    "dial",
+)
+_SENSOR_TRIGGER_EXCLUSIONS = ("motion", "occupancy", "opened", "closed", "temperature", "humidity", "illuminance", "moist", "leak")
+
+
+def is_controller_automation_id(entity_id_or_alias: str) -> bool:
+    """True when an automation entity_id or alias unambiguously names a physical wall panel (e.g. NSPanel, openHASP)."""
+    low = (entity_id_or_alias or "").lower()
+    return any(h in low for h in _PANEL_HINTS)
+
+
+def is_controller_blueprint(path: str) -> bool:
+    """True when a Home Assistant `use_blueprint.path` belongs to a wall-panel or physical remote/button controller blueprint."""
+    low = (path or "").lower().strip()
+    if not low:
+        return False
+    if any(p in low for p in _PANEL_HINTS):
+        return True
+    if any(ex in low for ex in _AUTONOMOUS_BLUEPRINT_EXCLUSIONS):
+        return False
+    return any(h in low for h in _CONTROLLER_BLUEPRINT_HINTS)
+
+
+def _is_controller_trigger(trig: dict[str, Any]) -> bool:
+    """True when a single automation trigger fires only in response to a physical button press, remote event or panel tap."""
+    kind = str(trig.get("platform") or trig.get("trigger") or "").lower().strip()
+    if kind == "event":
+        ev_type = str(trig.get("event_type") or "").lower().strip()
+        if ev_type in _CONTROLLER_EVENT_TYPES:
+            return True
+        if ev_type.startswith("esphome.") and any(k in ev_type for k in (*_PANEL_HINTS, "button", "click", "touch", "page", "command")):
+            return True
+        return False
+    if kind == "state":
+        ids = _entity_ids(trig.get("entity_id"))
+        return bool(ids) and all(eid.split(".", 1)[0] in ("button", "input_button", "event") for eid in ids)
+    if kind == "device":
+        dom = str(trig.get("domain") or "").lower().strip()
+        sig = f"{trig.get('type') or ''} {trig.get('subtype') or ''}".lower()
+        if dom in _CONTROLLER_DEVICE_DOMAINS and not any(ex in sig for ex in _SENSOR_TRIGGER_EXCLUSIONS):
+            return any(tok in sig for tok in _CONTROLLER_ACTION_TOKENS)
+    return False
+
+
+def dump_controller_overrides(overrides: dict[str, bool]) -> str:
+    return json.dumps({k: bool(v) for k, v in sorted(overrides.items()) if k})
+
+
+def load_controller_overrides(raw: str | None) -> dict[str, bool]:
+    try:
+        data = json.loads(raw or "{}")
+    except ValueError:
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {str(k): bool(v) for k, v in data.items() if isinstance(k, str) and k.startswith("automation.")}
 
 
 def clean_alias(alias: str) -> str:
@@ -73,6 +193,10 @@ class AutomationRule:
     actions: list[RuleAction] = field(default_factory=list)
     complex_actions: bool = False  # choose / if / repeat blocks
     entity_state_id: str = ""  # the automation.* entity (filled in from the state registry)
+    blueprint_path: str = ""  # use_blueprint.path when created from a Home Assistant blueprint
+    auto_controller: bool = False  # detected as a wall-panel / remote / button controller bridge
+    is_controller: bool = False  # effective controller flag (auto_controller + homeowner overrides)
+    controller_reason: str = ""  # plain-language explanation shown in the dashboard
 
     def targets(self) -> list[str]:
         return sorted({a.entity_id for a in self.actions if a.entity_id})
@@ -99,6 +223,12 @@ def _device_action_call(item: dict[str, Any]) -> tuple[str, str, dict[str, Any]]
     if kind == "set_hvac_mode" and domain == "climate":
         data = {"hvac_mode": item["hvac_mode"]} if item.get("hvac_mode") is not None else {}
         return domain, "set_hvac_mode", data
+    if kind == "set_preset_mode" and domain in ("climate", "fan"):
+        data = {"preset_mode": item["preset_mode"]} if item.get("preset_mode") is not None else {}
+        return domain, "set_preset_mode", data
+    if kind == "set_mode" and domain == "humidifier":
+        data = {"mode": item["mode"]} if item.get("mode") is not None else {}
+        return domain, "set_mode", data
     if kind in ("turn_on", "turn_off", "toggle"):
         return domain, kind, {}
     if kind in ("open", "close") and domain in ("cover", "valve"):
@@ -122,7 +252,7 @@ def _collect_actions(items: list[Any], rule: AutomationRule, depth: int = 0) -> 
         if isinstance(svc, str) and "." in svc:
             domain, _, service = svc.partition(".")
             clean_data = {k: v for k, v in data.items() if k != "entity_id"}
-            for key in ("hvac_mode", "position"):
+            for key in ("hvac_mode", "position", "temperature", "preset_mode", "mode"):
                 if key not in clean_data and item.get(key) is not None:
                     clean_data[key] = item[key]
             call = (domain, service, clean_data)
@@ -169,13 +299,15 @@ def _collect_actions(items: list[Any], rule: AutomationRule, depth: int = 0) -> 
 
 def parse_automation_config(cfg: dict[str, Any]) -> AutomationRule:
     """Parse a Home Assistant automation config (old `trigger/condition/action` or new plural keys)."""
+    bp = cfg.get("use_blueprint")
+    bp_path = str(bp.get("path") or "").strip() if isinstance(bp, dict) else ""
     rule = AutomationRule(
         automation_id=str(cfg.get("id") or ""),
         alias=clean_alias(str(cfg.get("alias") or cfg.get("id") or "automation")),
+        blueprint_path=bp_path,
     )
-    for trig in _listify(cfg.get("trigger") if "trigger" in cfg else cfg.get("triggers")):
-        if not isinstance(trig, dict):
-            continue
+    raw_triggers = [t for t in _listify(cfg.get("trigger") if "trigger" in cfg else cfg.get("triggers")) if isinstance(t, dict)]
+    for trig in raw_triggers:
         kind = str(trig.get("platform") or trig.get("trigger") or "")
         if kind == "time":
             at = trig.get("at")
@@ -210,6 +342,17 @@ def parse_automation_config(cfg: dict[str, Any]) -> AutomationRule:
             rule.simple_conditions = False  # before/after windows etc. are not modelled
 
     _collect_actions(_listify(cfg.get("action") if "action" in cfg else cfg.get("actions")), rule)
+
+    if is_controller_blueprint(bp_path):
+        rule.auto_controller = True
+        rule.controller_reason = f"Controller / panel blueprint ({bp_path})"
+    elif is_controller_automation_id(f"{rule.automation_id} {rule.alias}"):
+        rule.auto_controller = True
+        rule.controller_reason = "Wall panel or physical controller automation"
+    elif raw_triggers and not rule.time_triggers and all(_is_controller_trigger(t) for t in raw_triggers):
+        rule.auto_controller = True
+        rule.controller_reason = "Triggered only by physical button, remote or panel events"
+    rule.is_controller = rule.auto_controller
     return rule
 
 
@@ -271,14 +414,14 @@ def action_produces_state(act: RuleAction, state: str) -> bool:
             return True
         if act.service in ("set_hvac_mode", "set_temperature"):
             raw_mode = str(act.data.get("hvac_mode") or "")
-            if "{" in raw_mode and re.search(rf"\b{re.escape(state)}\b", raw_mode):
+            if raw_mode == state or ("{" in raw_mode and re.search(rf"\b{re.escape(state)}\b", raw_mode)):
                 return True
     return False
 
 
 def rule_produces_state(rule: AutomationRule, entity_id: str, state: str, twins: Any = None) -> bool:
     """True when an enabled `rule` has an action that puts `entity_id` (or its twin) into `state`."""
-    if not rule.enabled:
+    if not rule.enabled or rule.is_controller:
         return False
     return any(
         (same_device(a.entity_id, entity_id) or (twins is not None and twins.are_twins(a.entity_id, entity_id)))
@@ -335,7 +478,7 @@ def _weekday_overlap(rule: AutomationRule, day_class: str) -> bool:
 def pattern_covered_by(rules: list[AutomationRule], pattern: MinedPattern, tolerance: int = 45, twins: Any = None) -> str | None:
     """Alias of an enabled automation that already produces the behaviour in `pattern`, else None."""
     for rule in rules:
-        if not rule.enabled:
+        if not rule.enabled or rule.is_controller:
             continue
         for act in rule.actions:
             if not (same_device(act.entity_id, pattern.entity_id) or (twins and twins.are_twins(act.entity_id, pattern.entity_id))) or not action_produces_state(act, pattern.to_state):
@@ -369,12 +512,12 @@ def rule_expectations(rules: list[AutomationRule]) -> list[RuleExpectation]:
     """What each fully-predictable time-triggered automation promises to have done by a given time."""
     out: list[RuleExpectation] = []
     for rule in rules:
-        if not rule.enabled or not rule.simple_conditions or rule.complex_actions or rule.state_triggers or rule.other_triggers:
+        if not rule.enabled or rule.is_controller or not rule.simple_conditions or rule.complex_actions or rule.state_triggers or rule.other_triggers:
             continue
         for minute in rule.time_triggers:
             for act in rule.actions:
                 state = act.result_state
-                if state:
+                if state and not is_attribute_state(state):
                     out.append(
                         RuleExpectation(
                             rule.automation_id,
@@ -395,7 +538,7 @@ def find_equivalent_rule(rules: list[AutomationRule], proposal: dict[str, Any], 
     if not cand_effects:
         return None
     for rule in rules:
-        if not rule.enabled:
+        if not rule.enabled or rule.is_controller:
             continue
         if not cand_effects & {(a.entity_id, a.result_state) for a in rule.actions if a.result_state}:
             continue

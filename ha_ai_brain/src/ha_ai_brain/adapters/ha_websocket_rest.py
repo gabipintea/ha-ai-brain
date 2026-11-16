@@ -653,7 +653,7 @@ class HomeAssistantAdapter(SmartHomePort):
             (self._automation_context_map.get(ctx_id) if ctx_id and not eid.startswith("script.") else None)
             or (self._automation_context_map.get(parent_id) if parent_id else None)
         )
-        if auto_eid_matched:
+        if auto_eid_matched and not eid.startswith("script."):
             self._track_automation_context(ctx_id, auto_eid_matched)
 
         new_state = EntityState(

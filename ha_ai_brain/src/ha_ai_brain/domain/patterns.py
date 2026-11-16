@@ -27,7 +27,14 @@ from ha_ai_brain.domain.sequence_filters import (
     reason_shared_cause,
     time_anchor,
 )
-from ha_ai_brain.domain.service_semantics import ACTUATOR_DOMAINS, SCRIPT_RUN_STATE, service_for_state
+from ha_ai_brain.domain.service_semantics import (
+    ACTUATOR_DOMAINS,
+    PRESET_STATE_PREFIX,
+    SCRIPT_RUN_STATE,
+    TEMP_STATE_PREFIX,
+    describe_state,
+    service_for_state,
+)
 from ha_ai_brain.domain.timeutil import (
     circular_distance,
     circular_mean,
@@ -231,7 +238,7 @@ def mine_time_habits(
                         minute_of_day=centre,
                         spread_minutes=spread,
                         description=(
-                            f"{entity_id} {'is run' if state == SCRIPT_RUN_STATE else f'is set to {state!r}'} around {format_minute(centre)} {cls_text} "
+                            f"{entity_id} {'is run' if state == SCRIPT_RUN_STATE else f'is set to {describe_state(state)}'} around {format_minute(centre)} {cls_text} "
                             f"({support} of {denominators} days, ±{int(spread)} min)"
                         ),
                     )
@@ -367,8 +374,8 @@ def mine_sequences_report(
                 median_lag_seconds=median_lag,
                 lift=lift,
                 description=(
-                    f"{b_ent} goes '{b_state}' within ~{max(1, int(round(median_lag / 60)))} min after "
-                    f"{a_ent} becomes '{a_state}' ({hits} of {len(a_times)} times, lift x{lift:.1f})"
+                    f"{b_ent} goes {describe_state(b_state)} within ~{max(1, int(round(median_lag / 60)))} min after "
+                    f"{a_ent} becomes {describe_state(a_state)} ({hits} of {len(a_times)} times, lift x{lift:.1f})"
                 ),
             )
             cause = find_common_cause(a_ent, b_ent, a_times, hit_pairs, cause_pool, min_hits=min_hits, min_confidence=min_confidence)
@@ -485,6 +492,14 @@ def is_duplicate_habit(a: MinedPattern, b: MinedPattern, names: dict[str, str] |
     return bool(na) and na == nb and a.entity_id.split(".", 1)[0] == b.entity_id.split(".", 1)[0]
 
 
+def _alias_state_label(state: str) -> str:
+    if state.startswith(TEMP_STATE_PREFIX):
+        return f"{state[len(TEMP_STATE_PREFIX):]}°"
+    if state.startswith(PRESET_STATE_PREFIX):
+        return f"preset {state[len(PRESET_STATE_PREFIX):]}"
+    return state
+
+
 def automation_from_pattern(
     pattern: MinedPattern,
     names: dict[str, str] | None = None,
@@ -502,13 +517,14 @@ def automation_from_pattern(
 
     conditions: list[dict[str, Any]] = []
     # Switching things ON while nobody is home is never what a habit means.
-    if presence_entities and pattern.to_state in ("on", "heat", "cool", "open", SCRIPT_RUN_STATE) and domain != "cover":
+    if presence_entities and pattern.to_state in ("on", "heat", "cool", "open", SCRIPT_RUN_STATE, "preset:comfort", "preset:home", "preset:boost") and domain != "cover":
         homes = [{"condition": "state", "entity_id": p, "state": "home"} for p in presence_entities[:6]]
         conditions.append(homes[0] if len(homes) == 1 else {"condition": "or", "conditions": homes})
 
     name = _nice_name(pattern.entity_id, names)
     if names and sum(1 for n in names.values() if n and n == names.get(pattern.entity_id)) > 1:
         name = f"{name} ({pattern.entity_id.split('.', 1)[1]})"  # several entities share this friendly name
+    state_label = _alias_state_label(pattern.to_state)
     if pattern.kind == "time_habit" and pattern.minute_of_day is not None:
         # Fire slightly *before* the typical manual action (so the automation gets there first), on a 5-minute grid.
         lead = min(pattern.spread_minutes or 0.0, 5.0)
@@ -520,14 +536,14 @@ def automation_from_pattern(
         elif pattern.day_class == "weekend":
             conditions.insert(0, {"condition": "time", "weekday": WEEKEND})
         scope = {"all": "", "weekday": " (weekdays)", "weekend": " (weekends)"}[pattern.day_class]
-        alias = f"{name}: {pattern.to_state} at {at[:5]}{scope}"
+        alias = f"{name}: {state_label} at {at[:5]}{scope}"
     elif pattern.kind == "sequence" and pattern.trigger_entity:
         trigger = {"platform": "state", "entity_id": pattern.trigger_entity, "to": pattern.trigger_state}
         lag = pattern.median_lag_seconds or 0.0
         if lag > 90:
             minutes = max(1, int(lag // 60) - 1)
             trigger["for"] = f"00:{min(minutes, 59):02d}:00"
-        alias = f"{name}: {pattern.to_state} after {_nice_name(pattern.trigger_entity, names)} is {pattern.trigger_state}"
+        alias = f"{name}: {state_label} after {_nice_name(pattern.trigger_entity, names)} is {_alias_state_label(pattern.trigger_state or '')}"
     else:
         return None
 

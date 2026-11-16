@@ -117,8 +117,8 @@ def _object_id(entity_id: str) -> str:
     return entity_id.split(".", 1)[-1]
 
 
-def _explained(ts: float, cause_times: list[float]) -> bool:
-    idx = bisect_right(cause_times, ts + CAUSE_LOOKAHEAD_SECONDS) - 1
+def _explained(ts: float, cause_times: list[float], lookahead: float = CAUSE_LOOKAHEAD_SECONDS) -> bool:
+    idx = bisect_right(cause_times, ts + lookahead) - 1
     return idx >= 0 and ts - cause_times[idx] <= CAUSE_WINDOW_SECONDS
 
 
@@ -141,14 +141,17 @@ def find_common_cause(
         c_ent = key[0]
         if c_ent in (a_ent, b_ent) or _object_id(c_ent) in (_object_id(a_ent), _object_id(b_ent)):
             continue
-        explained = sum(1 for ta, _ in hit_pairs if _explained(ta, c_times))
+        # An automation or script that fired *after* A changed is reacting to A (e.g. syncing a wall screen), not causing A.
+        la = 0.0 if c_ent.startswith(("automation.", "script.")) else CAUSE_LOOKAHEAD_SECONDS
+        explained = sum(1 for ta, _ in hit_pairs if _explained(ta, c_times, la))
         if explained >= max(min_hits, CAUSE_MIN_SHARE * len(hit_pairs)) and (best is None or explained > best[1]):
             best = (key, explained)
     if best is None:
         return None
     c_times = pool[best[0]]
-    resid_hits = sum(1 for ta, _ in hit_pairs if not _explained(ta, c_times))
-    resid_a = sum(1 for ta in a_times if not _explained(ta, c_times))
+    la = 0.0 if best[0][0].startswith(("automation.", "script.")) else CAUSE_LOOKAHEAD_SECONDS
+    resid_hits = sum(1 for ta, _ in hit_pairs if not _explained(ta, c_times, la))
+    resid_a = sum(1 for ta in a_times if not _explained(ta, c_times, la))
     if resid_hits >= min_hits and resid_hits / max(1, resid_a) >= min_confidence:
         return None  # B still follows A without C: a real relation (C may just be part of the chain)
     return best[0], best[1], len(hit_pairs)
