@@ -18,6 +18,88 @@ _SIMPLE_CONDITIONS = frozenset({"time"})
 _NON_ROUTINE_TRIGGERS = frozenset({"numeric_state", "template"})
 _CLIMATE_ACTIVE_STATES = frozenset({"heat", "cool", "auto", "heat_cool", "dry", "fan_only"})
 
+_SOLAR_ENTITY_HINTS = (
+    "illuminance",
+    "lux",
+    "daylight",
+    "sunlight",
+    "irradiance",
+    "brightness",
+    "light_level",
+    "light_sensor",
+    "ambient_light",
+    "solar_elevation",
+    "sun_elevation",
+)
+_HAZARD_ENTITY_HINTS = (
+    "moisture",
+    "leak",
+    "rain",
+    "precipitation",
+    "flood",
+    "water_leak",
+    "smoke",
+    "gas",
+    "carbon_monoxide",
+    "tamper",
+    "problem",
+    "overheat",
+    "frost",
+    "freeze",
+    "wind",
+    "storm",
+    "hail",
+    "lightning",
+    "fire",
+    "alarm",
+    "battery",
+    "degraded",
+    "watchdog",
+    "emergency",
+    "ingress",
+    "combustible",
+)
+_HAZARD_DEVICE_CLASSES = frozenset(
+    {
+        "moisture",
+        "smoke",
+        "gas",
+        "carbon_monoxide",
+        "safety",
+        "tamper",
+        "problem",
+        "cold",
+        "heat",
+        "precipitation",
+        "precipitation_intensity",
+        "wind_speed",
+        "battery",
+    }
+)
+_HAZARD_TRIGGER_STATES = frozenset(
+    {
+        "rainy",
+        "pouring",
+        "lightning",
+        "lightning-rainy",
+        "hail",
+        "snowy",
+        "snowy-rainy",
+        "windy",
+        "windy-variant",
+        "exceptional",
+        "wet",
+        "moist",
+        "leak",
+        "problem",
+        "tamper",
+        "smoke",
+        "gas",
+        "unavailable",
+        "unknown",
+    }
+)
+
 # Blueprint path and entity-id markers for physical wall panels, touchscreens, buttons, switches and remote controllers.
 _PANEL_HINTS = ("nspanel", "openhasp", "wallpanel", "nextion")
 _CONTROLLER_BLUEPRINT_HINTS = (
@@ -187,6 +269,8 @@ class AutomationRule:
     enabled: bool = True
     time_triggers: list[int] = field(default_factory=list)  # minutes of day (local)
     state_triggers: list[tuple[str, str | None]] = field(default_factory=list)
+    numeric_triggers: list[tuple[str, str | None]] = field(default_factory=list)  # (entity_id, "below" | "above" | "range" | None)
+    sun_triggers: list[str] = field(default_factory=list)  # "sunset" | "sunrise" | "solar"
     other_triggers: list[str] = field(default_factory=list)
     weekdays: set[int] | None = None  # 0=Mon; None = every day
     simple_conditions: bool = True  # only time/weekday conditions -> fully predictable
@@ -197,6 +281,8 @@ class AutomationRule:
     auto_controller: bool = False  # detected as a wall-panel / remote / button controller bridge
     is_controller: bool = False  # effective controller flag (auto_controller + homeowner overrides)
     controller_reason: str = ""  # plain-language explanation shown in the dashboard
+    solar_trigger_entities: set[str] = field(default_factory=set)
+    hazard_trigger_entities: set[str] = field(default_factory=set)
 
     def targets(self) -> list[str]:
         return sorted({a.entity_id for a in self.actions if a.entity_id})
@@ -204,7 +290,8 @@ class AutomationRule:
     def summary(self) -> dict[str, Any]:
         triggers: list[str] = [f"time {m // 60:02d}:{m % 60:02d}" for m in self.time_triggers]
         triggers += [f"state {e}->{t or '*'}" for e, t in self.state_triggers]
-        triggers += self.other_triggers
+        triggers += [f"numeric_state {e}({d or '*'})" for e, d in self.numeric_triggers]
+        triggers += [t for t in self.other_triggers if not (t == "numeric_state" and self.numeric_triggers)]
         return {
             "alias": self.alias,
             "enabled": self.enabled,
@@ -317,13 +404,43 @@ def parse_automation_config(cfg: dict[str, Any]) -> AutomationRule:
             else:
                 rule.other_triggers.append("time(dynamic)")
         elif kind == "state":
+            raw_to = trig.get("to")
+            if isinstance(raw_to, list):
+                to_str = ",".join(str(x) for x in raw_to if x is not None) or None
+            else:
+                to_str = None if raw_to is None else str(raw_to)
             for eid in _entity_ids(trig.get("entity_id")):
-                to = trig.get("to")
-                rule.state_triggers.append((eid, None if to is None else str(to)))
+                rule.state_triggers.append((eid, to_str))
         elif kind == "device" and trig.get("entity_id"):
+            has_below = trig.get("below") is not None
+            has_above = trig.get("above") is not None
+            direction = "range" if (has_below and has_above) else ("below" if has_below else ("above" if has_above else None))
             for eid in _entity_ids(trig.get("entity_id")):
                 to = trig.get("to") if trig.get("to") is not None else trig.get("type")
                 rule.state_triggers.append((eid, None if to is None else str(to)))
+                if direction is not None:
+                    rule.numeric_triggers.append((eid, direction))
+        elif kind == "numeric_state":
+            has_below = trig.get("below") is not None
+            has_above = trig.get("above") is not None
+            direction = "range" if (has_below and has_above) else ("below" if has_below else ("above" if has_above else None))
+            for eid in _entity_ids(trig.get("entity_id")):
+                rule.numeric_triggers.append((eid, direction))
+            rule.other_triggers.append("numeric_state")
+        elif kind == "sun":
+            ev = str(trig.get("event") or "").lower().strip()
+            rule.sun_triggers.append(ev if ev in ("sunset", "sunrise") else "solar")
+            rule.other_triggers.append("sun")
+        elif kind == "template":
+            tpl = str(trig.get("value_template") or "").lower()
+            if "sun.sun" in tpl or "illuminance" in tpl or "_lux" in tpl:
+                if "below" in tpl or "<" in tpl or "sunset" in tpl:
+                    rule.sun_triggers.append("sunset")
+                elif "above" in tpl or ">" in tpl or "sunrise" in tpl:
+                    rule.sun_triggers.append("sunrise")
+                else:
+                    rule.sun_triggers.append("solar")
+            rule.other_triggers.append("template")
         else:
             rule.other_triggers.append(kind or "unknown")
 
@@ -403,6 +520,21 @@ def resolve_rule_targets(
             (reg_map.get(e, e) if "." not in e else e, to)
             for e, to in rule.state_triggers
         ]
+        rule.numeric_triggers = [
+            (reg_map.get(e, e) if "." not in e else e, direction)
+            for e, direction in rule.numeric_triggers
+        ]
+        if states:
+            for eid in {e for e, _ in rule.state_triggers} | {e for e, _ in rule.numeric_triggers}:
+                st = states.get(eid)
+                if st is None:
+                    continue
+                dclass = (getattr(st, "device_class", None) or "").lower()
+                unit = (getattr(st, "unit_of_measurement", None) or "").lower()
+                if dclass in ("illuminance", "irradiance") or unit in ("lx", "lux", "w/m²", "w/m2"):
+                    rule.solar_trigger_entities.add(eid)
+                elif dclass in _HAZARD_DEVICE_CLASSES:
+                    rule.hazard_trigger_entities.add(eid)
 
 
 def action_produces_state(act: RuleAction, state: str) -> bool:
@@ -475,27 +607,146 @@ def _weekday_overlap(rule: AutomationRule, day_class: str) -> bool:
     return bool(rule.weekdays & days)
 
 
+def _is_solar_entity(entity_id: str, rule: AutomationRule | None = None) -> bool:
+    low = (entity_id or "").lower().strip()
+    if not low:
+        return False
+    if rule is not None and entity_id in rule.solar_trigger_entities:
+        return True
+    if low == "sun.sun" or low.startswith("sun."):
+        return True
+    return any(h in low for h in _SOLAR_ENTITY_HINTS)
+
+
+def _is_hazard_trigger(entity_id: str, to_state: str | None = None, rule: AutomationRule | None = None) -> bool:
+    low = (entity_id or "").lower().strip()
+    if not low:
+        return False
+    if _is_solar_entity(entity_id, rule):
+        return False
+    if low.startswith("weather.") or (rule is not None and entity_id in rule.hazard_trigger_entities):
+        return True
+    if any(h in low for h in _HAZARD_ENTITY_HINTS):
+        return True
+    if to_state:
+        tokens = {t.strip().lower() for t in to_state.split(",") if t.strip()}
+        if tokens and tokens <= _HAZARD_TRIGGER_STATES:
+            return True
+    return False
+
+
+def _is_hazard_alias(alias: str) -> bool:
+    low = strip_brain_prefix(alias).lower()
+    if low.startswith("safety:"):
+        return True
+    words = set(re.findall(r"[a-z0-9_]+", low))
+    return bool(
+        words
+        & {
+            "precipitation",
+            "rain",
+            "leak",
+            "moisture",
+            "smoke",
+            "gas",
+            "fire",
+            "flood",
+            "storm",
+            "frost",
+            "freeze",
+            "overheat",
+            "emergency",
+            "watchdog",
+            "ingress",
+            "combustible",
+        }
+    )
+
+
+def _rule_solar_phases(rule: AutomationRule) -> set[str]:
+    """Solar / daylight phases ('dusk', 'dawn', 'solar') that trigger `rule`."""
+    phases: set[str] = set()
+    for ev in rule.sun_triggers:
+        if ev == "sunset":
+            phases.add("dusk")
+        elif ev == "sunrise":
+            phases.add("dawn")
+        else:
+            phases.add("solar")
+    for eid, to in rule.state_triggers:
+        if _is_solar_entity(eid, rule):
+            low_to = (to or "").lower().strip()
+            if low_to in ("below_horizon", "off", "dark", "night"):
+                phases.add("dusk")
+            elif low_to in ("above_horizon", "on", "light", "day"):
+                phases.add("dawn")
+            else:
+                phases.add("solar")
+    for eid, direction in rule.numeric_triggers:
+        if _is_solar_entity(eid, rule):
+            if direction == "below":
+                phases.add("dusk")
+            elif direction == "above":
+                phases.add("dawn")
+            else:
+                phases.add("solar")
+    return phases
+
+
+def _solar_phase_matches_minute(phases: set[str], minute: float) -> bool:
+    """True when `minute` (0..1440 local time) is compatible with at least one solar phase in `phases`."""
+    if not phases:
+        return False
+    if "solar" in phases:
+        return True
+    m = minute % 1440
+    if "dusk" in phases and not (4 * 60 <= m < 12 * 60):
+        return True
+    if "dawn" in phases and not (14 * 60 <= m < 23 * 60):
+        return True
+    return False
+
+
 def pattern_covered_by(rules: list[AutomationRule], pattern: MinedPattern, tolerance: int = 45, twins: Any = None) -> str | None:
     """Alias of an enabled automation that already produces the behaviour in `pattern`, else None."""
+    best_score = 0
+    best_alias: str | None = None
     for rule in rules:
         if not rule.enabled or rule.is_controller:
             continue
-        for act in rule.actions:
-            if not (same_device(act.entity_id, pattern.entity_id) or (twins and twins.are_twins(act.entity_id, pattern.entity_id))) or not action_produces_state(act, pattern.to_state):
+        produces = any(
+            (same_device(act.entity_id, pattern.entity_id) or (twins and twins.are_twins(act.entity_id, pattern.entity_id)))
+            and action_produces_state(act, pattern.to_state)
+            for act in rule.actions
+        )
+        if not produces:
+            continue
+        if pattern.kind == "time_habit" and pattern.minute_of_day is not None:
+            if not _weekday_overlap(rule, pattern.day_class):
                 continue
-            if pattern.kind == "time_habit" and pattern.minute_of_day is not None:
-                if any(circular_distance(m, pattern.minute_of_day) <= tolerance for m in rule.time_triggers) and _weekday_overlap(
-                    rule, pattern.day_class
-                ):
-                    return rule.alias
-                # Event-driven rules (motion, sun, presence ...) may well produce the same routine.
-                routine_triggers = rule.state_triggers or [t for t in rule.other_triggers if t not in _NON_ROUTINE_TRIGGERS]
-                if not rule.time_triggers and routine_triggers:
-                    return rule.alias
-            elif pattern.kind == "sequence":
-                if any(e == pattern.trigger_entity or (twins and twins.are_twins(e, pattern.trigger_entity or "")) for e, _ in rule.state_triggers):
-                    return rule.alias
-    return None
+            if any(circular_distance(m, pattern.minute_of_day) <= tolerance for m in rule.time_triggers):
+                return rule.alias
+            phases = _rule_solar_phases(rule)
+            if phases and _solar_phase_matches_minute(phases, pattern.minute_of_day):
+                if best_score < 2:
+                    best_score, best_alias = 2, rule.alias
+                continue
+            # Event-driven rules (motion, presence ...) may well produce the same routine, unlike hazard/weather/threshold cut-offs.
+            if not rule.time_triggers and not phases and not _is_hazard_alias(rule.alias):
+                routine_state = [
+                    (e, to)
+                    for e, to in rule.state_triggers
+                    if not _is_hazard_trigger(e, to, rule) and not _is_solar_entity(e, rule)
+                ]
+                routine_other = [t for t in rule.other_triggers if t not in _NON_ROUTINE_TRIGGERS and t != "sun"]
+                if routine_state or routine_other:
+                    if best_score < 1:
+                        best_score, best_alias = 1, rule.alias
+        elif pattern.kind == "sequence":
+            trig_entities = [e for e, _ in rule.state_triggers] + [e for e, _ in rule.numeric_triggers]
+            if any(e == pattern.trigger_entity or (twins and twins.are_twins(e, pattern.trigger_entity or "")) for e in trig_entities):
+                return rule.alias
+    return best_alias
 
 
 @dataclass(frozen=True)
@@ -531,19 +782,39 @@ def rule_expectations(rules: list[AutomationRule]) -> list[RuleExpectation]:
     return out
 
 
-def find_equivalent_rule(rules: list[AutomationRule], proposal: dict[str, Any], tolerance: int = 45) -> str | None:
+def find_equivalent_rule(rules: list[AutomationRule], proposal: dict[str, Any], tolerance: int = 45, twins: Any = None) -> str | None:
     """Alias of an existing enabled automation that already does what `proposal` (a config dict) would do."""
     cand = parse_automation_config(proposal)
-    cand_effects = {(a.entity_id, a.result_state) for a in cand.actions if a.result_state}
-    if not cand_effects:
+    cand_actions = [a for a in cand.actions if a.result_state]
+    if not cand_actions:
         return None
+    cand_phases = _rule_solar_phases(cand)
     for rule in rules:
         if not rule.enabled or rule.is_controller:
             continue
-        if not cand_effects & {(a.entity_id, a.result_state) for a in rule.actions if a.result_state}:
+        shares_effect = any(
+            (same_device(ca.entity_id, ra.entity_id) or (twins and twins.are_twins(ca.entity_id, ra.entity_id)))
+            and action_produces_state(ra, ca.result_state or "")
+            for ca in cand_actions
+            for ra in rule.actions
+        )
+        if not shares_effect:
             continue
         if cand.time_triggers and any(circular_distance(m, n) <= tolerance for m in cand.time_triggers for n in rule.time_triggers):
             return rule.alias
         if cand.state_triggers and {e for e, _ in cand.state_triggers} & {e for e, _ in rule.state_triggers}:
+            return rule.alias
+        if cand.numeric_triggers and any(
+            ce == re and (cd == rd or cd is None or rd is None)
+            for ce, cd in cand.numeric_triggers
+            for re, rd in rule.numeric_triggers
+        ):
+            return rule.alias
+        rule_phases = _rule_solar_phases(rule)
+        if cand_phases and rule_phases and (cand_phases & rule_phases or "solar" in cand_phases or "solar" in rule_phases):
+            return rule.alias
+        if cand.time_triggers and rule_phases and any(_solar_phase_matches_minute(rule_phases, m) for m in cand.time_triggers):
+            return rule.alias
+        if rule.time_triggers and cand_phases and any(_solar_phase_matches_minute(cand_phases, m) for m in rule.time_triggers):
             return rule.alias
     return None

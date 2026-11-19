@@ -9,7 +9,7 @@ from typing import Any
 
 from ha_ai_brain.domain.automation_rules import AutomationRule, RuleAction, _collect_actions, _entity_ids, _listify
 from ha_ai_brain.domain.models import BacktestResult, NativeAutomationProposal, Transition
-from ha_ai_brain.domain.patterns import AUTOMATED_ORIGINS
+from ha_ai_brain.domain.patterns import AUTOMATED_ORIGINS, TRANSITIONAL_STATES, propagate_automated_transitions
 from ha_ai_brain.domain.service_semantics import SCRIPT_RUN_STATE, state_channel
 from ha_ai_brain.domain.timeutil import WEEKDAY_NAMES, iter_days, local_at, minute_of_day, parse_hhmm, to_local
 
@@ -40,7 +40,7 @@ class _Timeline:
     def __init__(self, transitions: list[Transition]) -> None:
         self.by_entity: dict[str, list[Transition]] = defaultdict(list)
         self.by_channel: dict[tuple[str, str], list[Transition]] = defaultdict(list)
-        for t in sorted(transitions, key=lambda t: t.ts):
+        for t in propagate_automated_transitions(sorted(transitions, key=lambda t: t.ts)):
             ch = state_channel(t.new_state)
             if not ch:
                 self.by_entity[t.entity_id].append(t)
@@ -244,7 +244,11 @@ def backtest_automation(
                 near = [t for t in tl.between(act.entity_id, fire - window, fire + window, channel=ch) if t.new_state == desired and t.origin not in AUTOMATED_ORIGINS]
                 if near:
                     fire_aligned = True
-                after = [t for t in tl.between(act.entity_id, fire, fire + OPPOSITE_WINDOW, channel=ch) if t.new_state != desired and t.origin not in AUTOMATED_ORIGINS]
+                after = [
+                    t
+                    for t in tl.between(act.entity_id, fire, fire + OPPOSITE_WINDOW, channel=ch)
+                    if t.new_state != desired and t.new_state not in TRANSITIONAL_STATES and t.origin not in AUTOMATED_ORIGINS
+                ]
                 if after and not near:
                     fire_contra = True
             if all_redundant:

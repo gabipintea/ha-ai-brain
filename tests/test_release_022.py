@@ -5,7 +5,7 @@ from __future__ import annotations
 import unittest
 from datetime import datetime, timedelta, timezone
 
-from ha_ai_brain.domain.automation_rules import clean_alias, parse_automation_config, pattern_covered_by
+from ha_ai_brain.domain.automation_rules import clean_alias, find_equivalent_rule, parse_automation_config, pattern_covered_by, resolve_rule_targets
 from ha_ai_brain.domain.backtest import Timeline
 from ha_ai_brain.domain.lifecycle import review_deployed_automation
 from ha_ai_brain.domain.models import EntityState, NativeAutomationProposal
@@ -52,6 +52,83 @@ class CoverageTests(unittest.TestCase):
         r = rule({"platform": "state", "entity_id": "binary_sensor.motion", "to": "off"})
         self.assertEqual(pattern_covered_by([r], habit("light.porch_lights")), "Cutoff")
         self.assertEqual(pattern_covered_by([r], habit("switch.porch_lights")), "Cutoff")
+
+    def test_illuminance_numeric_state_rule_covers_dusk_habit_and_blocks_duplicate_time_proposal(self) -> None:
+        illum_rule = parse_automation_config(
+            {
+                "id": "ai_brain_close_kitchen_cover_when_illuminance_is_low",
+                "alias": "[AI Brain] Close kitchen cover when illuminance is low",
+                "triggers": [
+                    {"entity_id": "sensor.front_light_illuminance", "below": 50, "for": "00:10:00", "trigger": "numeric_state"},
+                    {"entity_id": "sensor.side_light_illuminance", "below": 50, "for": "00:10:00", "trigger": "numeric_state"},
+                    {"entity_id": "sensor.back_light_illuminance", "below": 50, "for": "00:10:00", "trigger": "numeric_state"},
+                ],
+                "conditions": [
+                    {"condition": "numeric_state", "entity_id": "sensor.front_light_illuminance", "below": 50},
+                    {"condition": "numeric_state", "entity_id": "sensor.side_light_illuminance", "below": 50},
+                    {"condition": "numeric_state", "entity_id": "sensor.back_light_illuminance", "below": 50},
+                ],
+                "actions": [{"target": {"entity_id": "cover.kitchen"}, "action": "cover.close_cover"}],
+            }
+        )
+        open_morning = parse_automation_config(
+            {
+                "id": "ai_brain_kitchen_open_0910",
+                "alias": "[AI Brain] Kitchen: open at 09:10",
+                "triggers": [{"at": "09:10:00", "trigger": "time"}],
+                "actions": [{"target": {"entity_id": "cover.kitchen"}, "action": "cover.open_cover"}],
+            }
+        )
+        dusk_habit = habit("cover.kitchen", minute=17 * 60 + 7, state="closed")
+        self.assertEqual(
+            pattern_covered_by([open_morning, illum_rule], dusk_habit),
+            "[AI Brain] Close kitchen cover when illuminance is low",
+        )
+        # Dusk illuminance rule does not falsely cover a morning 08:00 closing habit
+        morning_close_habit = habit("cover.kitchen", minute=8 * 60, state="closed")
+        self.assertIsNone(pattern_covered_by([open_morning, illum_rule], morning_close_habit))
+
+        # Proposed time-based dusk closing automation is recognised as equivalent to the illuminance rule
+        time_proposal = {
+            "alias": "Kitchen: closed at 17:00",
+            "trigger": [{"platform": "time", "at": "17:00:00"}],
+            "condition": [],
+            "action": [{"service": "cover.close_cover", "target": {"entity_id": "cover.kitchen"}}],
+        }
+        self.assertEqual(
+            find_equivalent_rule([open_morning, illum_rule], time_proposal),
+            "[AI Brain] Close kitchen cover when illuminance is low",
+        )
+
+    def test_weather_and_hazard_safety_rules_do_not_cover_daily_time_habits(self) -> None:
+        rain_safety = parse_automation_config(
+            {
+                "id": "ai_brain_rain_safety",
+                "alias": "[AI Brain] Safety: Active Precipitation Rooftop Aperture Closure",
+                "triggers": [{"trigger": "state", "entity_id": "weather.home", "to": ["rainy", "pouring"]}],
+                "actions": [{"action": "cover.close_cover", "target": {"entity_id": "cover.rooftop"}}],
+            }
+        )
+        dusk_rooftop = habit("cover.rooftop", minute=17 * 60 + 10, state="closed")
+        self.assertIsNone(pattern_covered_by([rain_safety], dusk_rooftop))
+
+        # When both a precipitation safety rule and a light-based closing rule exist, the light-based rule wins in any order
+        light_close = parse_automation_config(
+            {
+                "id": "rooftop_light_close",
+                "alias": "Rooftop Cover Light-based Closing",
+                "triggers": [{"trigger": "numeric_state", "entity_id": "sensor.ambient_01", "below": 40}],
+                "actions": [{"action": "cover.close_cover", "target": {"entity_id": "cover.rooftop"}}],
+            }
+        )
+        states = {
+            "sensor.ambient_01": EntityState(
+                entity_id="sensor.ambient_01", state="30", device_class="illuminance", attributes={"unit_of_measurement": "lx"}
+            )
+        }
+        resolve_rule_targets([rain_safety, light_close], states=states)
+        self.assertEqual(pattern_covered_by([rain_safety, light_close], dusk_rooftop), "Rooftop Cover Light-based Closing")
+        self.assertEqual(pattern_covered_by([light_close, rain_safety], dusk_rooftop), "Rooftop Cover Light-based Closing")
 
 
 class AliasTests(unittest.TestCase):

@@ -1571,8 +1571,33 @@ class BrainOrchestrator:
         }
 
     async def get_pending_approvals(self) -> list[PendingApproval]:
-        """Fetch active pending approvals and ensure native automation actions are normalized against discovered services."""
+        """Fetch active pending approvals, drop any automation proposals now covered by an enabled HA rule, and normalize actions."""
         pending = await self.memory.get_pending_approvals()
+        if not pending:
+            return []
+        kept: list[PendingApproval] = []
+        for p in pending:
+            if p.intent and p.intent.domain == "automation" and p.intent.native_automation and self.learning.rules:
+                covered = self.learning.equivalent_rule(p.intent.native_automation)
+                if covered:
+                    try:
+                        await self.memory.resolve_pending_approval(approval_id=p.approval_id, status="dismissed")
+                    except Exception:
+                        pass
+                    if hasattr(self.notification, "dismiss_approval_notification"):
+                        try:
+                            await self.notification.dismiss_approval_notification(p.approval_id)
+                        except Exception:
+                            pass
+                    logger.info(
+                        "Auto-dismissed pending automation proposal '%s' (%s): already covered by '%s'.",
+                        p.intent.native_automation.alias,
+                        p.approval_id[:8],
+                        covered,
+                    )
+                    continue
+            kept.append(p)
+        pending = kept
         if not pending:
             return []
         try:

@@ -2,6 +2,14 @@
 
 All notable changes to **HA AI Brain** are documented in this file.
 
+## 0.2.23 - 2026-11-19
+
+### Fixed
+- **Illuminance and solar `numeric_state` automations now count as covering daily dusk/dawn habits.** Automations triggered by outdoor light level or solar elevation (`numeric_state` on `illuminance` / `lux` / `irradiance` sensors or `sun.sun`, such as closing blinds when illuminance stays below a lux threshold) are now recognised as covering the corresponding evening or morning habit and block redundant fixed-time proposals (such as proposing *closed at 17:00* when a low-illuminance closing automation is already active). Any stale pending automation approval that is already covered by an enabled rule is automatically dismissed.
+- **Weather and hazard safety automations no longer falsely mark daily time habits as automated.** Protective rules triggered by weather, rain/precipitation, leaks, moisture, smoke, gas, frost, or overheat thresholds no longer claim to cover recurring time-of-day routines, and time or solar/illuminance rules take priority over generic event rules regardless of the order Home Assistant returns automation definitions.
+- **Cover and lock travel completions preserve `ha_automation` origin.** When an automation starts a physical movement (`opening`, `closing`, `locking`, `unlocking`, `arming`, `disarming`) or fires right before an actuator changes state, the asynchronous end-of-travel state report (`closing → closed`, `opening → open`) arriving from the motor integration up to 3 minutes later now inherits `ha_automation` origin instead of being recorded as a manual human action.
+- **Twin device coverage matching when live states are loaded.** Fixed a variable shadowing issue in `LearningEngine.get_patterns` so device-registry twin mappings remain active during coverage checks.
+
 ## 0.2.22 - 2026-11-16
 
 ### Added

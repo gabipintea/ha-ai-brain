@@ -49,6 +49,7 @@ NON_STATES = frozenset({"unavailable", "unknown", "", "none"})
 AUTOMATED_ORIGINS = frozenset({"ai_brain", "ha_automation"})
 # In-between states of one physical movement: never a habit trigger ("blind opening" -> "blind open" is one action).
 TRANSITIONAL_STATES = frozenset({"opening", "closing", "locking", "unlocking", "arming", "disarming", "pending"})
+TRANSITIONAL_MAX_TRAVEL_SECONDS = 180.0
 TRIGGER_DOMAINS = frozenset({"binary_sensor", "person", "lock", "cover", "light", "switch", "input_boolean"})
 WEEKDAYS = ["mon", "tue", "wed", "thu", "fri"]
 WEEKEND = ["sat", "sun"]
@@ -109,6 +110,33 @@ def _is_habit_transition(t: Transition) -> bool:
 def _is_script_run(t: Transition) -> bool:
     """A script the household started by hand (runs started by automations or the brain are not habits)."""
     return t.domain == "script" and t.new_state == SCRIPT_RUN_STATE and t.origin not in AUTOMATED_ORIGINS
+
+
+def propagate_automated_transitions(transitions: list[Transition]) -> list[Transition]:
+    """Carry automated origin (`ha_automation`, `ai_brain`) from a transitional movement (`closing`, `opening`, ...) to its completion."""
+    if not transitions:
+        return transitions
+    last_automated_transitional: dict[str, tuple[datetime, str, str]] = {}
+    out: list[Transition] = []
+    for t in transitions:
+        if t.new_state in TRANSITIONAL_STATES and t.origin in AUTOMATED_ORIGINS:
+            last_automated_transitional[t.entity_id] = (t.ts, t.new_state, t.origin)
+            out.append(t)
+            continue
+        prev = last_automated_transitional.get(t.entity_id)
+        if (
+            prev is not None
+            and t.old_state == prev[1]
+            and t.origin not in AUTOMATED_ORIGINS
+            and not t.user_id
+            and 0.0 <= (t.ts - prev[0]).total_seconds() <= TRANSITIONAL_MAX_TRAVEL_SECONDS
+        ):
+            out.append(Transition(t.entity_id, t.ts, t.old_state, t.new_state, prev[2], t.user_id))
+        else:
+            out.append(t)
+        if t.new_state not in TRANSITIONAL_STATES:
+            last_automated_transitional.pop(t.entity_id, None)
+    return out
 
 
 def _best_cluster(items: list[tuple[Any, int]], tolerance: int) -> tuple[float, list[tuple[Any, int]]]:
@@ -179,6 +207,7 @@ def mine_time_habits(
     if obs["all"] < 3:
         return []
 
+    transitions = propagate_automated_transitions(transitions)
     groups: dict[tuple[str, str], list[tuple[Any, int, str]]] = defaultdict(list)
     for t in transitions:
         if not (_is_habit_transition(t) or _is_script_run(t)):
@@ -296,6 +325,7 @@ def mine_sequences_report(
     """
     report = SequenceReport()
     span = max(3600.0, (data_end - data_start).total_seconds())
+    transitions = propagate_automated_transitions(transitions)
 
     bursts = find_burst_transitions(transitions, _is_habit_transition)
     report.ignored_burst_transitions = len(bursts)

@@ -58,7 +58,13 @@ from ha_ai_brain.domain.models import (
     Transition,
 )
 from ha_ai_brain.domain.habit_rejections import MAX_REJECTED_HABITS, RejectedHabit, rejected_habit_card, split_rejected
-from ha_ai_brain.domain.patterns import MinedPattern, mine_all_report
+from ha_ai_brain.domain.patterns import (
+    AUTOMATED_ORIGINS,
+    TRANSITIONAL_MAX_TRAVEL_SECONDS,
+    TRANSITIONAL_STATES,
+    MinedPattern,
+    mine_all_report,
+)
 from ha_ai_brain.domain.sequence_filters import RULE_TWIN, SuppressedHabit
 from ha_ai_brain.domain.service_semantics import (
     ACTUATOR_DOMAINS,
@@ -203,6 +209,8 @@ class LearningEngine:
         self._numeric_baselines: dict[str, tuple[datetime, NumericBaseline]] = {}
         self._reported: dict[str, datetime] = {}
         self._forecast: tuple[datetime, list[dict[str, Any]]] | None = None
+        self._automated_movements: dict[str, tuple[datetime, str, str]] = {}
+        self._recent_automation_fires: dict[str, datetime] = {}
         self.stats: Counter[str] = Counter()
         self._tz_name = settings.timezone
 
@@ -253,6 +261,60 @@ class LearningEngine:
             break
         self._tr_buffer.append(Transition(entity_id, ts, old_tok, new_tok, origin, user_id))
 
+    _TRANSITIONAL_TARGET = {
+        "closing": "closed",
+        "opening": "open",
+        "locking": "locked",
+        "unlocking": "unlocked",
+        "disarming": "disarmed",
+    }
+
+    def _infer_automated_origin(
+        self,
+        entity_id: str,
+        domain: str,
+        old_state: str,
+        new_state: str,
+        ts: datetime,
+        eff_origin: str,
+        user_id: str | None,
+    ) -> str:
+        """Carry `ha_automation` / `ai_brain` across physical travel states (`closing` -> `closed`) and async hardware callbacks."""
+        movements = getattr(self, "_automated_movements", None)
+        fires = getattr(self, "_recent_automation_fires", None)
+        if eff_origin in AUTOMATED_ORIGINS:
+            if movements is not None:
+                if new_state in TRANSITIONAL_STATES:
+                    movements[entity_id] = (ts, new_state, eff_origin)
+                else:
+                    movements.pop(entity_id, None)
+            return eff_origin
+
+        if eff_origin == "human_or_physical" and not user_id:
+            if movements is not None:
+                prev = movements.get(entity_id)
+                if prev is not None and old_state == prev[1] and 0.0 <= (ts - prev[0]).total_seconds() <= TRANSITIONAL_MAX_TRAVEL_SECONDS:
+                    eff_origin = prev[2]
+            if eff_origin == "human_or_physical" and fires:
+                target_state = self._TRANSITIONAL_TARGET.get(new_state, new_state)
+                max_lag = 120.0 if (domain in ("cover", "lock", "valve") or old_state in TRANSITIONAL_STATES or new_state in TRANSITIONAL_STATES) else 15.0
+                twins = getattr(self, "twins", None)
+                for rule in getattr(self, "rules", ()):
+                    if not rule.entity_state_id or not rule_produces_state(rule, entity_id, target_state, twins=twins):
+                        continue
+                    fire_ts = fires.get(rule.entity_state_id)
+                    if fire_ts is not None and -2.0 <= (ts - fire_ts).total_seconds() <= max_lag:
+                        eff_origin = "ha_automation"
+                        break
+            if movements is not None:
+                if eff_origin in AUTOMATED_ORIGINS and new_state in TRANSITIONAL_STATES:
+                    movements[entity_id] = (ts, new_state, eff_origin)
+                elif new_state not in TRANSITIONAL_STATES:
+                    movements.pop(entity_id, None)
+        elif movements is not None and new_state not in TRANSITIONAL_STATES:
+            movements.pop(entity_id, None)
+        return eff_origin
+
     async def record_event(self, event: StateChangedEvent) -> None:
         """Queue the part of a live event that matters for learning (cheap, local); written in batches."""
         new = event.new_state
@@ -267,6 +329,11 @@ class LearningEngine:
             if last is not None and last != prev_last:
                 if not (new.domain == "automation" and self.is_controller_automation(new.entity_id)):
                     self._tr_buffer.append(Transition(new.entity_id, last, "", AUTOMATION_FIRE_STATE, "ha_automation"))
+                    fires = getattr(self, "_recent_automation_fires", None)
+                    if fires is not None:
+                        fires[new.entity_id] = ensure_utc(last)
+                        if len(fires) > 500:
+                            fires.pop(next(iter(fires)))
                 if new.domain == "script" and eff_origin == "human_or_physical":
                     # Started by hand (not by an autonomous automation or the brain): a habit candidate, like flipping a switch.
                     self._tr_buffer.append(Transition(new.entity_id, last, "off", SCRIPT_RUN_STATE, "human_or_physical", event.context_user_id))
@@ -279,6 +346,9 @@ class LearningEngine:
         elif new.domain in RECORDED_DISCRETE_DOMAINS and old is not None:
             if new.state not in NON_STATES and old.state not in NON_STATES:
                 if old.state != new.state:
+                    eff_origin = self._infer_automated_origin(
+                        new.entity_id, new.domain, old.state, new.state, ts, eff_origin, event.context_user_id
+                    )
                     self._tr_buffer.append(Transition(new.entity_id, ts, old.state, new.state, eff_origin, event.context_user_id))
                 if new.domain in ("climate", "water_heater") and new.state != "off" and old.state != "off":
                     old_temp = format_temp_token(old.attributes.get("temperature"))
@@ -472,6 +542,7 @@ class LearningEngine:
         now = datetime.now(timezone.utc)
         if not force and self._rules_at and (now - self._rules_at).total_seconds() < 1800:
             if states:
+                resolve_rule_targets(self.rules, states=states)
                 self._apply_controller_flags(states)
             return self.rules
         if self.memory is not None and not self._controller_overrides:
@@ -576,6 +647,7 @@ class LearningEngine:
         return find_equivalent_rule(
             self.rules,
             {"alias": proposal.alias, "trigger": proposal.trigger, "condition": proposal.condition, "action": proposal.action},
+            twins=self.twins,
         )
 
     # --------------------------------------------------------------- patterns
@@ -596,22 +668,22 @@ class LearningEngine:
         fires = [
             f for f in await self.telemetry.get_all_fires(since=start) if not self.is_controller_automation(f.entity_id)
         ]  # autonomous automation / script runs: hidden causes, never habits themselves (wall-panel/controller sync runs excluded)
-        twins = self.twins
-        if twins:  # one physical device exposed twice: merge its history so it is mined as one device
-            transitions = await asyncio.to_thread(canonicalize_transitions, transitions, twins)
+        twin_map = self.twins
+        if twin_map:  # one physical device exposed twice: merge its history so it is mined as one device
+            transitions = await asyncio.to_thread(canonicalize_transitions, transitions, twin_map)
         patterns, report = await asyncio.to_thread(mine_all_report, transitions, start, win[1], self.tz, fires)
         suppressed = list(report.suppressed)
         if states is not None:
             self._habit_names = {eid: str(st.attributes.get("friendly_name") or "") for eid, st in states.items()}
             patterns = [p for p in patterns if p.entity_id in states]
-            twins = [p for p in patterns if self._is_twin_sequence(p, states)]
-            patterns = [p for p in patterns if p not in twins]
+            twin_seqs = [p for p in patterns if self._is_twin_sequence(p, states)]
+            patterns = [p for p in patterns if p not in twin_seqs]
             suppressed += [
                 SuppressedHabit(
                     RULE_TWIN, p.trigger_entity or "", p.trigger_state or "", p.entity_id, p.to_state, p.support_days, p.confidence,
                     f"{p.trigger_entity} and {p.entity_id} have the same name and type: one device exposed twice, not a habit.",
                 )
-                for p in twins
+                for p in twin_seqs
             ]
         self._suppressed = [s.to_dict() for s in sorted(suppressed, key=lambda s: (s.confidence, s.hits), reverse=True)[:SUPPRESSED_LIST_MAX]]
         self._suppression_stats = {
@@ -620,7 +692,7 @@ class LearningEngine:
             "ignored_burst_transitions": report.ignored_burst_transitions,
         }
         for p in patterns:
-            p.covered_by = pattern_covered_by(self.rules, p, twins=twins)
+            p.covered_by = pattern_covered_by(self.rules, p, twins=twin_map)
         self._patterns, self._patterns_at = patterns, now
         return await self._without_rejected(patterns, now)
 

@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 from ha_ai_brain.domain.automation_rules import RuleAction
 from ha_ai_brain.domain.backtest import Timeline
 from ha_ai_brain.domain.models import EntityState
-from ha_ai_brain.domain.patterns import AUTOMATED_ORIGINS
+from ha_ai_brain.domain.patterns import AUTOMATED_ORIGINS, TRANSITIONAL_STATES
 from ha_ai_brain.domain.service_semantics import state_channel
 
 OVERRIDE_WINDOW = timedelta(minutes=15)
@@ -53,7 +53,7 @@ def count_overrides(fires: list[datetime], actions: list[RuleAction], tl: Timeli
             reverted = [
                 t
                 for t in tl.between(act.entity_id, fire + timedelta(seconds=5), fire + OVERRIDE_WINDOW, channel=ch)
-                if t.new_state != desired and t.origin not in AUTOMATED_ORIGINS
+                if t.new_state != desired and t.new_state not in TRANSITIONAL_STATES and t.origin not in AUTOMATED_ORIGINS
             ]
             if reverted:
                 overrides += 1

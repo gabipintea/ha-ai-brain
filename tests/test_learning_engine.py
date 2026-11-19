@@ -885,6 +885,126 @@ class TestOrchestratorIntegration(unittest.IsolatedAsyncioTestCase):
         self.assertIn("1 insight", summary["payload"]["title"])
         self.assertEqual(self.orch.learning.stats["batch_pushes_consolidated"], 2)
 
+    async def test_cover_travel_completion_and_illuminance_rule_coverage_and_pending_cleanup(self) -> None:
+        from ha_ai_brain.domain.models import EventOrigin, PendingApproval, StateChangedEvent
+
+        # 1. Cover physical travel: open -> closing (ha_automation) followed 22s later by closing -> closed (device report without context)
+        travel_trans: list[Transition] = []
+        for d in range(1, 10):
+            t0 = at(d, 17, 7, self.now)
+            travel_trans.append(Transition("cover.kitchen", t0, "open", "closing", "ha_automation"))
+            travel_trans.append(Transition("cover.kitchen", t0 + timedelta(seconds=22), "closing", "closed", "human_or_physical"))
+        self.assertEqual(mine_time_habits(travel_trans, self.now - timedelta(days=11), self.now, UTC), [])
+
+        # 2. Even if history was backfilled with origin='unknown', an enabled illuminance numeric_state automation covers the dusk habit
+        backfilled = [
+            Transition("cover.kitchen", at(d, 17, 7, self.now), "open", "closed", "unknown")
+            for d in range(1, 10)
+        ]
+        await self.orch.telemetry.record_transitions(backfilled)
+
+        async def _fake_configs():
+            return [
+                {
+                    "id": "ai_brain_close_kitchen_cover_when_illuminance_is_low",
+                    "alias": "[AI Brain] Close kitchen cover when illuminance is low",
+                    "triggers": [
+                        {"entity_id": "sensor.front_light_illuminance", "below": 50, "for": "00:10:00", "trigger": "numeric_state"},
+                        {"entity_id": "sensor.side_light_illuminance", "below": 50, "for": "00:10:00", "trigger": "numeric_state"},
+                        {"entity_id": "sensor.back_light_illuminance", "below": 50, "for": "00:10:00", "trigger": "numeric_state"},
+                    ],
+                    "actions": [{"target": {"entity_id": "cover.kitchen"}, "action": "cover.close_cover"}],
+                }
+            ]
+
+        self.orch.smart_home.get_automation_configs = _fake_configs  # type: ignore[method-assign]
+        states = await self.orch.smart_home.get_all_states()
+        states["cover.kitchen"] = EntityState(entity_id="cover.kitchen", state="closed", attributes={"friendly_name": "Kitchen"})
+        states["automation.ai_brain_close_kitchen_cover_when_illuminance_is_low"] = EntityState(
+            entity_id="automation.ai_brain_close_kitchen_cover_when_illuminance_is_low",
+            state="on",
+            attributes={
+                "id": "ai_brain_close_kitchen_cover_when_illuminance_is_low",
+                "friendly_name": "[AI Brain] Close kitchen cover when illuminance is low",
+            },
+        )
+        self.orch._cached_states = states
+        await self.orch.learning.refresh_rules(states, force=True)
+
+        patterns = await self.orch.learning.get_patterns(self.now, states, force=True)
+        kitchen_pat = next(p for p in patterns if p.entity_id == "cover.kitchen" and p.to_state == "closed")
+        self.assertEqual(kitchen_pat.covered_by, "[AI Brain] Close kitchen cover when illuminance is low")
+
+        # Pattern cycle does not propose a duplicate time automation
+        self.assertIsNone(await self.orch.run_pattern_cycle())
+
+        # Any stale pending approval for Kitchen: closed at 17:00 is auto-dismissed on get_pending_approvals()
+        dup_proposal = NativeAutomationProposal(
+            automation_id="ai_brain_7b6f88d6",
+            alias="Kitchen: closed at 17:00",
+            description="Learned from your own behaviour.",
+            trigger=[{"platform": "time", "at": "17:00:00"}],
+            condition=[],
+            action=[{"service": "cover.close_cover", "target": {"entity_id": "cover.kitchen"}}],
+            source_pattern_id=kitchen_pat.pattern_id,
+        )
+        await self.orch.memory.save_pending_approval(
+            PendingApproval(
+                intent=ActionIntent(
+                    agent_id="cover_shading_agent",
+                    domain="automation",
+                    service="upsert_native_automation",
+                    target_entity_ids=["automation.ai_brain_7b6f88d6", "cover.kitchen"],
+                    service_data=dup_proposal.model_dump(),
+                    cause_category="learned_habit",
+                    rationale="dusk close",
+                    native_automation=dup_proposal,
+                ),
+                signature="sig:dup_kitchen_close",
+            )
+        )
+        self.assertEqual(await self.orch.get_pending_approvals(), [])
+
+        # 3. Live record_event: automation firing followed by async cover closing -> closed without context_id is recorded as ha_automation
+        fire_ts = self.now
+        await self.orch.learning.record_event(
+            StateChangedEvent(
+                entity_id="automation.ai_brain_close_kitchen_cover_when_illuminance_is_low",
+                old_state=EntityState(
+                    entity_id="automation.ai_brain_close_kitchen_cover_when_illuminance_is_low",
+                    state="on",
+                    attributes={"last_triggered": (fire_ts - timedelta(days=1)).isoformat()},
+                ),
+                new_state=EntityState(
+                    entity_id="automation.ai_brain_close_kitchen_cover_when_illuminance_is_low",
+                    state="on",
+                    attributes={"last_triggered": fire_ts.isoformat()},
+                ),
+                timestamp=fire_ts,
+                origin=EventOrigin.HA_AUTOMATION,
+            )
+        )
+        await self.orch.learning.record_event(
+            StateChangedEvent(
+                entity_id="cover.kitchen",
+                old_state=EntityState(entity_id="cover.kitchen", state="open"),
+                new_state=EntityState(entity_id="cover.kitchen", state="closing"),
+                timestamp=fire_ts + timedelta(seconds=1),
+                origin=EventOrigin.HUMAN_OR_PHYSICAL,
+            )
+        )
+        await self.orch.learning.record_event(
+            StateChangedEvent(
+                entity_id="cover.kitchen",
+                old_state=EntityState(entity_id="cover.kitchen", state="closing"),
+                new_state=EntityState(entity_id="cover.kitchen", state="closed"),
+                timestamp=fire_ts + timedelta(seconds=24),
+                origin=EventOrigin.HUMAN_OR_PHYSICAL,
+            )
+        )
+        recorded_kitchen = [t for t in self.orch.learning._tr_buffer if t.entity_id == "cover.kitchen"]
+        self.assertEqual([t.origin for t in recorded_kitchen], ["ha_automation", "ha_automation"])
+
 
 class TestLearningApi(unittest.IsolatedAsyncioTestCase):
     async def test_learned_snapshot_pause_domain_autonomy_and_validation(self) -> None:
